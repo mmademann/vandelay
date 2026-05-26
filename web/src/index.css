@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  background: hsl(240 10% 6%);
+  color: hsl(0 0% 98%);
+}
+
+/* Loop region + wavesurfer wrapper: fill viewport (fixes partial top band) */
+.waveform-viewport > div {
+  height: 100%;
+}
+
+.waveform-viewport [part~="region"]:not([part*="handle"]) {
+  top: 0 !important;
+  height: 100% !important;
+}

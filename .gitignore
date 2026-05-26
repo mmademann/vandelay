@@ -1,0 +1,9 @@
+node_modules
+dist
+build
+cache
+history.json
+.DS_Store
+*.log
+.env
+.env.local
