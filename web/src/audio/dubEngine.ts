@@ -87,33 +87,39 @@ class DubEngine {
     await Tone.start();
     await Tone.getContext().resume();
 
-    // Stop transport and explicitly halt + unsync all players to clear any scheduled audio
-    Tone.getTransport().stop();
+    const t = Tone.now();
+    const transport = Tone.getTransport();
+
+    // Disable loop before stopping to cancel any pending loop-restart events in the scheduler
+    transport.loop = false;
+    transport.stop(t);
     for (const name of STEM_NAMES) {
       const s = this.stems[name];
-      if (s) { s.player.stop(); s.player.unsync(); }
+      if (s) {
+        try { s.player.stop(t); } catch { /* already stopped */ }
+        s.player.unsync();
+      }
     }
 
-    const transport = Tone.getTransport();
     if (this.loopEnabled && this.loopEnd > this.loopStart) {
       const loopDur = this.loopEnd - this.loopStart;
       const startInLoop = Math.max(0, Math.min(loopDur - 0.01, offset - this.loopStart));
       transport.loop = true;
       transport.loopStart = 0;
       transport.loopEnd = loopDur;
+      transport.seconds = startInLoop;
       for (const name of STEM_NAMES) {
         this.stems[name]!.player.sync().start(0, this.loopStart);
       }
-      transport.position = startInLoop;
     } else {
-      transport.loop = false;
-      transport.position = 0;
+      transport.seconds = 0;
       for (const name of STEM_NAMES) {
         this.stems[name]!.player.sync().start(0, offset);
       }
     }
 
-    transport.start();
+    // 50ms gap (same as single engine) ensures stop clears the audio pipeline before new audio starts
+    transport.start(t + 0.05);
     this.running = true;
   }
 
