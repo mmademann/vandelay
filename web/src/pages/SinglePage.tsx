@@ -79,7 +79,7 @@ export function SinglePage() {
         <History scrollable />
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto lg:grid lg:grid-cols-[11rem_minmax(0,1fr)_14rem] lg:overflow-hidden lg:gap-4">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto lg:grid lg:grid-cols-[minmax(12rem,16rem)_minmax(0,1fr)_minmax(14rem,18rem)] lg:overflow-hidden lg:gap-4">
         <aside className="hidden min-h-0 flex-col lg:flex">
           <History scrollable className="min-h-0 flex-1" />
         </aside>

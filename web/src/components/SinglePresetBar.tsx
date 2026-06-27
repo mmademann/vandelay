@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useStore } from "../store";
 import {
+  BUILT_IN_PRESETS,
   deleteSinglePreset,
   loadSinglePresets,
   saveSinglePreset,
@@ -119,6 +120,24 @@ export function SinglePresetBar({ compact = false }: SinglePresetBarProps) {
           Clear {selectedPresetName}
         </button>
       )}
+
+      <div className="flex flex-wrap gap-1.5">
+        {BUILT_IN_PRESETS.map((p) => (
+          <button
+            key={p.name}
+            type="button"
+            onClick={() => handleLoadPreset(p)}
+            className={cn(
+              "rounded-md border px-2 py-0.5 text-xs transition",
+              selectedPresetName === p.name
+                ? "border-accent bg-accent/10 text-accent"
+                : "border-border bg-muted/50 text-foreground/60 hover:text-foreground",
+            )}
+          >
+            {p.name}
+          </button>
+        ))}
+      </div>
 
       {presets.length > 0 && (
         <div className="flex flex-wrap gap-1.5">

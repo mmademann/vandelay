@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useStore } from "../store";
 import { useMixStore } from "../mixStore";
@@ -32,6 +32,9 @@ export function History({
 }: HistoryProps) {
   const [entries, setEntries] = useState<CachedTrackMeta[]>([]);
   const [seeded, setSeeded] = useState(false);
+  const [query, setQuery] = useState("");
+  const [highlightIdx, setHighlightIdx] = useState(-1);
+  const listRef = useRef<HTMLUListElement>(null);
   const status = useStore((s) => s.status);
   const currentId = useStore((s) => s.track?.id);
   const navigate = useNavigate();
@@ -41,7 +44,35 @@ export function History({
 
   const exclude = new Set(excludeIds);
   const active = new Set(activeIds);
-  const visible = mode === "mix-add" ? entries.filter((e) => !exclude.has(e.id)) : entries;
+  const q = query.trim().toLowerCase();
+  const visible = entries
+    .filter((e) => mode !== "mix-add" || !exclude.has(e.id))
+    .filter((e) => !q || e.title.toLowerCase().includes(q));
+
+  function handleQueryChange(val: string) {
+    setQuery(val);
+    setHighlightIdx(-1);
+  }
+
+  function handleKeyDown(ev: React.KeyboardEvent<HTMLInputElement>) {
+    if (visible.length === 0) return;
+    if (ev.key === "ArrowDown") {
+      ev.preventDefault();
+      setHighlightIdx((i) => Math.min(i + 1, visible.length - 1));
+    } else if (ev.key === "ArrowUp") {
+      ev.preventDefault();
+      setHighlightIdx((i) => Math.max(i - 1, 0));
+    } else if (ev.key === "Enter" && highlightIdx >= 0) {
+      ev.preventDefault();
+      handleLoad(visible[highlightIdx]);
+    }
+  }
+
+  useEffect(() => {
+    if (highlightIdx < 0 || !listRef.current) return;
+    const el = listRef.current.querySelector<HTMLElement>(`[data-idx="${highlightIdx}"]`);
+    el?.scrollIntoView({ block: "nearest" });
+  }, [highlightIdx]);
 
   const loadEntries = useCallback(async () => {
     const cached = await getAllTrackMeta();
@@ -133,21 +164,28 @@ export function History({
     );
   }
 
-  const list = (
+  const list = visible.length === 0 && q ? (
+    <div className="rounded-md border border-border bg-muted/30 px-2 py-3 text-xs text-foreground/50">
+      No results for "{query.trim()}".
+    </div>
+  ) : (
     <ul
+      ref={listRef}
       className={cn(
         "flex flex-col divide-y divide-border rounded-md border border-border bg-muted/30",
         scrollable && "min-h-0 flex-1 overflow-y-auto",
       )}
     >
-      {visible.map((e) => (
+      {visible.map((e, idx) => (
         <li key={e.id} className="group relative">
           <button
             type="button"
             onClick={() => handleLoad(e)}
+            data-idx={idx}
             className={cn(
               "flex w-full items-start justify-between gap-2 px-2 py-1.5 pr-8 text-left text-sm transition hover:bg-muted/60",
               (mode === "single" ? e.id === currentId : active.has(e.id)) && "bg-muted/40",
+              idx === highlightIdx && "bg-muted/60 outline-none ring-1 ring-inset ring-accent/50",
             )}
           >
             <div className="min-w-0 flex-1">
@@ -173,7 +211,19 @@ export function History({
 
   return (
     <div className={cn("flex flex-col gap-2", scrollable && "min-h-0", className)}>
-      <div className="shrink-0 text-xs uppercase tracking-wide text-foreground/60">Recent</div>
+      <div className="flex shrink-0 flex-col gap-1.5">
+        <div className="text-xs uppercase tracking-wide text-foreground/60">Recent</div>
+        {entries.length > 4 && (
+          <input
+            type="search"
+            placeholder="Search…"
+            value={query}
+            onChange={(e) => handleQueryChange(e.target.value)}
+            onKeyDown={handleKeyDown}
+            className="w-full rounded-md border border-border bg-muted px-3 py-1.5 text-sm outline-none focus:border-accent"
+          />
+        )}
+      </div>
       {list}
     </div>
   );

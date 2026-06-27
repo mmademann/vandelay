@@ -14,7 +14,7 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      <div className="mx-auto flex h-dvh w-full max-w-7xl flex-col gap-4 overflow-hidden px-4 py-4 sm:px-6">
+      <div className="flex h-dvh w-full flex-col gap-4 overflow-hidden px-4 py-4 sm:px-6">
         <header className="flex shrink-0 items-baseline justify-between">
           <Link to="/" className="text-2xl font-semibold tracking-tight">
             vandelay

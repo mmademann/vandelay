@@ -17,6 +17,30 @@ export interface SinglePreset {
   settings: SinglePresetSettings;
 }
 
+export const BUILT_IN_PRESETS: SinglePreset[] = [
+  {
+    name: "Dub Techno",
+    settings: {
+      loopStartFrac: 0,
+      loopEndFrac: 1,
+      loopCount: 1,
+      effects: {
+        speed: 0.85,
+        pitch: 0,
+        linkPitch: true,
+        reverbType: "algorithmic",
+        reverbDecay: 7,
+        reverbWet: 0.65,
+        delayTime: 0.375,
+        delayFeedback: 0.55,
+        delayWet: 0.45,
+        bassBoost: 4,
+        gain: 1,
+      },
+    },
+  },
+];
+
 function clamp01(n: number): number {
   return Math.max(0, Math.min(1, n));
 }
