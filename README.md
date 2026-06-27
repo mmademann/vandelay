@@ -9,7 +9,26 @@ Open http://localhost:5173 after starting the dev server (see below).
 - Node 20+ (`nvm use` reads `.nvmrc`)
 - `yt-dlp` on PATH (`brew install yt-dlp`)
 
-`ffmpeg` is bundled via `ffmpeg-static` — no separate install.
+`ffmpeg` is bundled via `ffmpeg-static` for YouTube extraction — no separate install needed for core features.
+
+### Dub mode (`/dub`) — optional
+
+Stem separation requires additional Python tooling. Run the setup script once:
+
+```bash
+bash scripts/setup-demucs.sh
+```
+
+This installs (via pipx, isolated from system Python):
+
+| Package | Version | Why pinned |
+| --- | --- | --- |
+| demucs | 4.0.1 | stem separation model |
+| torchaudio | 2.9.0 | newer versions require incompatible torchcodec |
+| torchcodec | 0.9.0 | must match torch ABI in demucs venv |
+| ffmpeg (Homebrew) | 8.x | torchcodec needs system FFmpeg shared libs |
+
+First separation on a new track downloads the htdemucs model (~300 MB, cached to `~/.cache/torch/hub`).
 
 ## Setup & run
 
@@ -47,6 +66,14 @@ Three columns: **Recent** | waveform + effects | export + presets.
 
 Settings restore automatically per track on reload.
 
+## Dub mode (`/dub`)
+
+Paste a YouTube URL and click **Separate** — the server downloads the track and runs [demucs](https://github.com/facebookresearch/demucs) to split it into **drums, bass, vocals, other**. Requires the one-time setup above.
+
+- Separation takes ~2–5 min per track on CPU; stems are cached in `server/stems/` for instant reload
+- Drums stem gets dub techno effects (heavy reverb + delay) applied by default
+- Each stem has an independent mute button
+
 ## Mix mode (`/mix`)
 
 Layer multiple loops with independent settings per strip.
@@ -80,6 +107,8 @@ Browsers block audio until you interact — click **Play** once after a cold loa
 | Video too long | Cap is in `server/src/lib/extract.ts` (`MAX_DURATION_SECONDS`) |
 | No sound after refresh | Click Play once (autoplay policy) |
 | Port in use | Change ports in vite config / server entry |
+| `demucs not found` on `/dub` | Run `bash scripts/setup-demucs.sh`; ensure `~/.local/bin` is on PATH |
+| demucs torchcodec error | Re-run setup script — version pins may have drifted |
 
 YouTube extraction is unreliable from cloud/datacenter IPs — intended for local use.
 

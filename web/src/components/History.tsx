@@ -5,6 +5,7 @@ import { useMixStore } from "../mixStore";
 import { engine } from "../audio/engine";
 import { evictBuffer } from "../lib/loadTrack";
 import { removeSettings } from "../lib/settings";
+import { removeDubSettings } from "../lib/dubSettings";
 import { getAllTrackMeta, putTrackMeta, deleteTrackMeta, type CachedTrackMeta } from "../lib/trackMetaCache";
 import { formatTime } from "../lib/format";
 import { cn } from "../lib/cn";
@@ -13,8 +14,8 @@ import { Spinner } from "./ui/Spinner";
 interface HistoryProps {
   className?: string;
   scrollable?: boolean;
-  /** single: load track on `/`. mix-add: append to current mix URL. */
-  mode?: "single" | "mix-add";
+  /** single: load track on `/`. mix-add: append to current mix URL. stems: load stems on `/stems`. */
+  mode?: "single" | "mix-add" | "stems";
   /** mix-add: hide tracks already in the mix */
   excludeIds?: string[];
   /** mix-add: highlight tracks currently loaded */
@@ -46,7 +47,7 @@ export function History({
   const active = new Set(activeIds);
   const q = query.trim().toLowerCase();
   const visible = entries
-    .filter((e) => mode !== "mix-add" || !exclude.has(e.id))
+    .filter((e) => mode === "mix-add" ? !exclude.has(e.id) : true)
     .filter((e) => !q || e.title.toLowerCase().includes(q));
 
   function handleQueryChange(val: string) {
@@ -99,6 +100,11 @@ export function History({
   }, [loadEntries, currentId]);
 
   function handleLoad(entry: CachedTrackMeta) {
+    if (mode === "stems") {
+      navigate(`/stems?v=${entry.id}`);
+      return;
+    }
+
     if (mode === "single") {
       if (status === "loading") return;
       if (entry.id === currentId) return;
@@ -146,6 +152,7 @@ export function History({
     }
 
     removeSettings(id);
+    removeDubSettings(id);
     evictBuffer(id);
     await deleteTrackMeta(id);
     fetch(`/api/history/${id}`, { method: "DELETE" }).catch(() => undefined);

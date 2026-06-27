@@ -1,8 +1,12 @@
 node_modules
 dist
 build
+
+# Server-generated audio cache and stem separations
 cache
+stems
 history.json
+
 .DS_Store
 *.log
 .env

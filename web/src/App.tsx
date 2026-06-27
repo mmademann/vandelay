@@ -4,6 +4,7 @@ import { pruneCache } from "./lib/audioCache";
 import { getAllTrackMeta } from "./lib/trackMetaCache";
 import { SinglePage } from "./pages/SinglePage";
 import { MixPage } from "./pages/MixPage";
+import { StemsPage } from "./pages/StemsPage";
 
 export default function App() {
   useEffect(() => {
@@ -37,6 +38,14 @@ export default function App() {
             >
               Mix
             </NavLink>
+            <NavLink
+              to="/stems"
+              className={({ isActive }) =>
+                isActive ? "text-accent" : "text-foreground/50 hover:text-foreground/80"
+              }
+            >
+              Stems
+            </NavLink>
           </nav>
         </header>
 
@@ -44,6 +53,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<SinglePage />} />
             <Route path="/mix" element={<MixPage />} />
+            <Route path="/stems" element={<StemsPage />} />
           </Routes>
         </main>
       </div>
