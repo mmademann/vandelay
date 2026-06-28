@@ -104,9 +104,9 @@ export function CollabTransport({ masterSettings, slotCount, getSlotsAndBuffers,
               onChange={(e) => setLoopCount(Math.max(1, Math.min(500, Number(e.target.value) || 1)))}
               className="w-14 rounded border border-border bg-muted/50 px-2 py-1 text-xs outline-none focus:border-accent/60"
             />
-            {totalSec > 0 && (
-              <span className="text-[10px] text-foreground/40">≈ {formatDuration(totalSec)}</span>
-            )}
+            <span className="w-12 text-[10px] text-foreground/40">
+              {totalSec > 0 ? `≈ ${formatDuration(totalSec)}` : ""}
+            </span>
           </div>
 
           <div className="h-4 w-px bg-border/50" />
@@ -141,7 +141,7 @@ export function CollabTransport({ masterSettings, slotCount, getSlotsAndBuffers,
           </div>
 
           {/* Size estimate */}
-          <span className="text-[10px] text-foreground/40">
+          <span className="w-28 shrink-0 text-[10px] text-foreground/40">
             ≈ {formatFileSize(estBytes)}{format === "mp3" ? ` · ${preset.mp3Kbps}kbps` : ""}
           </span>
 

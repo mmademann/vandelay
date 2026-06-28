@@ -223,7 +223,7 @@ export function CollabPage() {
 
   function handleSaveSession() {
     const name = sessionName.trim();
-    if (!name) return;
+    if (!name || entries.length === 0) return;
     const slots = entries.map((e) => e.slot);
     setNamedSessions(saveNamedSession(name, slots, masterSettings));
     setSessionName("");
@@ -302,7 +302,7 @@ export function CollabPage() {
               <div className="flex items-center justify-between w-14 opacity-0 group-hover:opacity-100 transition border-l border-border/50 pl-2">
                 <button
                   type="button"
-                  onClick={() => setNamedSessions(saveNamedSession(s.name, entriesRef.current.map((e) => e.slot), masterSettings))}
+                  onClick={() => { if (entriesRef.current.length > 0) setNamedSessions(saveNamedSession(s.name, entriesRef.current.map((e) => e.slot), masterSettings)); }}
                   className="text-base leading-none text-foreground/30 transition hover:text-accent"
                   aria-label="Resave session"
                   title="Resave with current slots"
