@@ -78,19 +78,8 @@ export async function renderCollab(opts: RenderCollabOptions): Promise<Blob> {
       const span = slot.loopEnd - slot.loopStart;
       const segmentDuration = span / rate;
 
-      if (slot.mode === "master") {
-        for (let i = 0; i < loopCount; i++) {
-          player.start(i * segmentDuration, slot.loopStart, span);
-        }
-      } else {
-        const repeatCount = Math.ceil(totalDuration / segmentDuration);
-        for (let i = 0; i < repeatCount; i++) {
-          const startTime = i * segmentDuration;
-          if (startTime >= totalDuration) break;
-          const wallRemaining = totalDuration - startTime;
-          const sourceSpan = wallRemaining < segmentDuration ? wallRemaining * rate : span;
-          player.start(startTime, slot.loopStart, sourceSpan);
-        }
+      for (let i = 0; i < loopCount; i++) {
+        player.start(i * segmentDuration, slot.loopStart, span);
       }
     }
 

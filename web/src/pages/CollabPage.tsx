@@ -19,7 +19,7 @@ import { SlotPicker } from "../components/collab/SlotPicker";
 import { CollabTransport } from "../components/collab/CollabTransport";
 
 const STEM_NAMES_SET = new Set<string>(["drums", "bass", "vocals", "other"]);
-const MAX_SLOTS = 8;
+const MAX_STEMS = 8;
 
 interface SlotEntry {
   slot: CollabSlot;
@@ -105,11 +105,8 @@ export function CollabPage() {
         muted: false,
         soloed: false,
         effects: { ...DRY_EFFECTS },
-        loopEnabled: true,
         loopStart: 0,
         loopEnd: 0,
-        mode: "master",
-        anchor: false,
       };
       return { slot, title: pair.trackId, error: null, loading: true, buffer: null };
     });
@@ -127,6 +124,13 @@ export function CollabPage() {
     // Load any new slots (those still in loading state)
     let cancelled = false;
     (async () => {
+      // Fetch library once for title resolution
+      let library: Array<{ id: string; title: string }> = [];
+      try {
+        const libRes = await fetch("/api/stems/library");
+        if (libRes.ok) library = await libRes.json() as typeof library;
+      } catch { /* titles fall back to trackId */ }
+
       for (const entry of next) {
         if (!entry.loading) continue;
         if (cancelled) return;
@@ -177,15 +181,7 @@ export function CollabPage() {
           effects: saved?.effects ?? slot.effects,
         };
 
-        // Fetch title from library (best-effort; fall back to trackId)
-        let title = slot.trackId;
-        try {
-          const libRes = await fetch("/api/stems/library");
-          if (libRes.ok) {
-            const lib = await libRes.json() as Array<{ id: string; title: string }>;
-            title = lib.find((e) => e.id === slot.trackId)?.title ?? slot.trackId;
-          }
-        } catch { /* title stays as trackId */ }
+        const title = library.find((e) => e.id === slot.trackId)?.title ?? slot.trackId;
 
         if (cancelled) return;
 
@@ -218,7 +214,7 @@ export function CollabPage() {
 
   function handlePickerConfirm(trackId: string, stemName: StemName) {
     setShowPicker(false);
-    if (entries.length >= MAX_SLOTS) return;
+    if (entries.length >= MAX_STEMS) return;
     const current = encodeSlotsParam(entries);
     const added = `${trackId}:${stemName}`;
     const param = current ? `${current},${added}` : added;
@@ -256,6 +252,7 @@ export function CollabPage() {
       speed: preset.speed,
       pitch: preset.pitch,
       linkPitch: preset.linkPitch,
+      gain: preset.gain,
     };
     collabEngine.updateSlot(slotId, patch);
     setEntries((prev) =>
@@ -377,7 +374,7 @@ export function CollabPage() {
       <div className="grid min-h-0 flex-1 auto-rows-min grid-cols-2 gap-3 overflow-y-auto content-start">
         {entries.length === 0 && !showPicker && (
           <div className="col-span-2 flex items-center justify-center rounded-md border border-dashed border-border px-4 py-16 text-center text-sm text-foreground/40">
-            Add stems from any separated track and layer them together.
+            Add stems from any separated track and layer them together. Each stem gets its own speed, pitch, and effects.
           </div>
         )}
 
@@ -425,14 +422,14 @@ export function CollabPage() {
           );
         })}
 
-        {/* Add slot — lives inside the grid as a cell */}
-        {entries.length < MAX_SLOTS && !showPicker && (
+        {/* Add stem — lives inside the grid as a cell */}
+        {entries.length < MAX_STEMS && !showPicker && (
           <button
             type="button"
             onClick={() => setShowPicker(true)}
             className="min-h-[120px] rounded-md border border-dashed border-border bg-transparent text-sm text-foreground/40 transition hover:border-accent/40 hover:text-foreground/60"
           >
-            + Add slot
+            + Add stem
           </button>
         )}
 

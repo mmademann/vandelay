@@ -12,11 +12,8 @@ export interface CollabSlot {
   muted: boolean;
   soloed: boolean;
   effects: EffectsState;
-  loopEnabled: boolean;
   loopStart: number;
   loopEnd: number;
-  mode: "master" | "free";
-  anchor: boolean;
 }
 
 // Per-slot saved settings (keyed by trackId:stemName)
@@ -63,6 +60,7 @@ export interface CollabPreset {
   speed: number;
   pitch: number;
   linkPitch: boolean;
+  gain: number;
 }
 
 const PRESETS_KEY = "vandelay:collab:presets:v1";
@@ -73,7 +71,9 @@ export function loadCollabPresets(): CollabPreset[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((p): p is CollabPreset => p && typeof p.name === "string" && p.effects);
+    return parsed
+      .filter((p): p is CollabPreset => p && typeof p.name === "string" && p.effects)
+      .map((p) => ({ gain: 0, ...p }));
   } catch { return []; }
 }
 
@@ -102,31 +102,7 @@ export interface CollabSession {
   masterSettings: CollabMasterSettings;
 }
 
-const SESSION_KEY = "vandelay:collab:v1";
 const NAMED_KEY = "vandelay:collab:sessions:v1";
-
-const DEFAULT_MASTER: CollabMasterSettings = { gain: 0, loopLengthOverride: null };
-
-export function loadCollabSession(): { slots: CollabSlot[]; masterSettings: CollabMasterSettings } | null {
-  try {
-    const raw = localStorage.getItem(SESSION_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed || !Array.isArray(parsed.slots)) return null;
-    return {
-      slots: parsed.slots as CollabSlot[],
-      masterSettings: { ...DEFAULT_MASTER, ...parsed.masterSettings },
-    };
-  } catch {
-    return null;
-  }
-}
-
-export function saveCollabSession(slots: CollabSlot[], masterSettings: CollabMasterSettings): void {
-  try {
-    localStorage.setItem(SESSION_KEY, JSON.stringify({ slots, masterSettings }));
-  } catch {}
-}
 
 export function loadNamedSessions(): CollabSession[] {
   try {

@@ -133,6 +133,7 @@ function SlotWaveform({
   isPlaying,
   loopStart,
   loopEnd,
+  seekRevision,
   getPosition,
   onLoopChange,
   onSeek,
@@ -141,6 +142,7 @@ function SlotWaveform({
   isPlaying: boolean;
   loopStart: number;
   loopEnd: number;
+  seekRevision: number;
   getPosition: () => number;
   onLoopChange: (start: number, end: number) => void;
   onSeek: (time: number) => void;
@@ -195,7 +197,7 @@ function SlotWaveform({
 
   useEffect(() => {
     repaint();
-  }, [loopStart, loopEnd]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [loopStart, loopEnd, seekRevision]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     cancelAnimationFrame(rafRef.current);
@@ -346,6 +348,7 @@ export function SlotStrip({ slot, title, buffer, presets, onRemove, onChange, on
   const [presetName, setPresetName] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
   const [activePreset, setActivePreset] = useState<string | null>(null);
+  const [seekRevision, setSeekRevision] = useState(0);
 
   // Keep isPlaying in sync with engine state
   useEffect(() => {
@@ -419,6 +422,7 @@ export function SlotStrip({ slot, title, buffer, presets, onRemove, onChange, on
       speed: slot.speed,
       pitch: slot.pitch,
       linkPitch: slot.linkPitch,
+      gain: slot.gain,
     });
     setActivePreset(name);
     setPresetName("");
@@ -438,7 +442,7 @@ export function SlotStrip({ slot, title, buffer, presets, onRemove, onChange, on
               !buffer && "opacity-30 cursor-not-allowed")}>
             {isPlaying ? "⏸ Pause" : "▶ Play"}
           </button>
-          <button type="button" onClick={() => collabEngine.seekSlot(slot.id, slot.loopStart)} disabled={!buffer}
+          <button type="button" onClick={() => { collabEngine.seekSlot(slot.id, slot.loopStart); setSeekRevision((n) => n + 1); }} disabled={!buffer}
             className={cn("rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted",
               !buffer && "opacity-30 cursor-not-allowed")}
             title="Rewind to loop start">
@@ -473,9 +477,10 @@ export function SlotStrip({ slot, title, buffer, presets, onRemove, onChange, on
           isPlaying={isPlaying}
           loopStart={slot.loopStart}
           loopEnd={slot.loopEnd}
+          seekRevision={seekRevision}
           getPosition={() => collabEngine.getSlotPosition(slot.id)}
           onLoopChange={(start, end) => update({ loopStart: start, loopEnd: end })}
-          onSeek={(time) => collabEngine.seekSlot(slot.id, time)}
+          onSeek={(time) => { collabEngine.seekSlot(slot.id, time); setSeekRevision((n) => n + 1); }}
         />
       ) : (
         <div style={{ height: WAVEFORM_H }} className="w-full rounded bg-muted/30 flex items-center justify-center text-[10px] text-foreground/20">
