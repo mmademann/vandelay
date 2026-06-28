@@ -1,15 +1,13 @@
 import * as Tone from "tone";
 import type { CollabSlot, CollabMasterSettings } from "../lib/collabSettings";
 import { encodeExport } from "./encodeExport";
-import {
-  createOfflineEqChain,
-  ensureImpulseLoaded,
-  reverbExportTailSec,
-} from "./reverbSlot";
+import { reverbExportTailSec } from "./reverbSlot";
+import { createOfflineCollabEqChain } from "./collabChain";
+import type { ExportEncodeOptions } from "./exportOptions";
+
 function slotPlaybackRate(slot: CollabSlot): number {
   return slot.linkPitch ? slot.speed : slot.speed * Math.pow(2, slot.pitch / 12);
 }
-import type { ExportEncodeOptions } from "./exportOptions";
 
 export interface RenderCollabOptions {
   slots: CollabSlot[];
@@ -45,8 +43,13 @@ export async function renderCollab(opts: RenderCollabOptions): Promise<Blob> {
 
   const totalDuration = masterLoopLength * loopCount;
 
+  // Include Big Knob spring decay (~3s) if any slot uses it
+  const hasBigKnob = activeSlots.some((s) => (s.effects.bigKnobWet ?? 0) > 0);
   const tail = Math.min(
-    Math.max(0, ...activeSlots.map((s) => reverbExportTailSec(s.effects))),
+    Math.max(
+      hasBigKnob ? 3 : 0,
+      ...activeSlots.map((s) => reverbExportTailSec(s.effects)),
+    ),
     8,
   );
 
@@ -54,8 +57,6 @@ export async function renderCollab(opts: RenderCollabOptions): Promise<Blob> {
     ...activeSlots.map((s) => buffers.get(s.id)!.sampleRate),
     44100,
   );
-
-  await ensureImpulseLoaded();
 
   const rendered = await Tone.Offline(async ({ transport }) => {
     const master = new Tone.Volume(masterSettings.gain).toDestination();
@@ -65,7 +66,7 @@ export async function renderCollab(opts: RenderCollabOptions): Promise<Blob> {
       const rate = slotPlaybackRate(slot);
 
       const volume = new Tone.Volume(slot.gain).connect(master);
-      const eq = await createOfflineEqChain(slot.effects, volume);
+      const eq = await createOfflineCollabEqChain(slot.effects, volume);
 
       const channels: Float32Array[] = [];
       for (let c = 0; c < src.numberOfChannels; c++) channels.push(src.getChannelData(c));

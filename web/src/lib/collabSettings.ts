@@ -90,9 +90,78 @@ export function deleteCollabPreset(name: string): CollabPreset[] {
   return updated;
 }
 
+export interface ThrowSettings {
+  delayTime: number;
+  delayFeedback: number;
+  delayWet: number;
+  reverbDecay: number;
+  reverbWet: number;
+  // Env-swept resonant filter on the throw echoes (the "crazy freq/env" dub move)
+  filterFreq: number;   // resting cutoff Hz
+  filterSweep: number;  // 0 = off; scales resonance + sweep depth
+}
+
+export const DEFAULT_THROW_SETTINGS: ThrowSettings = {
+  delayTime: 0.25,
+  delayFeedback: 0.72,
+  delayWet: 1.0,
+  reverbDecay: 3.5,
+  reverbWet: 0.6,
+  filterFreq: 700,
+  filterSweep: 0.5,
+};
+
+// Throw settings — persisted independently so they survive without a named session
+const THROW_SETTINGS_KEY = "vandelay:collab:throw-settings:v1";
+
+export function loadThrowSettings(): ThrowSettings {
+  try {
+    const raw = localStorage.getItem(THROW_SETTINGS_KEY);
+    if (!raw) return { ...DEFAULT_THROW_SETTINGS };
+    // Merge with defaults so new fields (filterFreq, filterSweep) appear in old saves
+    return { ...DEFAULT_THROW_SETTINGS, ...JSON.parse(raw) };
+  } catch { return { ...DEFAULT_THROW_SETTINGS }; }
+}
+
+export function saveThrowSettings(s: ThrowSettings): void {
+  try { localStorage.setItem(THROW_SETTINGS_KEY, JSON.stringify(s)); } catch {}
+}
+
+// Throw presets
+export interface ThrowPreset {
+  name: string;
+  settings: ThrowSettings;
+}
+
+const THROW_PRESETS_KEY = "vandelay:collab:throw-presets:v1";
+
+export function loadThrowPresets(): ThrowPreset[] {
+  try {
+    const raw = localStorage.getItem(THROW_PRESETS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((p): p is ThrowPreset => p && typeof p.name === "string" && p.settings);
+  } catch { return []; }
+}
+
+export function saveThrowPreset(name: string, settings: ThrowSettings): ThrowPreset[] {
+  const existing = loadThrowPresets().filter((p) => p.name !== name);
+  const updated = [{ name, settings }, ...existing];
+  try { localStorage.setItem(THROW_PRESETS_KEY, JSON.stringify(updated)); } catch {}
+  return updated;
+}
+
+export function deleteThrowPreset(name: string): ThrowPreset[] {
+  const updated = loadThrowPresets().filter((p) => p.name !== name);
+  try { localStorage.setItem(THROW_PRESETS_KEY, JSON.stringify(updated)); } catch {}
+  return updated;
+}
+
 export interface CollabMasterSettings {
   gain: number;
   loopLengthOverride: number | null;
+  throwSettings: ThrowSettings;
 }
 
 export interface CollabSession {
@@ -110,10 +179,15 @@ export function loadNamedSessions(): CollabSession[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (s): s is CollabSession =>
-        s && typeof s.name === "string" && Array.isArray(s.slots),
-    );
+    return parsed
+      .filter((s): s is CollabSession => s && typeof s.name === "string" && Array.isArray(s.slots))
+      .map((s) => ({
+        ...s,
+        masterSettings: {
+          ...s.masterSettings,
+          throwSettings: { ...DEFAULT_THROW_SETTINGS, ...s.masterSettings?.throwSettings },
+        },
+      }));
   } catch {
     return [];
   }

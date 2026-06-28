@@ -1,8 +1,8 @@
 import * as Tone from "tone";
-import { applyBassBoost, createEffectsChain, type EffectsChain } from "./graph";
-import { applyDualReverb, disposeDualReverb } from "./reverbSlot";
-import { EFFECTS_LIMITS } from "../store";
-import type { CollabSlot, CollabMasterSettings } from "../lib/collabSettings";
+import { disposeDualReverb, synthesizeSpringImpulse } from "./reverbSlot";
+import { createCollabEffectsChain, applyCollabEffectsChain, type CollabEffectsChain } from "./collabChain";
+import type { CollabSlot, CollabMasterSettings, ThrowSettings } from "../lib/collabSettings";
+import { DEFAULT_THROW_SETTINGS } from "../lib/collabSettings";
 
 function slotPlaybackRate(slot: CollabSlot): number {
   return slot.linkPitch ? slot.speed : slot.speed * Math.pow(2, slot.pitch / 12);
@@ -10,19 +10,35 @@ function slotPlaybackRate(slot: CollabSlot): number {
 
 interface RuntimeSlot extends CollabSlot {
   player: Tone.Player;
-  chain: EffectsChain;
+  chain: CollabEffectsChain;
   volume: Tone.Volume;
+  // Spring reverb (Big Knob)
+  springConvolver: ConvolverNode;
+  springWet: Tone.Gain;
+  // Throw parallel send
+  throwSend: Tone.Gain;
+  throwFilter: Tone.Filter;
+  throwDelay: Tone.FeedbackDelay;
+  throwReverb: Tone.Reverb;
+  throwActive: boolean;
+  throwTimer: ReturnType<typeof setTimeout> | null;
   // Independent playback tracking
-  startedAt: number;   // AudioContext.currentTime when player.start() was scheduled
-  startOffset: number; // track position (seconds) where playback began
+  startedAt: number;
+  startOffset: number;
   playing: boolean;
 }
 
 class CollabEngine {
   private slots = new Map<string, RuntimeSlot>();
   private master: Tone.Volume | null = null;
-  private masterSettings: CollabMasterSettings = { gain: 0, loopLengthOverride: null };
+  private masterSettings: CollabMasterSettings = {
+    gain: 0,
+    loopLengthOverride: null,
+    throwSettings: { ...DEFAULT_THROW_SETTINGS },
+  };
   private running = false;
+  private throwDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private _disposed = false;
 
   isRunning() { return this.running || Array.from(this.slots.values()).some((s) => s.playing); }
 
@@ -30,7 +46,6 @@ class CollabEngine {
     if (this.masterSettings.loopLengthOverride != null) {
       return this.masterSettings.loopLengthOverride;
     }
-    // Derive from longest slot loop
     let max: number | null = null;
     for (const slot of this.slots.values()) {
       const len = (slot.loopEnd - slot.loopStart) / slotPlaybackRate(slot);
@@ -47,7 +62,37 @@ class CollabEngine {
     }
 
     const volume = new Tone.Volume(slot.gain).connect(this.master);
-    const chain = await createEffectsChain(volume);
+    const chain = await createCollabEffectsChain(volume);
+
+    // Spring reverb (Big Knob) — taps from volume output
+    const sampleRate = Tone.getContext().sampleRate;
+    const springIR = synthesizeSpringImpulse(sampleRate);
+    const springConvolver = Tone.getContext().rawContext.createConvolver();
+    springConvolver.normalize = true;
+    springConvolver.buffer = springIR;
+    const springWet = new Tone.Gain(0).connect(this.master);
+    volume.connect(springConvolver);
+    springConvolver.connect(springWet.input);
+
+    // Throw parallel send — gate at INPUT so echoes blast in and ring out naturally.
+    // signal path: volume → throwSend (gate) → throwFilter (env sweep) → throwDelay → throwReverb → master
+    const ts = this.masterSettings.throwSettings;
+    const throwReverb = new Tone.Reverb({ decay: ts.reverbDecay, wet: ts.reverbWet }).connect(this.master);
+    await throwReverb.generate();
+    const throwDelay = new Tone.FeedbackDelay({
+      delayTime: ts.delayTime,
+      feedback: ts.delayFeedback,
+      wet: ts.delayWet,
+      maxDelay: 5,
+    }).connect(throwReverb);
+    const throwFilter = new Tone.Filter({
+      type: "lowpass",
+      frequency: ts.filterFreq,
+      rolloff: -24,
+      Q: ts.filterSweep * 18,
+    }).connect(throwDelay);
+    const throwSend = new Tone.Gain(0).connect(throwFilter);
+    volume.connect(throwSend);
 
     const channels: Float32Array[] = [];
     for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
@@ -59,13 +104,22 @@ class CollabEngine {
     player.loopEnd = slot.loopEnd;
     player.playbackRate = slotPlaybackRate(slot);
 
-    this.applyEffectsToChain(chain, slot.effects);
+    applyCollabEffectsChain(chain, slot.effects);
+    springWet.gain.value = slot.effects.bigKnobWet ?? 0;
 
     const runtime: RuntimeSlot = {
       ...slot,
       player,
       chain,
       volume,
+      springConvolver,
+      springWet,
+      throwSend,
+      throwFilter,
+      throwDelay,
+      throwReverb,
+      throwActive: false,
+      throwTimer: null,
       startedAt: 0,
       startOffset: slot.loopStart,
       playing: false,
@@ -73,7 +127,6 @@ class CollabEngine {
     this.slots.set(slot.id, runtime);
     this.recomputeAllVolumes();
 
-    // Auto-join if already playing
     if (this.running) {
       const t = Tone.now() + 0.05;
       player.start(t, slot.loopStart);
@@ -86,18 +139,28 @@ class CollabEngine {
   removeSlot(id: string): void {
     const slot = this.slots.get(id);
     if (!slot) return;
+    if (slot.throwTimer) clearTimeout(slot.throwTimer);
     try { slot.player.stop(); } catch { /* already stopped */ }
     slot.player.disconnect();
     slot.player.dispose();
     slot.chain.distortion.disconnect(); slot.chain.distortion.dispose();
+    slot.chain.eqLo.disconnect(); slot.chain.eqLo.dispose();
+    slot.chain.eqMid.disconnect(); slot.chain.eqMid.dispose();
+    slot.chain.eqHi.disconnect(); slot.chain.eqHi.dispose();
     slot.chain.bass.input.disconnect(); slot.chain.bass.input.dispose();
     slot.chain.bass.bassShelf.disconnect(); slot.chain.bass.bassShelf.dispose();
     slot.chain.bass.bassSubFilter.disconnect(); slot.chain.bass.bassSubFilter.dispose();
     slot.chain.bass.bassSubDist.disconnect(); slot.chain.bass.bassSubDist.dispose();
     slot.chain.bass.bassSubGain.disconnect(); slot.chain.bass.bassSubGain.dispose();
-    slot.chain.delay.disconnect(); slot.chain.delay.dispose();
+    slot.chain.delay.dispose();
     disposeDualReverb(slot.chain.reverbs);
     slot.chain.gain.disconnect(); slot.chain.gain.dispose();
+    try { slot.springConvolver.disconnect(); } catch { /* ignore */ }
+    slot.springWet.disconnect(); slot.springWet.dispose();
+    slot.throwReverb.disconnect(); slot.throwReverb.dispose();
+    slot.throwDelay.disconnect(); slot.throwDelay.dispose();
+    slot.throwFilter.disconnect(); slot.throwFilter.dispose();
+    slot.throwSend.disconnect(); slot.throwSend.dispose();
     slot.volume.disconnect(); slot.volume.dispose();
     this.slots.delete(id);
     this.recomputeAllVolumes();
@@ -132,11 +195,11 @@ class CollabEngine {
       this.recomputeAllVolumes();
     }
     if (patch.effects !== undefined) {
-      this.applyEffectsToChain(slot.chain, slot.effects);
+      applyCollabEffectsChain(slot.chain, slot.effects);
+      slot.springWet.gain.value = slot.effects.bigKnobWet ?? 0;
     }
   }
 
-  /** Get current playback position (seconds within track) for one slot. */
   getSlotPosition(id: string): number {
     const slot = this.slots.get(id);
     if (!slot) return 0;
@@ -144,18 +207,14 @@ class CollabEngine {
     const elapsed = Math.max(0, Tone.now() - slot.startedAt) * slotPlaybackRate(slot);
     const loopDur = slot.loopEnd - slot.loopStart;
     if (loopDur <= 0) return slot.startOffset;
-    // Clamp startOffset into loop region before computing offset-within-loop
     const clampedOffset = Math.max(slot.loopStart, Math.min(slot.loopEnd, slot.startOffset));
     const offsetInLoop = clampedOffset - slot.loopStart;
-    // Use positive modulo to handle any floating point weirdness
     return slot.loopStart + ((offsetInLoop + elapsed) % loopDur + loopDur) % loopDur;
   }
 
-  /** Seek one slot to a specific track position without affecting others. */
   seekSlot(id: string, time: number): void {
     const slot = this.slots.get(id);
     if (!slot) return;
-    // Clamp within loop region so position tracking stays valid
     const clamped = Math.max(slot.loopStart, Math.min(slot.loopEnd - 0.01, time));
     slot.startOffset = clamped;
     if (slot.playing) {
@@ -169,17 +228,63 @@ class CollabEngine {
     return this.slots.get(id)?.playing ?? false;
   }
 
+  isThrowActive(id: string): boolean {
+    return this.slots.get(id)?.throwActive ?? false;
+  }
+
+  throwSlot(id: string): void {
+    const slot = this.slots.get(id);
+    if (!slot) return;
+    if (slot.throwTimer) clearTimeout(slot.throwTimer);
+    const ts = this.masterSettings.throwSettings;
+    const now = Tone.now();
+    // Gate open
+    slot.throwSend.gain.cancelScheduledValues(now);
+    slot.throwSend.gain.rampTo(1, 0.02);
+    // Filter env: jump to peak then sweep down to resting freq
+    const peakFreq = Math.min(16000, ts.filterFreq * 10);
+    slot.throwFilter.frequency.cancelScheduledValues(now);
+    slot.throwFilter.frequency.setValueAtTime(peakFreq, now);
+    slot.throwFilter.frequency.exponentialRampToValueAtTime(ts.filterFreq, now + 0.8);
+    slot.throwActive = true;
+    slot.throwTimer = setTimeout(() => {
+      slot.throwSend.gain.rampTo(0, 0.05);
+      slot.throwActive = false;
+      slot.throwTimer = null;
+    }, 400);
+  }
+
+  setThrowSettings(settings: ThrowSettings): void {
+    this.masterSettings = { ...this.masterSettings, throwSettings: settings };
+    if (this.throwDebounceTimer) clearTimeout(this.throwDebounceTimer);
+    for (const slot of this.slots.values()) {
+      slot.throwDelay.delayTime.value = settings.delayTime;
+      slot.throwDelay.feedback.value = settings.delayFeedback;
+      slot.throwDelay.wet.value = settings.delayWet;
+      slot.throwReverb.wet.value = settings.reverbWet;
+      slot.throwFilter.frequency.value = settings.filterFreq;
+      slot.throwFilter.Q.value = settings.filterSweep * 18;
+    }
+    // Debounce reverb IR regeneration (expensive)
+    this.throwDebounceTimer = setTimeout(async () => {
+      if (this._disposed) return;
+      for (const slot of this.slots.values()) {
+        slot.throwReverb.decay = settings.reverbDecay;
+        await slot.throwReverb.generate();
+      }
+      this.throwDebounceTimer = null;
+    }, 300);
+  }
+
   async playSlot(id: string): Promise<void> {
     const slot = this.slots.get(id);
     if (!slot) return;
     await Tone.start();
     await Tone.getContext().resume();
-    // Stop first to ensure clean state (Tone.js v15 requires stop before restart)
     try { slot.player.stop(); } catch { /* ignore */ }
     slot.player.loopStart = slot.loopStart;
     slot.player.loopEnd = slot.loopEnd;
     slot.player.loop = true;
-    // Clamp startOffset into loop region in case loop bounds shifted while paused
     slot.startOffset = Math.max(slot.loopStart, Math.min(slot.loopEnd - 0.01, slot.startOffset));
     const t = Tone.now() + 0.05;
     slot.player.start(t, slot.startOffset);
@@ -198,12 +303,20 @@ class CollabEngine {
   getSlot(id: string): CollabSlot | null {
     const slot = this.slots.get(id);
     if (!slot) return null;
-    const { player: _p, chain: _c, volume: _v, startedAt: _s, startOffset: _o, playing: _pl, ...data } = slot;
+    const { player: _p, chain: _c, volume: _v, springConvolver: _sc, springWet: _sw,
+            throwSend: _ts, throwFilter: _tf, throwDelay: _td, throwReverb: _tr,
+            throwActive: _ta, throwTimer: _tt,
+            startedAt: _s, startOffset: _o, playing: _pl, ...data } = slot;
     return data;
   }
 
   getAllSlots(): CollabSlot[] {
-    return Array.from(this.slots.values()).map(({ player: _p, chain: _c, volume: _v, startedAt: _s, startOffset: _o, playing: _pl, ...data }) => data);
+    return Array.from(this.slots.values()).map(
+      ({ player: _p, chain: _c, volume: _v, springConvolver: _sc, springWet: _sw,
+         throwSend: _ts, throwFilter: _tf, throwDelay: _td, throwReverb: _tr,
+         throwActive: _ta, throwTimer: _tt,
+         startedAt: _s, startOffset: _o, playing: _pl, ...data }) => data
+    );
   }
 
   setMasterSettings(s: CollabMasterSettings): void {
@@ -220,7 +333,6 @@ class CollabEngine {
 
     const t = Tone.now() + 0.05;
 
-    // Only start slots that aren't already playing
     for (const slot of this.slots.values()) {
       if (slot.playing) continue;
       try { slot.player.stop(); } catch { /* ignore */ }
@@ -237,7 +349,6 @@ class CollabEngine {
   }
 
   stop(): void {
-    // Only pause slots that are currently playing
     for (const slot of this.slots.values()) {
       if (!slot.playing) continue;
       slot.startOffset = this.getSlotPosition(slot.id);
@@ -248,19 +359,31 @@ class CollabEngine {
   }
 
   dispose(): void {
+    this._disposed = true;
+    if (this.throwDebounceTimer) clearTimeout(this.throwDebounceTimer);
     this.stop();
     for (const slot of this.slots.values()) {
+      if (slot.throwTimer) clearTimeout(slot.throwTimer);
       slot.player.disconnect();
       slot.player.dispose();
       slot.chain.distortion.disconnect(); slot.chain.distortion.dispose();
+      slot.chain.eqLo.disconnect(); slot.chain.eqLo.dispose();
+      slot.chain.eqMid.disconnect(); slot.chain.eqMid.dispose();
+      slot.chain.eqHi.disconnect(); slot.chain.eqHi.dispose();
       slot.chain.bass.input.disconnect(); slot.chain.bass.input.dispose();
       slot.chain.bass.bassShelf.disconnect(); slot.chain.bass.bassShelf.dispose();
       slot.chain.bass.bassSubFilter.disconnect(); slot.chain.bass.bassSubFilter.dispose();
       slot.chain.bass.bassSubDist.disconnect(); slot.chain.bass.bassSubDist.dispose();
       slot.chain.bass.bassSubGain.disconnect(); slot.chain.bass.bassSubGain.dispose();
-      slot.chain.delay.disconnect(); slot.chain.delay.dispose();
+      slot.chain.delay.dispose();
       disposeDualReverb(slot.chain.reverbs);
       slot.chain.gain.disconnect(); slot.chain.gain.dispose();
+      try { slot.springConvolver.disconnect(); } catch { /* ignore */ }
+      slot.springWet.disconnect(); slot.springWet.dispose();
+      slot.throwReverb.disconnect(); slot.throwReverb.dispose();
+      slot.throwDelay.disconnect(); slot.throwDelay.dispose();
+      slot.throwFilter.disconnect(); slot.throwFilter.dispose();
+      slot.throwSend.disconnect(); slot.throwSend.dispose();
       slot.volume.disconnect(); slot.volume.dispose();
     }
     this.slots.clear();
@@ -274,19 +397,6 @@ class CollabEngine {
       const effectiveMute = slot.muted || (anySoloed && !slot.soloed);
       slot.volume.volume.value = effectiveMute ? -Infinity : slot.gain;
     }
-  }
-
-  private applyEffectsToChain(chain: EffectsChain, e: CollabSlot["effects"]): void {
-    const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
-    chain.gain.gain.value = e.gain;
-    applyDualReverb(chain.reverbs, e);
-    applyBassBoost(chain.bass, e.bassBoost);
-    chain.delay.delayTime.value = clamp(e.delayTime, EFFECTS_LIMITS.delayTime.min, EFFECTS_LIMITS.delayTime.max);
-    chain.delay.feedback.value = clamp(e.delayFeedback, EFFECTS_LIMITS.delayFeedback.min, EFFECTS_LIMITS.delayFeedback.max);
-    chain.delay.wet.value = clamp(e.delayWet, EFFECTS_LIMITS.delayWet.min, EFFECTS_LIMITS.delayWet.max);
-    const grit = clamp(e.grit ?? 0, 0, 1);
-    chain.distortion.wet.value = grit;
-    chain.distortion.distortion = Math.pow(grit, 0.5); // curve for more punch at lower values
   }
 }
 

@@ -34,6 +34,8 @@ export const DRY_EFFECTS: EffectsState = {
   bassBoost: 0,
   gain: 1,
   grit: 0,
+  spaceEchoWow: 0,
+  bigKnobWet: 0,
 };
 
 interface StemTrack {

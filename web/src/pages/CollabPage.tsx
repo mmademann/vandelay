@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { collabEngine } from "../audio/collabEngine";
 import { DRY_EFFECTS, type StemName } from "../audio/dubEngine";
-import type { CollabMasterSettings, CollabSlot, CollabSession } from "../lib/collabSettings";
+import type { CollabMasterSettings, CollabSlot, CollabSession, ThrowSettings } from "../lib/collabSettings";
 import { getCachedAudio, putCachedAudio } from "../lib/audioCache";
 import {
   loadNamedSessions,
@@ -12,7 +12,13 @@ import {
   loadCollabPresets,
   saveCollabPreset,
   deleteCollabPreset,
+  loadThrowSettings,
+  saveThrowSettings,
+  loadThrowPresets,
+  saveThrowPreset,
+  deleteThrowPreset,
   type CollabPreset,
+  type ThrowPreset,
 } from "../lib/collabSettings";
 import { SlotStrip } from "../components/collab/SlotStrip";
 import { SlotPicker } from "../components/collab/SlotPicker";
@@ -52,21 +58,29 @@ export function CollabPage() {
 
   const [entries, setEntries] = useState<SlotEntry[]>([]);
   const [showPicker, setShowPicker] = useState(false);
-  const [masterSettings] = useState<CollabMasterSettings>({ gain: 0, loopLengthOverride: null });
+  const [masterSettings, setMasterSettings] = useState<CollabMasterSettings>(() => ({
+    gain: 0,
+    loopLengthOverride: null,
+    throwSettings: loadThrowSettings(),
+  }));
   const [namedSessions, setNamedSessions] = useState<CollabSession[]>(() => loadNamedSessions());
   const [sessionName, setSessionName] = useState("");
   const [presets, setPresets] = useState<CollabPreset[]>(() => loadCollabPresets());
+  const [throwPresets, setThrowPresets] = useState<ThrowPreset[]>(() => loadThrowPresets());
   const [isPlayingAll, setIsPlayingAll] = useState(false);
 
   const entriesRef = useRef(entries);
   entriesRef.current = entries;
+  // Staged slot data from a named session load — consumed by the URL reconciler
+  const pendingSessionSlotsRef = useRef<Map<string, CollabSlot>>(new Map());
 
-  // Dispose engine on unmount
+  // Sync initial throw settings to engine on mount
   useEffect(() => {
+    collabEngine.setThrowSettings(masterSettings.throwSettings);
     return () => {
       collabEngine.dispose();
     };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll engine running state for Play All / Stop All button
   useEffect(() => {
@@ -166,20 +180,34 @@ export function CollabPage() {
 
         if (cancelled) return;
 
-        // Restore saved settings for this trackId:stemName if available
-        const saved = loadSlotSettings(slot.trackId, slot.stemName);
         const dur = buffer.duration;
-        const finalSlot: CollabSlot = {
-          ...slot,
-          loopStart: saved ? Math.max(0, saved.loopStartFrac * dur) : 0,
-          loopEnd: saved ? Math.min(dur, saved.loopEndFrac * dur) : dur,
-          speed: saved?.speed ?? slot.speed,
-          pitch: saved?.pitch ?? slot.pitch,
-          linkPitch: saved?.linkPitch ?? slot.linkPitch,
-          gain: saved?.gain ?? slot.gain,
-          muted: saved?.muted ?? slot.muted,
-          effects: saved?.effects ?? slot.effects,
-        };
+        const slotKey = `${slot.trackId}:${slot.stemName}`;
+        const pendingSlot = pendingSessionSlotsRef.current.get(slotKey);
+        let finalSlot: CollabSlot;
+        if (pendingSlot) {
+          // Session load — restore all settings from the named session
+          pendingSessionSlotsRef.current.delete(slotKey);
+          finalSlot = {
+            ...pendingSlot,
+            id: slot.id,
+            loopStart: Math.max(0, Math.min(pendingSlot.loopStart, dur - 0.01)),
+            loopEnd: Math.min(dur, pendingSlot.loopEnd > 0 ? pendingSlot.loopEnd : dur),
+          };
+        } else {
+          // Normal load — restore from per-slot autosave
+          const saved = loadSlotSettings(slot.trackId, slot.stemName);
+          finalSlot = {
+            ...slot,
+            loopStart: saved ? Math.max(0, saved.loopStartFrac * dur) : 0,
+            loopEnd: saved ? Math.min(dur, saved.loopEndFrac * dur) : dur,
+            speed: saved?.speed ?? slot.speed,
+            pitch: saved?.pitch ?? slot.pitch,
+            linkPitch: saved?.linkPitch ?? slot.linkPitch,
+            gain: saved?.gain ?? slot.gain,
+            muted: saved?.muted ?? slot.muted,
+            effects: saved?.effects ?? slot.effects,
+          };
+        }
 
         const title = library.find((e) => e.id === slot.trackId)?.title ?? slot.trackId;
 
@@ -230,6 +258,14 @@ export function CollabPage() {
   }
 
   function handleLoadSession(session: CollabSession) {
+    const ms = session.masterSettings;
+    setMasterSettings(ms);
+    collabEngine.setMasterSettings(ms);
+    collabEngine.setThrowSettings(ms.throwSettings);
+    // Stage slot settings so the reconciler restores them instead of per-slot autosave
+    pendingSessionSlotsRef.current = new Map(
+      session.slots.map((s) => [`${s.trackId}:${s.stemName}`, s]),
+    );
     const param = session.slots.map((s) => `${s.trackId}:${s.stemName}`).join(",");
     navigate(param ? `/collab?slots=${param}` : "/collab");
   }
@@ -265,6 +301,25 @@ export function CollabPage() {
     buffers: new Map(entriesRef.current.filter((e) => e.buffer).map((e) => [e.slot.id, e.buffer!])),
   }));
 
+
+  function handleThrowSettingsChange(throwSettings: ThrowSettings) {
+    setMasterSettings((prev) => ({ ...prev, throwSettings }));
+    saveThrowSettings(throwSettings);
+  }
+
+  function handleSaveThrowPreset(name: string) {
+    setThrowPresets(saveThrowPreset(name, masterSettings.throwSettings));
+  }
+
+  function handleDeleteThrowPreset(name: string) {
+    setThrowPresets(deleteThrowPreset(name));
+  }
+
+  function handleApplyThrowPreset(preset: ThrowPreset) {
+    collabEngine.setThrowSettings(preset.settings);
+    setMasterSettings((prev) => ({ ...prev, throwSettings: preset.settings }));
+    saveThrowSettings(preset.settings);
+  }
 
   async function handlePlayAll() {
     await collabEngine.play();
@@ -354,6 +409,11 @@ export function CollabPage() {
           onPlayAll={handlePlayAll}
           onStopAll={handleStopAll}
           onRewindAll={() => { for (const e of entries) collabEngine.seekSlot(e.slot.id, e.slot.loopStart); }}
+          onThrowSettingsChange={handleThrowSettingsChange}
+          throwPresets={throwPresets}
+          onSaveThrowPreset={handleSaveThrowPreset}
+          onDeleteThrowPreset={handleDeleteThrowPreset}
+          onApplyThrowPreset={handleApplyThrowPreset}
           isPlaying={isPlayingAll}
         />
 

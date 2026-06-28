@@ -1,6 +1,6 @@
 # Vandelay — context for Claude
 
-Personal-use "slowed + reverb" web app. Three routes: **`/`** (single track), **`/mix`** (multi-track + drums), **`/collab`** (multi-slot stem layering).
+Personal-use "slowed + reverb" web app. Four routes: **`/`** (single track), **`/mix`** (multi-track + drums), **`/stems`** (demucs stem separation), **`/collab`** (multi-slot stem layering with dub effects).
 
 **User-facing behavior** (features, defaults, export options): see `README.md`.  
 **Implementation details** (limits, keys, presets): read the source — don't trust hardcoded values in this file.
@@ -42,11 +42,13 @@ Decoded `AudioBuffer`s are **in-memory only** (per session). WAV bytes and metad
 | `engine` | Single track | `Player → Distortion → EQ → Delay → Reverb → Gain → destination` |
 | `mixEngine` | Per audio strip | Same chain → `Volume → PauseGain → master` |
 | `drumEngine` | Drums | Synths → separate kick/hat effect chains → master |
-| `collabEngine` | Per slot | `Player → Distortion → EQ → Delay → Reverb → Gain → Volume → master` |
+| `collabEngine` | Per slot | `Player → Distortion → EqLo → EqMid → EqHi → Bass → TapeDelay → DualReverb → Gain → Volume → master` (+ parallel: `springConvolver → springWet → master`; `throwSend → throwDelay → throwReverb → master`) |
 
 Loop regions are managed in engine code, not via the player's native loop points. Pitch/speed go through **`playbackRateForEffects`** on `Tone.Player`.
 
 **Collab engine specifics**: each slot has independent playback position tracking (`startedAt` + `startOffset`). All timing uses `Tone.now()` — never mix with raw `AudioContext.currentTime`. Position formula: `loopStart + ((offsetInLoop + elapsed) % loopDur + loopDur) % loopDur` (positive modulo required). `play()`/`stop()` skip already-playing/paused slots so Play All / Pause All respect individual slot states.
+
+**Collab effects**: `TapeDelay` (in `tapeDelay.ts`) replaces `FeedbackDelay` in the collab chain — adds a feedback lowpass filter + distortion + pitch-wobble LFO controlled by `spaceEchoWow` (S.ECHO). **Big Knob** (`bigKnobWet`) drives a parallel spring reverb send (`springConvolver → springWet → master`) tapped from the slot's gain output, independent of all other effects. **3-band EQ** (`eqLo/eqMid/eqHi`) sits pre-delay so echoes inherit the EQ'd tone. **Throw** (`throwSend → throwDelay → throwReverb → master`) is a momentary gated send per slot; throw character (delay + reverb settings) is global via `ThrowSettings` in `CollabMasterSettings`.
 
 **Lazy graph build**: audio context needs a user gesture. URL loads decode the buffer first; Tone graph builds on first Play (`ensureGraph` / `playAll`). **Re-apply settings after graph rebuild** (track switch, `engine.load`) or the chain stays at factory defaults.
 
@@ -66,15 +68,17 @@ web/src/
   store.ts           Single state, EFFECTS_LIMITS, effect sanitization/bypass
   mixStore.ts        Mix state
   audio/             Engines, offline render, encode
-    collabEngine.ts  Per-slot playback engine (independent position tracking, effects)
+    collabEngine.ts  Per-slot playback engine (independent position tracking, effects, throw)
+    collabChain.ts   Collab effects chain factory (live + offline); TapeDelay wiring, spring reverb, 3-band EQ
+    tapeDelay.ts     TapeDelay class — filtered feedback + LFO wow (S.ECHO)
     renderCollab.ts  Offline render for /collab export
     graph.ts         Shared effects chain (Distortion → EQ → Delay → Reverb → Gain)
-    reverbSlot.ts    DualReverb nodes + createOfflineEqChain (includes grit/distortion)
+    reverbSlot.ts    DualReverb nodes + synthesizeSpringImpulse + createOfflineEqChain (single/mix)
   components/        UI (mix/ subfolder for mixer, collab/ subfolder for collab)
     collab/
-      SlotStrip.tsx       Per-slot UI (waveform, knobs, presets, play/pause/rewind)
+      SlotStrip.tsx       Per-slot UI (waveform, knobs, presets, play/pause/rewind, THROW button)
       SlotPicker.tsx      Inline track+stem picker panel
-      CollabTransport.tsx Play All / Pause All / Rewind All + export controls
+      CollabTransport.tsx Play All / Pause All / Rewind All + export controls + Throw Character panel (floating overlay)
   lib/               Loaders, caches, persistence, format helpers, presets
     collabSettings.ts    CollabSlot/Session types, per-slot localStorage CRUD, named sessions
 ```
@@ -92,7 +96,7 @@ web/src/
 9. **Mix `addTrack` / loaders idempotent** — StrictMode-safe.
 10. **ArrayBuffers consumed by decode/IDB** — `.slice(0)` before handoff (`audioBufferStore.ts`).
 11. **Collab position tracking** — always use `Tone.now()`, never `AudioContext.currentTime`. `startedAt` is set at the scheduled start time (`Tone.now() + 0.05`), not wall clock. Use positive modulo for loop wrap.
-12. **Effects chain includes Distortion** — `Tone.Distortion` is the first node after Player in all engines. `wet = grit`, `distortion = Math.pow(grit, 0.5)`. `createOfflineEqChain` returns the distortion node (input), not EQ.
+12. **Effects chain includes Distortion** — `Tone.Distortion` is the first node after Player in all engines. `wet = grit`, `distortion = Math.pow(grit, 0.5)`. `createOfflineEqChain` (single/mix, in `reverbSlot.ts`) and `createOfflineCollabEqChain` (collab, in `collabChain.ts`) both return the distortion node as the chain input.
 13. **Collab `addSlot` auto-join** uses `this.running` (private flag), not `isRunning()` — so manually-paused slots don't auto-join when a new slot is added mid-session.
 
 ## Known gotchas
@@ -104,6 +108,10 @@ web/src/
 - Drum pattern names (e.g. "custom") are labels; playback only cares whether pattern is off.
 - Collab URL format: `?slots=trackId:stemName,trackId:stemName,...` — slot IDs are UUIDs generated at runtime, not derived from trackId+stemName.
 - `GET /api/stems/library` returns all previously-separated track IDs + titles (scans `server/stems/htdemucs/`, joins with `history.json`).
+- **S.ECHO does nothing at Delay wet = 0** — it only modifies echo character (darkness per repeat, saturation, pitch wobble); it is not a sound source.
+- **B.KNOB is fully independent** — taps from the slot's gain output (post all effects chain) as a parallel spring reverb send; no dependency on delay, reverb, or any other knob.
+- **Named session load vs. per-slot autosave**: two separate systems. `pendingSessionSlotsRef` in `CollabPage.tsx` stages session slot data before navigation so the URL reconciler reads from the session snapshot, not per-slot autosave.
+- **Throw reverb decay changes require `reverb.generate()`** — debounced 300ms in `collabEngine.setThrowSettings`.
 
 ## Run
 

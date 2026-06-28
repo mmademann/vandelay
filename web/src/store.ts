@@ -18,6 +18,11 @@ export const EFFECTS_LIMITS = {
   gain: { min: 0, max: 6 },
   bassBoost: { min: -20, max: 20 },
   grit: { min: 0, max: 1 },
+  spaceEchoWow: { min: 0, max: 1 },
+  bigKnobWet: { min: 0, max: 1 },
+  eqLow: { min: -12, max: 12 },
+  eqMid: { min: -12, max: 12 },
+  eqHigh: { min: -12, max: 12 },
 } as const;
 
 export interface Track {
@@ -42,6 +47,11 @@ export interface EffectsState {
   delayFeedback: number;
   delayWet: number;
   grit: number;
+  spaceEchoWow?: number;
+  bigKnobWet?: number;
+  eqLow?: number;
+  eqMid?: number;
+  eqHigh?: number;
 }
 
 function clamp(v: number, min: number, max: number) { return Math.min(max, Math.max(min, v)); }
@@ -63,6 +73,11 @@ export function sanitizeEffects(e: EffectsState): EffectsState {
     gain: clamp(e.gain, EFFECTS_LIMITS.gain.min, EFFECTS_LIMITS.gain.max),
     bassBoost: clamp(e.bassBoost, EFFECTS_LIMITS.bassBoost.min, EFFECTS_LIMITS.bassBoost.max),
     grit: clamp(e.grit ?? 0, EFFECTS_LIMITS.grit.min, EFFECTS_LIMITS.grit.max),
+    spaceEchoWow: clamp(e.spaceEchoWow ?? 0, EFFECTS_LIMITS.spaceEchoWow.min, EFFECTS_LIMITS.spaceEchoWow.max),
+    bigKnobWet: clamp(e.bigKnobWet ?? 0, EFFECTS_LIMITS.bigKnobWet.min, EFFECTS_LIMITS.bigKnobWet.max),
+    eqLow: clamp(e.eqLow ?? 0, EFFECTS_LIMITS.eqLow.min, EFFECTS_LIMITS.eqLow.max),
+    eqMid: clamp(e.eqMid ?? 0, EFFECTS_LIMITS.eqMid.min, EFFECTS_LIMITS.eqMid.max),
+    eqHigh: clamp(e.eqHigh ?? 0, EFFECTS_LIMITS.eqHigh.min, EFFECTS_LIMITS.eqHigh.max),
   };
 }
 
@@ -79,6 +94,11 @@ export const DEFAULT_EFFECTS: EffectsState = {
   delayFeedback: 0,
   delayWet: 0,
   grit: 0,
+  spaceEchoWow: 0,
+  bigKnobWet: 0,
+  eqLow: 0,
+  eqMid: 0,
+  eqHigh: 0,
 };
 
 /** Applied when effects are toggled off; slider values are kept in state. */
@@ -95,6 +115,11 @@ export const BYPASS_EFFECTS: EffectsState = {
   delayFeedback: 0,
   delayWet: 0,
   grit: 0,
+  spaceEchoWow: 0,
+  bigKnobWet: 0,
+  eqLow: 0,
+  eqMid: 0,
+  eqHigh: 0,
 };
 
 export function effectiveEffects(

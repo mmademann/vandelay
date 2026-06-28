@@ -49,6 +49,50 @@ export function synthesizeHallImpulse(sampleRate: number): AudioBuffer {
   return buffer;
 }
 
+/** Metallic spring IR for Big Knob parallel reverb (no file needed). */
+export function synthesizeSpringImpulse(sampleRate: number): AudioBuffer {
+  const durationSec = 3.0;
+  const length = Math.floor(sampleRate * durationSec);
+  const preDelaySamples = Math.floor(sampleRate * 0.015);
+  const buffer = new AudioBuffer({ numberOfChannels: 2, length, sampleRate });
+  const left = buffer.getChannelData(0);
+  const right = buffer.getChannelData(1);
+
+  // Initial transient after pre-delay
+  if (preDelaySamples < length) {
+    left[preDelaySamples] = 0.9;
+    right[preDelaySamples] = 0.85;
+  }
+
+  // Metallic resonance at ~1.5kHz decaying over the tail
+  const resonanceFreq = 1500;
+  const twoPiF = (2 * Math.PI * resonanceFreq) / sampleRate;
+  let lpL = 0;
+  let lpR = 0;
+  for (let i = preDelaySamples + 1; i < length; i++) {
+    const t = (i - preDelaySamples) / (length - preDelaySamples);
+    const env = Math.exp(-3.5 * t) * (1 - Math.exp(-40 * t));
+    const resonance = Math.sin(twoPiF * i) * 0.3;
+    const nL = ((Math.random() * 2 - 1) * env + resonance * env);
+    const nR = ((Math.random() * 2 - 1) * env + resonance * env * 0.85); // narrower stereo
+    lpL = lpL * 0.88 + nL * 0.12;
+    lpR = lpR * 0.87 + nR * 0.13;
+    left[i] = lpL * 0.15;
+    right[i] = lpR * 0.15;
+  }
+
+  let peak = 0;
+  for (let i = 0; i < length; i++) {
+    peak = Math.max(peak, Math.abs(left[i]), Math.abs(right[i]));
+  }
+  const gain = 0.8 / (peak || 1);
+  for (let i = 0; i < length; i++) {
+    left[i] *= gain;
+    right[i] *= gain;
+  }
+  return buffer;
+}
+
 export async function getImpulseResponse(): Promise<AudioBuffer> {
   if (impulseBuffer) return impulseBuffer;
   if (!impulsePromise) {

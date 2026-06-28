@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { cn } from "../../lib/cn";
 import { collabEngine } from "../../audio/collabEngine";
 import type { CollabSlot } from "../../lib/collabSettings";
+import { Knob } from "./Knob";
 import {
   saveSlotSettings,
   type CollabPreset,
@@ -269,67 +270,6 @@ function SlotWaveform({
   );
 }
 
-// --- Knob ---
-
-function Knob({
-  label, value, min, max, step, defaultValue, displayValue, disabled, onChange,
-}: {
-  label: string; value: number; min: number; max: number; step: number;
-  defaultValue: number; displayValue: string; disabled?: boolean; onChange: (v: number) => void;
-}) {
-  const SIZE = 48;
-  const STROKE = 4;
-  const R = (SIZE - STROKE) / 2 - 1;
-  const START_ANGLE = 225;
-  const SWEEP = 270;
-  const ratio = Math.max(0, Math.min(1, (value - min) / (max - min)));
-  const angle = START_ANGLE + ratio * SWEEP;
-  const toRad = (deg: number) => (deg * Math.PI) / 180;
-  const cx = SIZE / 2;
-  const cy = SIZE / 2;
-  function arcPath(startDeg: number, endDeg: number) {
-    const s = toRad(startDeg); const e = toRad(endDeg);
-    const x1 = cx + R * Math.cos(s); const y1 = cy + R * Math.sin(s);
-    const x2 = cx + R * Math.cos(e); const y2 = cy + R * Math.sin(e);
-    return `M ${x1} ${y1} A ${R} ${R} 0 ${endDeg - startDeg > 180 ? 1 : 0} 1 ${x2} ${y2}`;
-  }
-  const dragRef = useRef<{ startY: number; startVal: number } | null>(null);
-  const [dragging, setDragging] = useState(false);
-  function clampStep(v: number) {
-    const snapped = Math.round((v - min) / step) * step + min;
-    return Math.min(max, Math.max(min, parseFloat(snapped.toFixed(10))));
-  }
-  const indicatorLen = R - 4;
-  const indX2 = cx + indicatorLen * Math.cos(toRad(angle));
-  const indY2 = cy + indicatorLen * Math.sin(toRad(angle));
-  const indX1 = cx + (R - indicatorLen - 6) * Math.cos(toRad(angle));
-  const indY1 = cy + (R - indicatorLen - 6) * Math.sin(toRad(angle));
-  return (
-    <div className={cn("flex flex-col items-center gap-0.5", disabled && "opacity-35 pointer-events-none")}>
-      <div className="relative select-none">
-        <svg width={SIZE} height={SIZE}
-          onPointerDown={(e) => { if (disabled) return; e.currentTarget.setPointerCapture(e.pointerId); dragRef.current = { startY: e.clientY, startVal: value }; setDragging(true); }}
-          onPointerMove={(e) => { if (!dragRef.current || disabled) return; const delta = (dragRef.current.startY - e.clientY) / 100; onChange(clampStep(dragRef.current.startVal + delta * (max - min))); }}
-          onPointerUp={() => { dragRef.current = null; setDragging(false); }}
-          onDoubleClick={() => { if (!disabled) onChange(defaultValue); }}
-          className="cursor-ns-resize touch-none" style={{ display: "block" }}>
-          <path d={arcPath(START_ANGLE, START_ANGLE + SWEEP)} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth={STROKE} strokeLinecap="round" />
-          {ratio > 0.001 && <path d={arcPath(START_ANGLE, Math.max(START_ANGLE + 0.5, angle))} fill="none" stroke="rgba(45,212,191,0.75)" strokeWidth={STROKE} strokeLinecap="round" />}
-          <circle cx={cx} cy={cy} r={R - STROKE - 2} fill="rgba(255,255,255,0.03)" />
-          <line x1={indX1} y1={indY1} x2={indX2} y2={indY2} stroke="rgba(45,212,191,0.9)" strokeWidth={1.5} strokeLinecap="round" />
-        </svg>
-        {dragging && (
-          <div className="pointer-events-none absolute -top-7 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-zinc-900 px-2 py-0.5 text-[10px] font-medium text-foreground/90 ring-1 ring-border/60 shadow-lg">
-            {displayValue}
-          </div>
-        )}
-      </div>
-      <span className="text-[9px] uppercase tracking-wide text-foreground/35 leading-none">{label}</span>
-      <span className="text-[9px] tabular-nums text-foreground/55 leading-none">{displayValue}</span>
-    </div>
-  );
-}
-
 // --- SlotStrip ---
 
 interface Props {
@@ -347,13 +287,15 @@ interface Props {
 export function SlotStrip({ slot, title, buffer, presets, onRemove, onChange, onSavePreset, onDeletePreset, onApplyPreset }: Props) {
   const [presetName, setPresetName] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
+  const [throwActive, setThrowActive] = useState(false);
   const [activePreset, setActivePreset] = useState<string | null>(null);
   const [seekRevision, setSeekRevision] = useState(0);
 
-  // Keep isPlaying in sync with engine state
+  // Keep isPlaying and throwActive in sync with engine state
   useEffect(() => {
     const id = setInterval(() => {
       setIsPlaying(collabEngine.isSlotPlaying(slot.id));
+      setThrowActive(collabEngine.isThrowActive(slot.id));
     }, 100);
     return () => clearInterval(id);
   }, [slot.id]);
@@ -458,6 +400,15 @@ export function SlotStrip({ slot, title, buffer, presets, onRemove, onChange, on
               slot.muted ? "bg-red-500/25 text-red-400 ring-1 ring-red-500/40" : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted")}>
             {slot.muted ? "✕ Muted" : "◎ Mute"}
           </button>
+          <button type="button" onClick={() => collabEngine.throwSlot(slot.id)} disabled={!buffer}
+            className={cn("rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
+              throwActive
+                ? "bg-teal-500/25 text-teal-400 ring-1 ring-teal-400/60"
+                : "bg-muted/80 text-foreground/50 hover:text-teal-400 hover:bg-muted",
+              !buffer && "opacity-30 cursor-not-allowed")}
+            title="Throw — tape echo burst + spring reverb">
+            ↯ Throw
+          </button>
         </div>
         <div className="flex flex-1 items-center gap-2 min-w-0 justify-end">
           <span className={cn("shrink-0 rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider", STEM_COLORS[slot.stemName])}>
@@ -518,6 +469,16 @@ export function SlotStrip({ slot, title, buffer, presets, onRemove, onChange, on
           displayValue={`${slot.effects.bassBoost > 0 ? "+" : ""}${slot.effects.bassBoost}dB`} onChange={(v) => updateEffect({ bassBoost: v })} />
         <Knob label="Grit" value={slot.effects.grit ?? 0} min={0} max={1} step={0.01} defaultValue={0}
           displayValue={`${Math.round((slot.effects.grit ?? 0) * 100)}%`} onChange={(v) => updateEffect({ grit: v })} />
+        <Knob label="S.Echo" value={slot.effects.spaceEchoWow ?? 0} min={0} max={1} step={0.01} defaultValue={0}
+          displayValue={`${Math.round((slot.effects.spaceEchoWow ?? 0) * 100)}%`} onChange={(v) => updateEffect({ spaceEchoWow: v })} />
+        <Knob label="B.Knob" value={slot.effects.bigKnobWet ?? 0} min={0} max={1} step={0.01} defaultValue={0}
+          displayValue={`${Math.round((slot.effects.bigKnobWet ?? 0) * 100)}%`} onChange={(v) => updateEffect({ bigKnobWet: v })} />
+        <Knob label="EQ Lo" value={slot.effects.eqLow ?? 0} min={-12} max={12} step={0.5} defaultValue={0}
+          displayValue={`${(slot.effects.eqLow ?? 0) > 0 ? "+" : ""}${(slot.effects.eqLow ?? 0).toFixed(1)}dB`} onChange={(v) => updateEffect({ eqLow: v })} />
+        <Knob label="EQ Mid" value={slot.effects.eqMid ?? 0} min={-12} max={12} step={0.5} defaultValue={0}
+          displayValue={`${(slot.effects.eqMid ?? 0) > 0 ? "+" : ""}${(slot.effects.eqMid ?? 0).toFixed(1)}dB`} onChange={(v) => updateEffect({ eqMid: v })} />
+        <Knob label="EQ Hi" value={slot.effects.eqHigh ?? 0} min={-12} max={12} step={0.5} defaultValue={0}
+          displayValue={`${(slot.effects.eqHigh ?? 0) > 0 ? "+" : ""}${(slot.effects.eqHigh ?? 0).toFixed(1)}dB`} onChange={(v) => updateEffect({ eqHigh: v })} />
         <div className="flex flex-col items-center justify-end gap-0.5 ml-auto">
           <button type="button" onClick={handleReset}
             className="rounded px-2 py-1 text-[9px] uppercase tracking-wide font-semibold text-foreground/30 bg-muted/60 hover:text-foreground/60 hover:bg-muted transition">

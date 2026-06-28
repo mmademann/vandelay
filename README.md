@@ -1,6 +1,6 @@
 # Vandelay
 
-A "slowed + reverb" web app with two modes: a single-track editor at `/`, and a multi-track mixer at `/mix`. Paste a YouTube URL or upload a local audio file, set loop regions, dial in effects, and export.
+A "slowed + reverb" web app with four modes: a single-track editor at `/`, a multi-track mixer at `/mix`, a stem separator at `/stems`, and a collab stem layering page at `/collab`. Paste a YouTube URL or upload a local audio file, set loop regions, dial in effects, and export.
 
 Open http://localhost:5173 after starting the dev server (see below).
 
@@ -11,7 +11,7 @@ Open http://localhost:5173 after starting the dev server (see below).
 
 `ffmpeg` is bundled via `ffmpeg-static` for YouTube extraction — no separate install needed for core features.
 
-### Dub mode (`/dub`) — optional
+### Stems + Collab (`/stems`, `/collab`) — optional
 
 Stem separation requires additional Python tooling. Run the setup script once:
 
@@ -66,13 +66,24 @@ Three columns: **Recent** | waveform + effects | export + presets.
 
 Settings restore automatically per track on reload.
 
-## Dub mode (`/dub`)
+## Stems mode (`/stems`)
 
 Paste a YouTube URL and click **Separate** — the server downloads the track and runs [demucs](https://github.com/facebookresearch/demucs) to split it into **drums, bass, vocals, other**. Requires the one-time setup above.
 
 - Separation takes ~2–5 min per track on CPU; stems are cached in `server/stems/` for instant reload
-- Drums stem gets dub techno effects (heavy reverb + delay) applied by default
-- Each stem has an independent mute button
+
+## Collab mode (`/collab`)
+
+Multi-slot stem layering with full per-slot dub effects. Load stems from the library (tracks you've already separated), arrange them into slots, and layer loops with independent effects per slot.
+
+- **Effects per slot**: Gain, Speed, Pitch, Reverb (decay + wet), Delay (time + feedback + wet), Bass, Grit, S.ECHO, B.KNOB, EQ Lo/Mid/Hi
+- **S.ECHO** (Space Echo) — tape wow/flutter character on the delay: wobbles pitch of each echo, darkens and saturates the feedback. Requires Delay wet > 0 to have any effect.
+- **B.KNOB** (Big Knob) — parallel spring reverb send, independent of all other effects. Always adds spring character regardless of other knob settings.
+- **EQ Lo / Mid / Hi** — 3-band EQ (low shelf 100Hz, peaking 1kHz, high shelf 6kHz), ±12dB each, applied pre-delay/reverb so echoes inherit the EQ tone.
+- **THROW** — momentary per-slot button that blasts the slot through a configurable Space Echo + spring reverb burst. Throw character (delay time, feedback, wet; reverb decay, wet) is set globally in the Throw panel in the transport bar.
+- **Mute / Solo** per slot; **Play All / Pause All / Rewind All** in the transport bar.
+- **Named sessions** — save/load the full arrangement (slot lineup, all per-slot settings, master settings, throw character).
+- **Export** — renders all slots in sync as a WAV/MP3/OGG/FLAC, respecting mute/solo and all effects.
 
 ## Mix mode (`/mix`)
 
@@ -107,7 +118,7 @@ Browsers block audio until you interact — click **Play** once after a cold loa
 | Video too long | Cap is in `server/src/lib/extract.ts` (`MAX_DURATION_SECONDS`) |
 | No sound after refresh | Click Play once (autoplay policy) |
 | Port in use | Change ports in vite config / server entry |
-| `demucs not found` on `/dub` | Run `bash scripts/setup-demucs.sh`; ensure `~/.local/bin` is on PATH |
+| `demucs not found` on `/stems` | Run `bash scripts/setup-demucs.sh`; ensure `~/.local/bin` is on PATH |
 | demucs torchcodec error | Re-run setup script — version pins may have drifted |
 
 YouTube extraction is unreliable from cloud/datacenter IPs — intended for local use.
