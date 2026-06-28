@@ -1,6 +1,6 @@
 import * as Tone from "tone";
 import { EFFECTS_LIMITS, effectiveEffects, type EffectsState, useStore } from "../store";
-import { createTrackCore } from "./graph";
+import { applyBassBoost, createTrackCore, type BassChain } from "./graph";
 import { applyDualReverb, disposeDualReverb, type DualReverbNodes } from "./reverbSlot";
 
 /** Restart the live player slightly before loopEnd so wrap matches the loop region. */
@@ -36,7 +36,7 @@ export function clampToLoopForPlayback(
 class Engine {
   private player: Tone.Player | null = null;
   private distortion: Tone.Distortion | null = null;
-  private eq: Tone.EQ3 | null = null;
+  private bass: BassChain | null = null;
   private delay: Tone.FeedbackDelay | null = null;
   private reverbs: DualReverbNodes | null = null;
   private gain: Tone.Gain | null = null;
@@ -84,7 +84,7 @@ class Engine {
     const core = await createTrackCore(buffer, destination);
     this.player = core.player;
     this.distortion = core.distortion;
-    this.eq = core.eq;
+    this.bass = core.bass;
     this.delay = core.delay;
     this.reverbs = core.reverbs;
     this.gain = core.gain;
@@ -102,7 +102,7 @@ class Engine {
   }
 
   applyEffects(e: EffectsState) {
-    if (!this.player || !this.distortion || !this.eq || !this.delay || !this.reverbs || !this.gain) return;
+    if (!this.player || !this.distortion || !this.bass || !this.delay || !this.reverbs || !this.gain) return;
     const speedChanged = this.playing && e.speed !== this.playbackRate;
     if (speedChanged) {
       this.playOffset = this.computePosition();
@@ -110,7 +110,7 @@ class Engine {
     }
     this.playbackRate = e.speed;
     this.player.playbackRate = playbackRateForEffects(e);
-    this.eq.low.value = e.bassBoost;
+    applyBassBoost(this.bass, e.bassBoost);
     this.delay.delayTime.value = Math.min(EFFECTS_LIMITS.delayTime.max, Math.max(EFFECTS_LIMITS.delayTime.min, e.delayTime));
     this.delay.feedback.value = Math.min(EFFECTS_LIMITS.delayFeedback.max, Math.max(EFFECTS_LIMITS.delayFeedback.min, e.delayFeedback));
     this.delay.wet.value = Math.min(EFFECTS_LIMITS.delayWet.max, Math.max(EFFECTS_LIMITS.delayWet.min, e.delayWet));
@@ -224,13 +224,19 @@ class Engine {
       this.player.dispose();
     }
     if (this.distortion) { this.distortion.disconnect(); this.distortion.dispose(); }
-    if (this.eq) { this.eq.disconnect(); this.eq.dispose(); }
+    if (this.bass) {
+      this.bass.input.disconnect(); this.bass.input.dispose();
+      this.bass.bassShelf.disconnect(); this.bass.bassShelf.dispose();
+      this.bass.bassSubFilter.disconnect(); this.bass.bassSubFilter.dispose();
+      this.bass.bassSubDist.disconnect(); this.bass.bassSubDist.dispose();
+      this.bass.bassSubGain.disconnect(); this.bass.bassSubGain.dispose();
+    }
     if (this.delay) { this.delay.disconnect(); this.delay.dispose(); }
     if (this.reverbs) disposeDualReverb(this.reverbs);
     if (this.gain) { this.gain.disconnect(); this.gain.dispose(); }
     this.player = null;
     this.distortion = null;
-    this.eq = null;
+    this.bass = null;
     this.delay = null;
     this.reverbs = null;
     this.gain = null;

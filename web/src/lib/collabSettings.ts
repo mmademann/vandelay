@@ -73,7 +73,7 @@ export function loadCollabPresets(): CollabPreset[] {
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter((p): p is CollabPreset => p && typeof p.name === "string" && p.effects)
-      .map((p) => ({ gain: 0, ...p }));
+      .map((p) => (p.gain == null ? { ...p, gain: 0 } : p));
   } catch { return []; }
 }
 

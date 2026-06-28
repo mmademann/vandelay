@@ -1,5 +1,5 @@
 import * as Tone from "tone";
-import { createEffectsChain, type EffectsChain } from "./graph";
+import { applyBassBoost, createEffectsChain, type EffectsChain } from "./graph";
 import { applyDualReverb, disposeDualReverb } from "./reverbSlot";
 import type { DrumTrackSettings } from "../lib/mixSettings";
 import { EFFECTS_LIMITS, type EffectsState } from "../store";
@@ -27,7 +27,7 @@ class DrumEngine {
     this.applyEffectsToCore(settings.effects);
     this.applyHatEffectsToCore(settings.hatEffects);
 
-    this.kickGain = new Tone.Gain(settings.kickVolume).connect(this.core.eq);
+    this.kickGain = new Tone.Gain(settings.kickVolume).connect(this.core.bass.input);
     this.kick = new Tone.MembraneSynth({
       pitchDecay: settings.kickDecay * 0.3,
       octaves: settings.kickPunch,
@@ -35,7 +35,7 @@ class DrumEngine {
     }).connect(this.kickGain);
 
     this.currentHatVolume = settings.hatVolume;
-    this.hatGain = new Tone.Gain(settings.hatVolume).connect(this.hatCore.eq);
+    this.hatGain = new Tone.Gain(settings.hatVolume).connect(this.hatCore.bass.input);
     this.hat = new Tone.MetalSynth({
       envelope: { attack: 0.001, decay: 0.1, release: 0.01 },
       harmonicity: 5.1,
@@ -109,7 +109,7 @@ class DrumEngine {
     const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
     this.core.gain.gain.value = e.gain;
     applyDualReverb(this.core.reverbs, e);
-    this.core.eq.low.value = e.bassBoost;
+    applyBassBoost(this.core.bass, e.bassBoost);
     this.core.delay.delayTime.value = clamp(e.delayTime, EFFECTS_LIMITS.delayTime.min, EFFECTS_LIMITS.delayTime.max);
     this.core.delay.feedback.value = clamp(e.delayFeedback, EFFECTS_LIMITS.delayFeedback.min, EFFECTS_LIMITS.delayFeedback.max);
     this.core.delay.wet.value = clamp(e.delayWet, EFFECTS_LIMITS.delayWet.min, EFFECTS_LIMITS.delayWet.max);
@@ -120,7 +120,7 @@ class DrumEngine {
     const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
     this.hatCore.gain.gain.value = e.gain;
     applyDualReverb(this.hatCore.reverbs, e);
-    this.hatCore.eq.low.value = e.bassBoost;
+    applyBassBoost(this.hatCore.bass, e.bassBoost);
     this.hatCore.delay.delayTime.value = clamp(e.delayTime, EFFECTS_LIMITS.delayTime.min, EFFECTS_LIMITS.delayTime.max);
     this.hatCore.delay.feedback.value = clamp(e.delayFeedback, EFFECTS_LIMITS.delayFeedback.min, EFFECTS_LIMITS.delayFeedback.max);
     this.hatCore.delay.wet.value = clamp(e.delayWet, EFFECTS_LIMITS.delayWet.min, EFFECTS_LIMITS.delayWet.max);
@@ -170,8 +170,11 @@ class DrumEngine {
     this.hatGain?.dispose();
     if (this.volume) { this.volume.disconnect(); this.volume.dispose(); this.volume = null; }
     if (this.core) {
-      this.core.eq.disconnect();
-      this.core.eq.dispose();
+      this.core.bass.input.disconnect(); this.core.bass.input.dispose();
+      this.core.bass.bassShelf.disconnect(); this.core.bass.bassShelf.dispose();
+      this.core.bass.bassSubFilter.disconnect(); this.core.bass.bassSubFilter.dispose();
+      this.core.bass.bassSubDist.disconnect(); this.core.bass.bassSubDist.dispose();
+      this.core.bass.bassSubGain.disconnect(); this.core.bass.bassSubGain.dispose();
       this.core.delay.disconnect();
       this.core.delay.dispose();
       disposeDualReverb(this.core.reverbs);
@@ -179,8 +182,11 @@ class DrumEngine {
       this.core.gain.dispose();
     }
     if (this.hatCore) {
-      this.hatCore.eq.disconnect();
-      this.hatCore.eq.dispose();
+      this.hatCore.bass.input.disconnect(); this.hatCore.bass.input.dispose();
+      this.hatCore.bass.bassShelf.disconnect(); this.hatCore.bass.bassShelf.dispose();
+      this.hatCore.bass.bassSubFilter.disconnect(); this.hatCore.bass.bassSubFilter.dispose();
+      this.hatCore.bass.bassSubDist.disconnect(); this.hatCore.bass.bassSubDist.dispose();
+      this.hatCore.bass.bassSubGain.disconnect(); this.hatCore.bass.bassSubGain.dispose();
       this.hatCore.delay.disconnect();
       this.hatCore.delay.dispose();
       disposeDualReverb(this.hatCore.reverbs);

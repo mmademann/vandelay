@@ -8,7 +8,7 @@ import {
   playbackRateForEffects,
   wrapInLoopRegion,
 } from "./engine";
-import { createTrackCore } from "./graph";
+import { applyBassBoost, createTrackCore, type BassChain } from "./graph";
 import { applyDualReverb, disposeDualReverb, type DualReverbNodes } from "./reverbSlot";
 
 export interface PlayAllOptions {
@@ -17,7 +17,7 @@ export interface PlayAllOptions {
 
 interface TrackNodes {
   player: Tone.Player;
-  eq: Tone.EQ3;
+  bass: BassChain;
   delay: Tone.FeedbackDelay;
   reverbs: DualReverbNodes;
   gain: Tone.Gain;
@@ -70,14 +70,14 @@ class MixEngine {
     const master = this.getMaster();
     const pauseGain = new Tone.Gain(1).connect(master);
     const volume = new Tone.Volume(0).connect(pauseGain);
-    const { player, eq, delay, reverbs, gain } = await createTrackCore(buffer, volume);
+    const { player, bass, delay, reverbs, gain } = await createTrackCore(buffer, volume);
     player.loop = false;
     player.loopStart = 0;
     player.loopEnd = buffer.duration;
 
     this.tracks.set(id, {
       player,
-      eq,
+      bass,
       delay,
       reverbs,
       gain,
@@ -109,7 +109,11 @@ class MixEngine {
     }
     t.player.disconnect();
     t.player.dispose();
-    t.eq.disconnect(); t.eq.dispose();
+    t.bass.input.disconnect(); t.bass.input.dispose();
+    t.bass.bassShelf.disconnect(); t.bass.bassShelf.dispose();
+    t.bass.bassSubFilter.disconnect(); t.bass.bassSubFilter.dispose();
+    t.bass.bassSubDist.disconnect(); t.bass.bassSubDist.dispose();
+    t.bass.bassSubGain.disconnect(); t.bass.bassSubGain.dispose();
     t.delay.disconnect(); t.delay.dispose();
     disposeDualReverb(t.reverbs);
     t.gain.disconnect(); t.gain.dispose();
@@ -148,7 +152,7 @@ class MixEngine {
     }
     t.playbackRate = newRate;
     t.player.playbackRate = newRate;
-    t.eq.low.value = e.bassBoost;
+    applyBassBoost(t.bass, e.bassBoost);
     t.delay.delayTime.value = Math.min(EFFECTS_LIMITS.delayTime.max, Math.max(EFFECTS_LIMITS.delayTime.min, e.delayTime));
     t.delay.feedback.value = Math.min(EFFECTS_LIMITS.delayFeedback.max, Math.max(EFFECTS_LIMITS.delayFeedback.min, e.delayFeedback));
     t.delay.wet.value = Math.min(EFFECTS_LIMITS.delayWet.max, Math.max(EFFECTS_LIMITS.delayWet.min, e.delayWet));

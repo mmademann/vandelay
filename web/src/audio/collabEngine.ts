@@ -1,5 +1,5 @@
 import * as Tone from "tone";
-import { createEffectsChain, type EffectsChain } from "./graph";
+import { applyBassBoost, createEffectsChain, type EffectsChain } from "./graph";
 import { applyDualReverb, disposeDualReverb } from "./reverbSlot";
 import { EFFECTS_LIMITS } from "../store";
 import type { CollabSlot, CollabMasterSettings } from "../lib/collabSettings";
@@ -90,7 +90,11 @@ class CollabEngine {
     slot.player.disconnect();
     slot.player.dispose();
     slot.chain.distortion.disconnect(); slot.chain.distortion.dispose();
-    slot.chain.eq.disconnect(); slot.chain.eq.dispose();
+    slot.chain.bass.input.disconnect(); slot.chain.bass.input.dispose();
+    slot.chain.bass.bassShelf.disconnect(); slot.chain.bass.bassShelf.dispose();
+    slot.chain.bass.bassSubFilter.disconnect(); slot.chain.bass.bassSubFilter.dispose();
+    slot.chain.bass.bassSubDist.disconnect(); slot.chain.bass.bassSubDist.dispose();
+    slot.chain.bass.bassSubGain.disconnect(); slot.chain.bass.bassSubGain.dispose();
     slot.chain.delay.disconnect(); slot.chain.delay.dispose();
     disposeDualReverb(slot.chain.reverbs);
     slot.chain.gain.disconnect(); slot.chain.gain.dispose();
@@ -249,7 +253,11 @@ class CollabEngine {
       slot.player.disconnect();
       slot.player.dispose();
       slot.chain.distortion.disconnect(); slot.chain.distortion.dispose();
-      slot.chain.eq.disconnect(); slot.chain.eq.dispose();
+      slot.chain.bass.input.disconnect(); slot.chain.bass.input.dispose();
+      slot.chain.bass.bassShelf.disconnect(); slot.chain.bass.bassShelf.dispose();
+      slot.chain.bass.bassSubFilter.disconnect(); slot.chain.bass.bassSubFilter.dispose();
+      slot.chain.bass.bassSubDist.disconnect(); slot.chain.bass.bassSubDist.dispose();
+      slot.chain.bass.bassSubGain.disconnect(); slot.chain.bass.bassSubGain.dispose();
       slot.chain.delay.disconnect(); slot.chain.delay.dispose();
       disposeDualReverb(slot.chain.reverbs);
       slot.chain.gain.disconnect(); slot.chain.gain.dispose();
@@ -272,7 +280,7 @@ class CollabEngine {
     const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
     chain.gain.gain.value = e.gain;
     applyDualReverb(chain.reverbs, e);
-    chain.eq.low.value = e.bassBoost;
+    applyBassBoost(chain.bass, e.bassBoost);
     chain.delay.delayTime.value = clamp(e.delayTime, EFFECTS_LIMITS.delayTime.min, EFFECTS_LIMITS.delayTime.max);
     chain.delay.feedback.value = clamp(e.delayFeedback, EFFECTS_LIMITS.delayFeedback.min, EFFECTS_LIMITS.delayFeedback.max);
     chain.delay.wet.value = clamp(e.delayWet, EFFECTS_LIMITS.delayWet.min, EFFECTS_LIMITS.delayWet.max);

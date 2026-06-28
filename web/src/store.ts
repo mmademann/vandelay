@@ -9,13 +9,13 @@ import {
 export type Status = "idle" | "loading" | "ready" | "error";
 
 export const EFFECTS_LIMITS = {
-  delayTime: { min: 0, max: 1 },
+  delayTime: { min: 0, max: 4 },
   delayFeedback: { min: 0, max: 0.95 },
   delayWet: { min: 0, max: 1 },
   reverbWet: { min: 0, max: 1 },
   reverbDecay: { min: 0, max: 10, engineMin: 0.1 }, // Tone.js Reverb requires >= 0.1
   speed: { min: 0.5, max: 1 },
-  gain: { min: 0, max: 3 },
+  gain: { min: 0, max: 6 },
   bassBoost: { min: -20, max: 20 },
   grit: { min: 0, max: 1 },
 } as const;

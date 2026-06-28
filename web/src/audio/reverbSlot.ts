@@ -140,11 +140,21 @@ export async function createOfflineEqChain(
     delayTime: clamp(effects.delayTime, EFFECTS_LIMITS.delayTime.min, EFFECTS_LIMITS.delayTime.max),
     feedback: clamp(effects.delayFeedback, EFFECTS_LIMITS.delayFeedback.min, EFFECTS_LIMITS.delayFeedback.max),
     wet: clamp(effects.delayWet, EFFECTS_LIMITS.delayWet.min, EFFECTS_LIMITS.delayWet.max),
+    maxDelay: 4,
   });
   wireDelayToReverbs(delay, reverbs);
-  const eq = new Tone.EQ3({ low: effects.bassBoost, mid: 0, high: 0 }).connect(delay);
+  const bassShelf = new Tone.Filter({ type: "lowshelf", frequency: 200, gain: effects.bassBoost }).connect(delay);
+  const bassSubFilter = new Tone.Filter({ type: "lowpass", frequency: 120, rolloff: -24 });
+  const bassSubDist = new Tone.Distortion({ distortion: 0.3, wet: 1 });
+  const bassSubGain = new Tone.Gain(Math.max(0, effects.bassBoost) / 20 * 0.4);
+  bassSubFilter.connect(bassSubDist);
+  bassSubDist.connect(bassSubGain);
+  bassSubGain.connect(delay);
+  const bassInput = new Tone.Gain(1);
+  bassInput.connect(bassShelf);
+  bassInput.connect(bassSubFilter);
   const grit = clamp(effects.grit ?? 0, 0, 1);
-  return new Tone.Distortion({ distortion: Math.pow(grit, 0.5), wet: grit }).connect(eq);
+  return new Tone.Distortion({ distortion: Math.pow(grit, 0.5), wet: grit }).connect(bassInput);
 }
 
 export function disposeDualReverb(reverbs: DualReverbNodes): void {

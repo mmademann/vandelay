@@ -1,5 +1,5 @@
 import * as Tone from "tone";
-import { createEffectsChain, type EffectsChain } from "./graph";
+import { applyBassBoost, createEffectsChain, type EffectsChain } from "./graph";
 import { applyDualReverb, disposeDualReverb } from "./reverbSlot";
 import { EFFECTS_LIMITS, type EffectsState } from "../store";
 
@@ -186,7 +186,7 @@ class DubEngine {
     const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
     chain.gain.gain.value = e.gain;
     applyDualReverb(chain.reverbs, e);
-    chain.eq.low.value = e.bassBoost;
+    applyBassBoost(chain.bass, e.bassBoost);
     chain.delay.delayTime.value = clamp(e.delayTime, EFFECTS_LIMITS.delayTime.min, EFFECTS_LIMITS.delayTime.max);
     chain.delay.feedback.value = clamp(e.delayFeedback, EFFECTS_LIMITS.delayFeedback.min, EFFECTS_LIMITS.delayFeedback.max);
     chain.delay.wet.value = clamp(e.delayWet, EFFECTS_LIMITS.delayWet.min, EFFECTS_LIMITS.delayWet.max);
@@ -203,7 +203,11 @@ class DubEngine {
       s.player.disconnect();
       s.player.dispose();
       s.chain.distortion.disconnect(); s.chain.distortion.dispose();
-      s.chain.eq.disconnect(); s.chain.eq.dispose();
+      s.chain.bass.input.disconnect(); s.chain.bass.input.dispose();
+      s.chain.bass.bassShelf.disconnect(); s.chain.bass.bassShelf.dispose();
+      s.chain.bass.bassSubFilter.disconnect(); s.chain.bass.bassSubFilter.dispose();
+      s.chain.bass.bassSubDist.disconnect(); s.chain.bass.bassSubDist.dispose();
+      s.chain.bass.bassSubGain.disconnect(); s.chain.bass.bassSubGain.dispose();
       s.chain.delay.disconnect(); s.chain.delay.dispose();
       disposeDualReverb(s.chain.reverbs);
       s.chain.gain.disconnect(); s.chain.gain.dispose();
