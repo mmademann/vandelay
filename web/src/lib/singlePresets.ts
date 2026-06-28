@@ -36,6 +36,7 @@ export const BUILT_IN_PRESETS: SinglePreset[] = [
         delayWet: 0.45,
         bassBoost: 4,
         gain: 1,
+        grit: 0,
       },
     },
   },

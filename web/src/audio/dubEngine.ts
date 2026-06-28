@@ -18,6 +18,7 @@ export const DUB_TECHNO_EFFECTS: EffectsState = {
   delayWet: 0.45,
   bassBoost: 4,
   gain: 1,
+  grit: 0,
 };
 
 export const DRY_EFFECTS: EffectsState = {
@@ -32,6 +33,7 @@ export const DRY_EFFECTS: EffectsState = {
   delayWet: 0,
   bassBoost: 0,
   gain: 1,
+  grit: 0,
 };
 
 interface StemTrack {
@@ -68,7 +70,7 @@ class DubEngine {
       for (let c = 0; c < buf.numberOfChannels; c++) channels.push(buf.getChannelData(c));
       const toneBuffer = new Tone.ToneAudioBuffer().fromArray(channels);
 
-      const player = new Tone.Player(toneBuffer).connect(chain.eq);
+      const player = new Tone.Player(toneBuffer).connect(chain.distortion);
       player.loop = false;
 
       this.applyEffectsToChain(chain, DRY_EFFECTS);
@@ -188,6 +190,9 @@ class DubEngine {
     chain.delay.delayTime.value = clamp(e.delayTime, EFFECTS_LIMITS.delayTime.min, EFFECTS_LIMITS.delayTime.max);
     chain.delay.feedback.value = clamp(e.delayFeedback, EFFECTS_LIMITS.delayFeedback.min, EFFECTS_LIMITS.delayFeedback.max);
     chain.delay.wet.value = clamp(e.delayWet, EFFECTS_LIMITS.delayWet.min, EFFECTS_LIMITS.delayWet.max);
+    const grit = clamp(e.grit ?? 0, 0, 1);
+    chain.distortion.wet.value = grit;
+    chain.distortion.distortion = Math.pow(grit, 0.5);
   }
 
   dispose() {
@@ -197,6 +202,7 @@ class DubEngine {
       if (!s) continue;
       s.player.disconnect();
       s.player.dispose();
+      s.chain.distortion.disconnect(); s.chain.distortion.dispose();
       s.chain.eq.disconnect(); s.chain.eq.dispose();
       s.chain.delay.disconnect(); s.chain.delay.dispose();
       disposeDualReverb(s.chain.reverbs);

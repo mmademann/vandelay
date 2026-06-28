@@ -5,6 +5,7 @@ import { getAllTrackMeta } from "./lib/trackMetaCache";
 import { SinglePage } from "./pages/SinglePage";
 import { MixPage } from "./pages/MixPage";
 import { StemsPage } from "./pages/StemsPage";
+import { CollabPage } from "./pages/CollabPage";
 
 export default function App() {
   useEffect(() => {
@@ -46,6 +47,14 @@ export default function App() {
             >
               Stems
             </NavLink>
+            <NavLink
+              to="/collab"
+              className={({ isActive }) =>
+                isActive ? "text-accent" : "text-foreground/50 hover:text-foreground/80"
+              }
+            >
+              Collab
+            </NavLink>
           </nav>
         </header>
 
@@ -54,6 +63,7 @@ export default function App() {
             <Route path="/" element={<SinglePage />} />
             <Route path="/mix" element={<MixPage />} />
             <Route path="/stems" element={<StemsPage />} />
+            <Route path="/collab" element={<CollabPage />} />
           </Routes>
         </main>
       </div>

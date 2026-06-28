@@ -72,6 +72,7 @@ export const DEFAULT_DRUM_TRACK: DrumTrackSettings = {
     delayTime: 0,
     delayFeedback: 0,
     delayWet: 0,
+    grit: 0,
   },
   hatEffects: {
     speed: 1,
@@ -84,6 +85,7 @@ export const DEFAULT_DRUM_TRACK: DrumTrackSettings = {
     delayTime: 0,
     delayFeedback: 0,
     delayWet: 0,
+    grit: 0,
   },
   volumeDb: 0,
   muted: false,

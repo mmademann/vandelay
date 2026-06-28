@@ -17,6 +17,7 @@ export const EFFECTS_LIMITS = {
   speed: { min: 0.5, max: 1 },
   gain: { min: 0, max: 3 },
   bassBoost: { min: -20, max: 20 },
+  grit: { min: 0, max: 1 },
 } as const;
 
 export interface Track {
@@ -40,6 +41,7 @@ export interface EffectsState {
   delayTime: number;
   delayFeedback: number;
   delayWet: number;
+  grit: number;
 }
 
 function clamp(v: number, min: number, max: number) { return Math.min(max, Math.max(min, v)); }
@@ -60,6 +62,7 @@ export function sanitizeEffects(e: EffectsState): EffectsState {
     delayWet: clamp(e.delayWet, EFFECTS_LIMITS.delayWet.min, EFFECTS_LIMITS.delayWet.max),
     gain: clamp(e.gain, EFFECTS_LIMITS.gain.min, EFFECTS_LIMITS.gain.max),
     bassBoost: clamp(e.bassBoost, EFFECTS_LIMITS.bassBoost.min, EFFECTS_LIMITS.bassBoost.max),
+    grit: clamp(e.grit ?? 0, EFFECTS_LIMITS.grit.min, EFFECTS_LIMITS.grit.max),
   };
 }
 
@@ -75,6 +78,7 @@ export const DEFAULT_EFFECTS: EffectsState = {
   delayTime: 0,
   delayFeedback: 0,
   delayWet: 0,
+  grit: 0,
 };
 
 /** Applied when effects are toggled off; slider values are kept in state. */
@@ -90,6 +94,7 @@ export const BYPASS_EFFECTS: EffectsState = {
   delayTime: 0,
   delayFeedback: 0,
   delayWet: 0,
+  grit: 0,
 };
 
 export function effectiveEffects(

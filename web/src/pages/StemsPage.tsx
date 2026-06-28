@@ -385,6 +385,24 @@ export function StemsPage() {
                 {trackTitle && (
                   <div className="min-w-0 truncate text-sm text-foreground/70">{trackTitle}</div>
                 )}
+                {loadedId && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const active = STEM_NAMES.filter((s) => {
+                        if (stemUI[s].muted) return false;
+                        if (anySoloed && !stemUI[s].soloed) return false;
+                        return true;
+                      });
+                      if (active.length === 0) return;
+                      const param = active.map((s) => `${loadedId}:${s}`).join(",");
+                      navigate(`/collab?slots=${param}`);
+                    }}
+                    className="ml-auto shrink-0 rounded bg-accent/15 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/25"
+                  >
+                    Send to Collab
+                  </button>
+                )}
               </div>
 
               {/* Waveform */}

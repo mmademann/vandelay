@@ -35,6 +35,7 @@ export function clampToLoopForPlayback(
 
 class Engine {
   private player: Tone.Player | null = null;
+  private distortion: Tone.Distortion | null = null;
   private eq: Tone.EQ3 | null = null;
   private delay: Tone.FeedbackDelay | null = null;
   private reverbs: DualReverbNodes | null = null;
@@ -82,6 +83,7 @@ class Engine {
     const destination = Tone.getDestination();
     const core = await createTrackCore(buffer, destination);
     this.player = core.player;
+    this.distortion = core.distortion;
     this.eq = core.eq;
     this.delay = core.delay;
     this.reverbs = core.reverbs;
@@ -100,7 +102,7 @@ class Engine {
   }
 
   applyEffects(e: EffectsState) {
-    if (!this.player || !this.eq || !this.delay || !this.reverbs || !this.gain) return;
+    if (!this.player || !this.distortion || !this.eq || !this.delay || !this.reverbs || !this.gain) return;
     const speedChanged = this.playing && e.speed !== this.playbackRate;
     if (speedChanged) {
       this.playOffset = this.computePosition();
@@ -114,6 +116,9 @@ class Engine {
     this.delay.wet.value = Math.min(EFFECTS_LIMITS.delayWet.max, Math.max(EFFECTS_LIMITS.delayWet.min, e.delayWet));
     applyDualReverb(this.reverbs, e);
     this.gain.gain.value = e.gain;
+    const grit = Math.min(1, Math.max(0, e.grit ?? 0));
+    this.distortion.wet.value = grit;
+    this.distortion.distortion = Math.pow(grit, 0.5);
   }
 
   setLoop(start: number, end: number) {
@@ -218,11 +223,13 @@ class Engine {
       this.player.disconnect();
       this.player.dispose();
     }
+    if (this.distortion) { this.distortion.disconnect(); this.distortion.dispose(); }
     if (this.eq) { this.eq.disconnect(); this.eq.dispose(); }
     if (this.delay) { this.delay.disconnect(); this.delay.dispose(); }
     if (this.reverbs) disposeDualReverb(this.reverbs);
     if (this.gain) { this.gain.disconnect(); this.gain.dispose(); }
     this.player = null;
+    this.distortion = null;
     this.eq = null;
     this.delay = null;
     this.reverbs = null;

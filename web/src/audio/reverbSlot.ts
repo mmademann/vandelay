@@ -131,7 +131,7 @@ export async function ensureImpulseLoaded(): Promise<void> {
 export async function createOfflineEqChain(
   effects: EffectsState,
   output: Tone.ToneAudioNode,
-): Promise<Tone.EQ3> {
+): Promise<Tone.Distortion> {
   const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
   const gain = new Tone.Gain(effects.gain).connect(output);
   const reverbs = await createDualReverb(gain);
@@ -142,7 +142,9 @@ export async function createOfflineEqChain(
     wet: clamp(effects.delayWet, EFFECTS_LIMITS.delayWet.min, EFFECTS_LIMITS.delayWet.max),
   });
   wireDelayToReverbs(delay, reverbs);
-  return new Tone.EQ3({ low: effects.bassBoost, mid: 0, high: 0 }).connect(delay);
+  const eq = new Tone.EQ3({ low: effects.bassBoost, mid: 0, high: 0 }).connect(delay);
+  const grit = clamp(effects.grit ?? 0, 0, 1);
+  return new Tone.Distortion({ distortion: Math.pow(grit, 0.5), wet: grit }).connect(eq);
 }
 
 export function disposeDualReverb(reverbs: DualReverbNodes): void {

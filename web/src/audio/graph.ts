@@ -6,6 +6,7 @@ import {
 } from "./reverbSlot";
 
 export interface EffectsChain {
+  distortion: Tone.Distortion;
   eq: Tone.EQ3;
   delay: Tone.FeedbackDelay;
   reverbs: DualReverbNodes;
@@ -22,7 +23,9 @@ export async function createEffectsChain(output: Tone.ToneAudioNode): Promise<Ef
   const delay = new Tone.FeedbackDelay({ delayTime: 0.25, feedback: 0.3, wet: 0 });
   wireDelayToReverbs(delay, reverbs);
   const eq = new Tone.EQ3({ low: 0, mid: 0, high: 0 }).connect(delay);
-  return { eq, delay, reverbs, gain };
+  // Distortion before EQ; wet=0 means bypassed at rest
+  const distortion = new Tone.Distortion({ distortion: 0.5, wet: 0 }).connect(eq);
+  return { distortion, eq, delay, reverbs, gain };
 }
 
 export async function createTrackCore(
@@ -37,7 +40,7 @@ export async function createTrackCore(
   }
   const toneBuffer = new Tone.ToneAudioBuffer().fromArray(channels);
 
-  const player = new Tone.Player(toneBuffer).connect(chain.eq);
+  const player = new Tone.Player(toneBuffer).connect(chain.distortion);
   player.loop = false;
   player.loopStart = 0;
   player.loopEnd = buffer.duration;

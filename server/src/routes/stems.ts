@@ -1,10 +1,11 @@
 import { Router } from "express";
-import { existsSync, statSync, createReadStream } from "node:fs";
+import { existsSync, statSync, createReadStream, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { z } from "zod";
 import { extractVideoId } from "../lib/youtube.js";
 import { extractAudio } from "../lib/extract.js";
-import { recordHistory } from "../lib/history.js";
-import { separateStems, stemsReady, stemPath, STEM_NAMES, type StemName } from "../lib/stems.js";
+import { recordHistory, readHistory } from "../lib/history.js";
+import { separateStems, stemsReady, stemsMp3Ready, stemMp3Path, transcodeStems, STEMS_DIR, STEM_NAMES, type StemName } from "../lib/stems.js";
 
 const router = Router();
 
@@ -28,6 +29,9 @@ router.post("/stems", async (req, res) => {
     if (!cached) {
       await separateStems(id);
     }
+    if (!stemsMp3Ready(id)) {
+      await transcodeStems(id);
+    }
 
     recordHistory({ id: info.id, title: info.title, duration: info.duration });
     res.json({ id, title: info.title, duration: info.duration, stems: STEM_NAMES, cached });
@@ -37,6 +41,25 @@ router.post("/stems", async (req, res) => {
   }
 });
 
+/** GET /api/stems/library — list all track IDs with separated stems, joined with history for titles */
+router.get("/stems/library", (_req, res) => {
+  const htdemucsDir = join(STEMS_DIR, "htdemucs");
+  let ids: string[] = [];
+  try {
+    ids = readdirSync(htdemucsDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+  } catch {
+    // Directory doesn't exist yet — return empty list
+  }
+
+  const history = readHistory();
+  const titleMap = new Map(history.map((e) => [e.id, e.title]));
+
+  const results = ids.map((id) => ({ id, title: titleMap.get(id) ?? id }));
+  res.json(results);
+});
+
 /** GET /api/stems/:id/status — check if stems are already separated (no processing) */
 router.get("/stems/:id/status", (req, res) => {
   const { id } = req.params;
@@ -44,7 +67,7 @@ router.get("/stems/:id/status", (req, res) => {
   res.json({ ready: stemsReady(id) });
 });
 
-/** GET /api/stems/:id/:stem — stream a stem WAV */
+/** GET /api/stems/:id/:stem — stream a stem as MP3 (falls back to WAV if MP3 not ready) */
 router.get("/stems/:id/:stem", (req, res) => {
   const { id, stem } = req.params;
   if (!ID_RE.test(id)) return res.status(400).json({ error: "Invalid id" });
@@ -52,14 +75,16 @@ router.get("/stems/:id/:stem", (req, res) => {
     return res.status(400).json({ error: `Invalid stem. Must be one of: ${STEM_NAMES.join(", ")}` });
   }
 
-  const path = stemPath(id, stem as StemName);
-  if (!existsSync(path)) return res.status(404).json({ error: "Stem not found" });
+  const mp3 = stemMp3Path(id, stem as StemName);
+  const path = existsSync(mp3) ? mp3 : null;
+  if (!path) return res.status(404).json({ error: "Stem not found" });
 
   const stat = statSync(path);
   const range = req.headers.range;
 
-  res.setHeader("Content-Type", "audio/wav");
+  res.setHeader("Content-Type", "audio/mpeg");
   res.setHeader("Accept-Ranges", "bytes");
+  res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
 
   if (!range) {
     res.setHeader("Content-Length", stat.size);
