@@ -622,33 +622,35 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
         {presetsPanelOpen && (
           <div
             ref={presetsPanelRef}
-            className="absolute bottom-full left-0 z-50 mb-1 w-72 rounded-md border border-border bg-background shadow-lg p-3 flex flex-col gap-2"
+            className="absolute top-full left-0 z-50 mt-1 w-72 rounded-md border border-border bg-background shadow-lg p-3 flex flex-col"
           >
-            {presets.length === 0 && (
-              <div className="text-xs text-foreground/40">No presets saved yet</div>
-            )}
-            {presets.map((p) => (
-              <div key={p.name} className={cn(
-                "group flex items-center rounded-md border px-2 py-1.5",
-                activePreset === p.name ? "border-accent/50 bg-accent/10" : "border-border bg-muted/50",
-              )}>
-                <button type="button" onClick={() => applyPreset(p)}
-                  className={cn("text-sm font-medium transition whitespace-nowrap", activePreset === p.name ? "text-accent" : "text-foreground/60 hover:text-foreground")}>
-                  {p.name}
-                </button>
-                <button type="button" onClick={() => {
-                    onSavePreset(p.name, { effects: slot.effects, speed: slot.speed, pitch: slot.pitch, linkPitch: slot.linkPitch, gain: slot.gain });
-                    setActivePreset(p.name);
-                  }}
-                  className="text-base leading-none text-foreground/20 opacity-0 transition hover:text-accent group-hover:opacity-100 pl-3"
-                  aria-label="Resave preset" title="Resave with current settings">💾</button>
-                <span className="flex-1" />
-                <button type="button" onClick={() => { onDeletePreset(p.name); if (activePreset === p.name) setActivePreset(null); }}
-                  className="text-base leading-none text-foreground/20 opacity-0 transition hover:text-red-400 group-hover:opacity-100"
-                  aria-label="Delete preset">✕</button>
-              </div>
-            ))}
-            <form onSubmit={handleSavePreset} className="flex gap-1.5 items-center pt-1 border-t border-border/40">
+            <div className="overflow-y-auto max-h-56 flex flex-col gap-2 mb-2">
+              {presets.length === 0 && (
+                <div className="text-xs text-foreground/40">No presets saved yet</div>
+              )}
+              {presets.map((p) => (
+                <div key={p.name} className={cn(
+                  "group flex items-center rounded-md border px-2 py-1.5",
+                  activePreset === p.name ? "border-accent/50 bg-accent/10" : "border-border bg-muted/50",
+                )}>
+                  <button type="button" onClick={() => applyPreset(p)}
+                    className={cn("text-sm font-medium transition whitespace-nowrap", activePreset === p.name ? "text-accent" : "text-foreground/60 hover:text-foreground")}>
+                    {p.name}
+                  </button>
+                  <button type="button" onClick={() => {
+                      onSavePreset(p.name, { effects: slot.effects, speed: slot.speed, pitch: slot.pitch, linkPitch: slot.linkPitch, gain: slot.gain });
+                      setActivePreset(p.name);
+                    }}
+                    className="text-base leading-none text-foreground/20 opacity-0 transition hover:text-accent group-hover:opacity-100 pl-3"
+                    aria-label="Resave preset" title="Resave with current settings">💾</button>
+                  <span className="flex-1" />
+                  <button type="button" onClick={() => { onDeletePreset(p.name); if (activePreset === p.name) setActivePreset(null); }}
+                    className="text-base leading-none text-foreground/20 opacity-0 transition hover:text-red-400 group-hover:opacity-100"
+                    aria-label="Delete preset">✕</button>
+                </div>
+              ))}
+            </div>
+            <form onSubmit={handleSavePreset} className="flex gap-1.5 items-center pt-2 border-t border-border/40">
               <input type="text" value={presetName} onChange={(e) => setPresetName(e.target.value)}
                 placeholder="Save preset…"
                 className="min-w-0 flex-1 rounded-md border border-border bg-muted/30 px-2 py-1.5 text-sm text-foreground/70 placeholder:text-foreground/30 outline-none focus:border-accent/60" />
