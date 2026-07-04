@@ -410,7 +410,7 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
 
   return (
     <div className={cn(
-      "flex flex-col gap-3 overflow-y-auto rounded-md border bg-muted/30 p-4 transition",
+      "flex flex-col gap-3 rounded-md border bg-muted/30 p-4 transition",
       slot.muted && "opacity-40",
       isReference ? "border-accent/60 ring-1 ring-accent/20 bg-accent/5" : "border-border",
     )}>
