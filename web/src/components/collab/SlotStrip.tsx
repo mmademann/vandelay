@@ -272,24 +272,47 @@ function SlotWaveform({
 
 // --- SlotStrip ---
 
+function formatKeyBadge(key: string | null | undefined): string {
+  if (!key) return "?";
+  const parts = key.trim().split(/\s+/);
+  if (parts.length < 2) return key;
+  const scale = parts[1];
+  const uncertain = scale.endsWith("?");
+  const mode = scale.startsWith("maj") ? "maj" : "min";
+  return `${parts[0]} ${mode}${uncertain ? "?" : ""}`;
+}
+
 interface Props {
   slot: CollabSlot;
   title: string;
   buffer: AudioBuffer | null;
   presets: CollabPreset[];
+  isReference: boolean;
+  hasReference: boolean;
+  detectedKey?: string | null | undefined;
+  detectedBpm?: number;
+  isMatched: boolean;
+  matchedBasePitch: number;
+  pitchInterval: 1 | 7 | 12;
+  onPitchIntervalChange: (n: 1 | 7 | 12) => void;
   onRemove: () => void;
   onChange: (patch: Partial<CollabSlot>) => void;
+  onSetReference: () => void;
+  onMatch: () => void;
   onSavePreset: (name: string, preset: Omit<CollabPreset, "name">) => void;
   onDeletePreset: (name: string) => void;
   onApplyPreset: (preset: CollabPreset) => void;
 }
 
-export function SlotStrip({ slot, title, buffer, presets, onRemove, onChange, onSavePreset, onDeletePreset, onApplyPreset }: Props) {
+export function SlotStrip({ slot, title, buffer, presets, isReference, hasReference, detectedKey, detectedBpm, isMatched, matchedBasePitch, pitchInterval, onPitchIntervalChange, onRemove, onChange, onSetReference, onMatch, onSavePreset, onDeletePreset, onApplyPreset }: Props) {
   const [presetName, setPresetName] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
   const [throwActive, setThrowActive] = useState(false);
   const [activePreset, setActivePreset] = useState<string | null>(null);
   const [seekRevision, setSeekRevision] = useState(0);
+  const [presetsPanelOpen, setPresetsPanelOpen] = useState(false);
+  const presetsPanelRef = useRef<HTMLDivElement>(null);
+  const presetsBtnRef = useRef<HTMLButtonElement>(null);
 
   // Keep isPlaying and throwActive in sync with engine state
   useEffect(() => {
@@ -299,6 +322,18 @@ export function SlotStrip({ slot, title, buffer, presets, onRemove, onChange, on
     }, 100);
     return () => clearInterval(id);
   }, [slot.id]);
+
+  useEffect(() => {
+    if (!presetsPanelOpen) return;
+    function handleClick(e: MouseEvent) {
+      if (
+        presetsPanelRef.current && !presetsPanelRef.current.contains(e.target as Node) &&
+        presetsBtnRef.current && !presetsBtnRef.current.contains(e.target as Node)
+      ) setPresetsPanelOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [presetsPanelOpen]);
 
   async function handlePlayStop() {
     if (isPlaying) {
@@ -310,7 +345,7 @@ export function SlotStrip({ slot, title, buffer, presets, onRemove, onChange, on
     }
   }
 
-  function persistSettings(patch: Partial<CollabSlot>) {
+  function persistSettings(patch: Partial<CollabSlot>, overridePitchInterval?: 1 | 7 | 12) {
     const merged = { ...slot, ...patch };
     const dur = buffer?.duration ?? 1;
     saveSlotSettings(slot.trackId, slot.stemName, {
@@ -322,6 +357,9 @@ export function SlotStrip({ slot, title, buffer, presets, onRemove, onChange, on
       effects: merged.effects,
       loopStartFrac: merged.loopStart / dur,
       loopEndFrac: merged.loopEnd / dur,
+      isMatched,
+      matchedBasePitch,
+      pitchInterval: overridePitchInterval ?? pitchInterval,
     });
   }
 
@@ -343,7 +381,7 @@ export function SlotStrip({ slot, title, buffer, presets, onRemove, onChange, on
   }
 
   function handleReset() {
-    const patch = { effects: { ...DRY_EFFECTS }, speed: 1, pitch: 0, linkPitch: true, gain: 0 };
+    const patch = { effects: { ...DRY_EFFECTS, phaserWet: 0, chorusWet: 0 }, speed: 1, pitch: 0, linkPitch: true, gain: 0 };
     collabEngine.updateSlot(slot.id, patch);
     onChange(patch);
     persistSettings(patch);
@@ -372,8 +410,9 @@ export function SlotStrip({ slot, title, buffer, presets, onRemove, onChange, on
 
   return (
     <div className={cn(
-      "flex flex-col gap-3 overflow-y-auto rounded-md border border-border bg-muted/30 p-4 transition",
+      "flex flex-col gap-3 overflow-y-auto rounded-md border bg-muted/30 p-4 transition",
       slot.muted && "opacity-40",
+      isReference ? "border-accent/60 ring-1 ring-accent/20 bg-accent/5" : "border-border",
     )}>
       {/* Header: buttons left, title right */}
       <div className="flex items-center gap-2">
@@ -411,8 +450,87 @@ export function SlotStrip({ slot, title, buffer, presets, onRemove, onChange, on
           </button>
         </div>
         <div className="flex flex-1 items-center gap-2 min-w-0 justify-end">
-          <span className={cn("shrink-0 rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider", STEM_COLORS[slot.stemName])}>
-            {STEM_LABELS[slot.stemName]}
+          {/* Key badge — shown once buffer has loaded (detectedKey !== undefined) */}
+          {detectedKey !== undefined && (
+            <span
+              title={detectedBpm ? `${detectedBpm} bpm` : undefined}
+              className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-muted/60 text-foreground/50 border border-border/60 cursor-default"
+            >
+              {detectedKey ? `Key: ${formatKeyBadge(detectedKey)}` : "Key: unknown"}
+            </span>
+          )}
+          {/* Matched tag + pitch shift controls */}
+          {isMatched && (
+            <span className="shrink-0 flex items-center gap-0 rounded border border-accent/30 bg-accent/15 overflow-hidden">
+              <span className="px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent/70">Matched</span>
+              {([1, 7, 12] as const).map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => { onPitchIntervalChange(n); persistSettings({}, n); }}
+                  className={cn(
+                    "px-1.5 py-0.5 text-[10px] font-semibold transition border-l border-accent/20",
+                    pitchInterval === n
+                      ? "bg-accent/20 text-accent"
+                      : "text-accent/40 hover:text-accent/70 hover:bg-accent/10",
+                  )}
+                >{n}</button>
+              ))}
+              <button
+                type="button"
+                title={`Shift down ${pitchInterval} semitone${pitchInterval > 1 ? "s" : ""}`}
+                onClick={() => {
+                  const diff = slot.pitch - matchedBasePitch;
+                  const step = Math.floor(diff / pitchInterval);
+                  const snapped = matchedBasePitch + step * pitchInterval;
+                  const next = Math.abs(snapped - slot.pitch) < 0.01 ? snapped - pitchInterval : snapped;
+                  update({ pitch: next, linkPitch: false });
+                }}
+                className="px-1.5 py-0.5 text-[11px] text-accent/60 hover:text-accent hover:bg-accent/10 transition border-l border-accent/20"
+              >▼</button>
+              <button
+                type="button"
+                title={`Shift up ${pitchInterval} semitone${pitchInterval > 1 ? "s" : ""}`}
+                onClick={() => {
+                  const diff = slot.pitch - matchedBasePitch;
+                  const step = Math.ceil(diff / pitchInterval);
+                  const snapped = matchedBasePitch + step * pitchInterval;
+                  const next = Math.abs(snapped - slot.pitch) < 0.01 ? snapped + pitchInterval : snapped;
+                  update({ pitch: next, linkPitch: false });
+                }}
+                className="px-1.5 py-0.5 text-[11px] text-accent/60 hover:text-accent hover:bg-accent/10 transition border-l border-accent/20"
+              >▲</button>
+            </span>
+          )}
+          {/* Pin as reference */}
+          <button
+            type="button"
+            onClick={onSetReference}
+            title={isReference ? "Remove as key anchor" : "Set as key anchor — other slots will match to this key + speed"}
+            className={cn(
+              "shrink-0 rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition",
+              isReference
+                ? "border-accent/40 bg-accent/15 text-accent"
+                : "border-border/60 bg-muted/60 text-foreground/40 hover:border-accent/40 hover:text-accent",
+            )}
+          >
+            {isReference ? "Key Anchor ✓" : "Set Key Anchor"}
+          </button>
+          {/* Match this slot to reference */}
+          {hasReference && !isReference && !isMatched && (
+            <button
+              type="button"
+              onClick={onMatch}
+              title="Match speed + pitch to key anchor"
+              className="shrink-0 rounded border border-border/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-muted/60 text-foreground/40 transition hover:border-accent/40 hover:text-accent"
+            >
+              Match
+            </button>
+          )}
+          <span className={cn("shrink-0 rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider",
+            slot.stemName ? STEM_COLORS[slot.stemName as StemName] : "bg-zinc-500/15 text-zinc-400"
+          )}>
+            {slot.stemName ? STEM_LABELS[slot.stemName as StemName] : "Track"}
           </span>
           <span className="min-w-0 truncate text-sm font-medium text-foreground/70">{title}</span>
           <button type="button" onClick={onRemove}
@@ -463,7 +581,7 @@ export function SlotStrip({ slot, title, buffer, presets, onRemove, onChange, on
           displayValue={`${Math.round(slot.effects.delayWet * 100)}%`} onChange={(v) => updateEffect({ delayWet: v })} />
         <Knob label="D.Time" value={slot.effects.delayTime} min={EFFECTS_LIMITS.delayTime.min} max={EFFECTS_LIMITS.delayTime.max} step={0.01} defaultValue={0}
           displayValue={`${slot.effects.delayTime.toFixed(2)}s`} onChange={(v) => updateEffect({ delayTime: v })} />
-        <Knob label="Feedbk" value={slot.effects.delayFeedback} min={EFFECTS_LIMITS.delayFeedback.min} max={EFFECTS_LIMITS.delayFeedback.max} step={0.01} defaultValue={0}
+        <Knob label="D.Feedbk" value={slot.effects.delayFeedback} min={EFFECTS_LIMITS.delayFeedback.min} max={EFFECTS_LIMITS.delayFeedback.max} step={0.01} defaultValue={0}
           displayValue={`${Math.round(slot.effects.delayFeedback * 100)}%`} onChange={(v) => updateEffect({ delayFeedback: v })} />
         <Knob label="Bass" value={slot.effects.bassBoost} min={EFFECTS_LIMITS.bassBoost.min} max={EFFECTS_LIMITS.bassBoost.max} step={1} defaultValue={0}
           displayValue={`${slot.effects.bassBoost > 0 ? "+" : ""}${slot.effects.bassBoost}dB`} onChange={(v) => updateEffect({ bassBoost: v })} />
@@ -479,6 +597,10 @@ export function SlotStrip({ slot, title, buffer, presets, onRemove, onChange, on
           displayValue={`${(slot.effects.eqMid ?? 0) > 0 ? "+" : ""}${(slot.effects.eqMid ?? 0).toFixed(1)}dB`} onChange={(v) => updateEffect({ eqMid: v })} />
         <Knob label="EQ Hi" value={slot.effects.eqHigh ?? 0} min={-12} max={12} step={0.5} defaultValue={0}
           displayValue={`${(slot.effects.eqHigh ?? 0) > 0 ? "+" : ""}${(slot.effects.eqHigh ?? 0).toFixed(1)}dB`} onChange={(v) => updateEffect({ eqHigh: v })} />
+        <Knob label="Phaser" value={slot.effects.phaserWet ?? 0} min={0} max={1} step={0.01} defaultValue={0}
+          displayValue={`${Math.round((slot.effects.phaserWet ?? 0) * 100)}%`} onChange={(v) => updateEffect({ phaserWet: v })} />
+        <Knob label="Chorus" value={slot.effects.chorusWet ?? 0} min={0} max={1} step={0.01} defaultValue={0}
+          displayValue={`${Math.round((slot.effects.chorusWet ?? 0) * 100)}%`} onChange={(v) => updateEffect({ chorusWet: v })} />
         <div className="flex flex-col items-center justify-end gap-0.5 ml-auto">
           <button type="button" onClick={handleReset}
             className="rounded px-2 py-1 text-[9px] uppercase tracking-wide font-semibold text-foreground/30 bg-muted/60 hover:text-foreground/60 hover:bg-muted transition">
@@ -487,36 +609,58 @@ export function SlotStrip({ slot, title, buffer, presets, onRemove, onChange, on
         </div>
       </div>
 
-      {/* Presets */}
-      <div className="flex flex-col gap-2 border-t border-border/50 pt-3">
-        <div className="text-[10px] uppercase tracking-wide text-foreground/40">Presets</div>
-        <div className="flex flex-wrap gap-1.5 items-center">
-          {presets.map((p) => (
-            <div key={p.name} className={cn(
-                "group flex items-center gap-2 rounded-md border px-3 py-2",
+      {/* Presets dropdown */}
+      <div className="relative border-t border-border/50 pt-3">
+        <button
+          ref={presetsBtnRef}
+          type="button"
+          onClick={() => setPresetsPanelOpen((o) => !o)}
+          className="text-[10px] uppercase tracking-wide text-foreground/40 hover:text-foreground/70 transition"
+        >
+          Presets {presets.length > 0 ? `(${presets.length})` : ""}{activePreset ? ` · ${activePreset}` : ""} {presetsPanelOpen ? "▲" : "▼"}
+        </button>
+        {presetsPanelOpen && (
+          <div
+            ref={presetsPanelRef}
+            className="absolute bottom-full left-0 z-50 mb-1 w-72 rounded-md border border-border bg-background shadow-lg p-3 flex flex-col gap-2"
+          >
+            {presets.length === 0 && (
+              <div className="text-xs text-foreground/40">No presets saved yet</div>
+            )}
+            {presets.map((p) => (
+              <div key={p.name} className={cn(
+                "group flex items-center rounded-md border px-2 py-1.5",
                 activePreset === p.name ? "border-accent/50 bg-accent/10" : "border-border bg-muted/50",
               )}>
-              <button type="button" onClick={() => applyPreset(p)}
-                className={cn("text-sm font-medium transition whitespace-nowrap", activePreset === p.name ? "text-accent" : "text-foreground/60 hover:text-foreground")}>
-                {p.name}
-              </button>
-              <button type="button" onClick={() => { onDeletePreset(p.name); if (activePreset === p.name) setActivePreset(null); }}
-                className="text-base leading-none text-foreground/20 opacity-0 transition hover:text-red-400 group-hover:opacity-100 border-l border-border/50 pl-2"
-                aria-label="Delete preset">✕</button>
-            </div>
-          ))}
-          <form onSubmit={handleSavePreset} className="flex gap-1.5 items-center">
-            <input type="text" value={presetName} onChange={(e) => setPresetName(e.target.value)}
-              placeholder="Save preset…"
-              className="w-36 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-foreground/70 placeholder:text-foreground/30 outline-none focus:border-accent/60" />
-            {presetName.trim() && (
-              <button type="submit"
-                className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-foreground/50 hover:text-foreground">
-                Save
-              </button>
-            )}
-          </form>
-        </div>
+                <button type="button" onClick={() => applyPreset(p)}
+                  className={cn("text-sm font-medium transition whitespace-nowrap", activePreset === p.name ? "text-accent" : "text-foreground/60 hover:text-foreground")}>
+                  {p.name}
+                </button>
+                <button type="button" onClick={() => {
+                    onSavePreset(p.name, { effects: slot.effects, speed: slot.speed, pitch: slot.pitch, linkPitch: slot.linkPitch, gain: slot.gain });
+                    setActivePreset(p.name);
+                  }}
+                  className="text-base leading-none text-foreground/20 opacity-0 transition hover:text-accent group-hover:opacity-100 pl-3"
+                  aria-label="Resave preset" title="Resave with current settings">💾</button>
+                <span className="flex-1" />
+                <button type="button" onClick={() => { onDeletePreset(p.name); if (activePreset === p.name) setActivePreset(null); }}
+                  className="text-base leading-none text-foreground/20 opacity-0 transition hover:text-red-400 group-hover:opacity-100"
+                  aria-label="Delete preset">✕</button>
+              </div>
+            ))}
+            <form onSubmit={handleSavePreset} className="flex gap-1.5 items-center pt-1 border-t border-border/40">
+              <input type="text" value={presetName} onChange={(e) => setPresetName(e.target.value)}
+                placeholder="Save preset…"
+                className="min-w-0 flex-1 rounded-md border border-border bg-muted/30 px-2 py-1.5 text-sm text-foreground/70 placeholder:text-foreground/30 outline-none focus:border-accent/60" />
+              {presetName.trim() && (
+                <button type="submit"
+                  className="rounded-md border border-border bg-muted/40 px-2 py-1.5 text-sm text-foreground/50 hover:text-foreground">
+                  Save
+                </button>
+              )}
+            </form>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -134,6 +134,7 @@ function ThrowPanel({
 interface Props {
   masterSettings: CollabMasterSettings;
   slotCount: number;
+  referenceSlotId: string | null;
   getSlotsAndBuffers: () => { slots: CollabSlot[]; buffers: Map<string, AudioBuffer> };
   onStopAll: () => void;
   onPlayAll: () => void;
@@ -144,25 +145,29 @@ interface Props {
   onDeleteThrowPreset: (name: string) => void;
   onApplyThrowPreset: (preset: ThrowPreset) => void;
   isPlaying: boolean;
+  onMatchAll: () => void;
 }
 
-export function CollabTransport({ masterSettings, slotCount, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying }: Props) {
+export function CollabTransport({ masterSettings, slotCount, referenceSlotId, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll }: Props) {
   const [loopCount, setLoopCount] = useState(4);
   const [format, setFormat] = useState<ExportFormat>("wav");
   const [quality, setQuality] = useState<ExportQuality>("full");
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [throwPanelOpen, setThrowPanelOpen] = useState(false);
+  const [exportPanelOpen, setExportPanelOpen] = useState(false);
   const throwPanelRef = useRef<HTMLDivElement>(null);
   const throwBtnRef = useRef<HTMLButtonElement>(null);
+  const exportPanelRef = useRef<HTMLDivElement>(null);
+  const exportBtnRef = useRef<HTMLButtonElement>(null);
   const masterLoopLength = collabEngine.getMasterLoopLength() ?? 0;
   const totalSec = masterLoopLength * loopCount;
   const estBytes = estimateExportBytes(totalSec, format, quality);
   const preset = EXPORT_PRESETS[quality];
 
-  // Close throw panel on outside click
+  // Close panels on outside click
   useEffect(() => {
-    if (!throwPanelOpen) return;
+    if (!throwPanelOpen && !exportPanelOpen) return;
     function handleClick(e: MouseEvent) {
       if (
         throwPanelRef.current && !throwPanelRef.current.contains(e.target as Node) &&
@@ -170,10 +175,16 @@ export function CollabTransport({ masterSettings, slotCount, getSlotsAndBuffers,
       ) {
         setThrowPanelOpen(false);
       }
+      if (
+        exportPanelRef.current && !exportPanelRef.current.contains(e.target as Node) &&
+        exportBtnRef.current && !exportBtnRef.current.contains(e.target as Node)
+      ) {
+        setExportPanelOpen(false);
+      }
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
-  }, [throwPanelOpen]);
+  }, [throwPanelOpen, exportPanelOpen]);
 
   async function handleExport() {
     if (exporting) return;
@@ -246,69 +257,33 @@ export function CollabTransport({ masterSettings, slotCount, getSlotsAndBuffers,
           ↯ Throw
         </button>
 
-        {/* Export controls */}
-        <div className="flex items-center gap-3 rounded-md border border-border bg-muted/40 px-3 py-1.5">
-            {/* Loops */}
-            <div className="flex items-center gap-1.5">
-              <label className="text-[10px] uppercase tracking-wide text-foreground/40">Loops</label>
-              <input
-                type="number" min={1} max={500} value={loopCount}
-                onChange={(e) => setLoopCount(Math.max(1, Math.min(500, Number(e.target.value) || 1)))}
-                className="w-14 rounded border border-border bg-muted/50 px-2 py-1 text-xs outline-none focus:border-accent/60"
-              />
-              <span className="w-12 text-[10px] text-foreground/40">
-                {totalSec > 0 ? `≈ ${formatDuration(totalSec)}` : ""}
-              </span>
-            </div>
+        {/* Match all to reference */}
+        {referenceSlotId && slotCount >= 2 && (
+          <button
+            type="button"
+            onClick={onMatchAll}
+            className="shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-muted/80 text-foreground/50 transition hover:text-accent hover:bg-muted"
+            title="Match all slots to the key anchor"
+          >
+            Match to Anchor
+          </button>
+        )}
 
-            <div className="h-4 w-px bg-border/50" />
-
-            {/* Format */}
-            <div className="flex items-center gap-1.5">
-              <label className="text-[10px] uppercase tracking-wide text-foreground/40">Format</label>
-              <select
-                value={format}
-                onChange={(e) => setFormat(e.target.value as ExportFormat)}
-                className="rounded border border-border bg-muted/50 px-2 py-1 text-xs text-foreground outline-none focus:border-accent/60 [color-scheme:dark]"
-              >
-                <option value="wav">WAV</option>
-                <option value="mp3">MP3</option>
-              </select>
-            </div>
-
-            {/* Quality */}
-            <div className="flex items-center gap-1.5">
-              <label className="text-[10px] uppercase tracking-wide text-foreground/40">Quality</label>
-              <select
-                value={quality}
-                onChange={(e) => setQuality(e.target.value as ExportQuality)}
-                className="rounded border border-border bg-muted/50 px-2 py-1 text-xs text-foreground outline-none focus:border-accent/60 [color-scheme:dark]"
-              >
-                {(Object.entries(EXPORT_PRESETS) as [ExportQuality, typeof preset][]).map(([key, p]) => (
-                  <option key={key} value={key}>
-                    {p.label} ({p.sampleRate / 1000}k{p.channels === 1 ? " mono" : ""})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Size estimate */}
-            <span className="w-28 shrink-0 text-[10px] text-foreground/40">
-              ≈ {formatFileSize(estBytes)}{format === "mp3" ? ` · ${preset.mp3Kbps}kbps` : ""}
-            </span>
-
-            {exportError && <span className="text-xs text-red-400">{exportError}</span>}
-
-            {/* Export button */}
-            <button
-              type="button"
-              onClick={handleExport}
-              disabled={exporting || masterLoopLength <= 0 || slotCount === 0}
-              className="rounded px-3 py-1 text-xs font-bold uppercase tracking-wide bg-accent/20 text-accent transition hover:bg-accent/30 disabled:opacity-40"
-            >
-              {exporting ? "Exporting…" : `Export ${format.toUpperCase()}`}
-            </button>
-          </div>
+        {/* Export dropdown */}
+        <button
+          ref={exportBtnRef}
+          type="button"
+          onClick={() => setExportPanelOpen((o) => !o)}
+          disabled={slotCount === 0}
+          className={cn(
+            "shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition disabled:opacity-30",
+            exportPanelOpen
+              ? "bg-accent/20 text-accent ring-1 ring-accent/40"
+              : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted",
+          )}
+        >
+          ↓ Export
+        </button>
       </div>
 
       {/* Throw character floating overlay */}
@@ -330,6 +305,79 @@ export function CollabTransport({ masterSettings, slotCount, getSlotsAndBuffers,
             onDeletePreset={onDeleteThrowPreset}
             onApplyPreset={onApplyThrowPreset}
           />
+        </div>
+      )}
+
+      {/* Export floating panel */}
+      {exportPanelOpen && (
+        <div
+          ref={exportPanelRef}
+          className="absolute right-0 top-full mt-1 z-50 w-72 rounded-md border border-border/40 bg-zinc-900/95 shadow-xl backdrop-blur-sm ring-1 ring-border/30 p-4 flex flex-col gap-3"
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-semibold uppercase tracking-widest text-foreground/40">Export</span>
+            <button type="button" onClick={() => setExportPanelOpen(false)}
+              className="text-foreground/30 hover:text-foreground/70 text-sm leading-none px-1">✕</button>
+          </div>
+
+          {/* Loops */}
+          <div className="flex items-center justify-between">
+            <label className="text-xs text-foreground/50">Loops</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number" min={1} max={500} value={loopCount}
+                onChange={(e) => setLoopCount(Math.max(1, Math.min(500, Number(e.target.value) || 1)))}
+                className="w-16 rounded border border-border bg-muted/50 px-2 py-1 text-xs outline-none focus:border-accent/60"
+              />
+              {totalSec > 0 && (
+                <span className="text-[10px] text-foreground/40">≈ {formatDuration(totalSec)}</span>
+              )}
+            </div>
+          </div>
+
+          {/* Format */}
+          <div className="flex items-center justify-between">
+            <label className="text-xs text-foreground/50">Format</label>
+            <select
+              value={format}
+              onChange={(e) => setFormat(e.target.value as ExportFormat)}
+              className="rounded border border-border bg-muted/50 px-2 py-1 text-xs text-foreground outline-none focus:border-accent/60 [color-scheme:dark]"
+            >
+              <option value="wav">WAV</option>
+              <option value="mp3">MP3</option>
+            </select>
+          </div>
+
+          {/* Quality */}
+          <div className="flex items-center justify-between">
+            <label className="text-xs text-foreground/50">Quality</label>
+            <select
+              value={quality}
+              onChange={(e) => setQuality(e.target.value as ExportQuality)}
+              className="rounded border border-border bg-muted/50 px-2 py-1 text-xs text-foreground outline-none focus:border-accent/60 [color-scheme:dark]"
+            >
+              {(Object.entries(EXPORT_PRESETS) as [ExportQuality, typeof preset][]).map(([key, p]) => (
+                <option key={key} value={key}>
+                  {p.label} ({p.sampleRate / 1000}k{p.channels === 1 ? " mono" : ""})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="text-[10px] text-foreground/30">
+            ≈ {formatFileSize(estBytes)}{format === "mp3" ? ` · ${preset.mp3Kbps}kbps` : ""}
+          </div>
+
+          {exportError && <span className="text-xs text-red-400">{exportError}</span>}
+
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={exporting || masterLoopLength <= 0 || slotCount === 0}
+            className="rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-accent/20 text-accent transition hover:bg-accent/30 disabled:opacity-40"
+          >
+            {exporting ? "Exporting…" : `Export ${format.toUpperCase()}`}
+          </button>
         </div>
       )}
     </div>

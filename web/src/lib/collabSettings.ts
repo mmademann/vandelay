@@ -4,7 +4,8 @@ import type { EffectsState } from "../store";
 export interface CollabSlot {
   id: string;
   trackId: string;
-  stemName: StemName;
+  stemName: StemName | null;
+  isReference?: boolean;
   speed: number;
   pitch: number;
   linkPitch: boolean;
@@ -14,6 +15,8 @@ export interface CollabSlot {
   effects: EffectsState;
   loopStart: number;
   loopEnd: number;
+  isMatched?: boolean;
+  matchedBasePitch?: number;
 }
 
 // Per-slot saved settings (keyed by trackId:stemName)
@@ -26,12 +29,15 @@ export interface CollabSlotSavedSettings {
   effects: EffectsState;
   loopStartFrac: number;
   loopEndFrac: number;
+  isMatched?: boolean;
+  matchedBasePitch?: number;
+  pitchInterval?: 1 | 7 | 12;
 }
 
 const SLOT_SETTINGS_KEY = "vandelay:collab:slot-settings:v1";
 
-function slotKey(trackId: string, stemName: StemName): string {
-  return `${trackId}:${stemName}`;
+function slotKey(trackId: string, stemName: StemName | null): string {
+  return stemName ? `${trackId}:${stemName}` : trackId;
 }
 
 function loadAllSlotSettings(): Record<string, CollabSlotSavedSettings> {
@@ -42,12 +48,12 @@ function loadAllSlotSettings(): Record<string, CollabSlotSavedSettings> {
   } catch { return {}; }
 }
 
-export function loadSlotSettings(trackId: string, stemName: StemName): CollabSlotSavedSettings | null {
+export function loadSlotSettings(trackId: string, stemName: StemName | null): CollabSlotSavedSettings | null {
   const all = loadAllSlotSettings();
   return all[slotKey(trackId, stemName)] ?? null;
 }
 
-export function saveSlotSettings(trackId: string, stemName: StemName, settings: CollabSlotSavedSettings): void {
+export function saveSlotSettings(trackId: string, stemName: StemName | null, settings: CollabSlotSavedSettings): void {
   const all = loadAllSlotSettings();
   all[slotKey(trackId, stemName)] = settings;
   try { localStorage.setItem(SLOT_SETTINGS_KEY, JSON.stringify(all)); } catch {}
@@ -156,6 +162,23 @@ export function deleteThrowPreset(name: string): ThrowPreset[] {
   const updated = loadThrowPresets().filter((p) => p.name !== name);
   try { localStorage.setItem(THROW_PRESETS_KEY, JSON.stringify(updated)); } catch {}
   return updated;
+}
+
+const ANCHOR_KEY = "vandelay:collab:anchor:v1";
+
+export function loadAnchorKey(): { trackId: string; stemName: StemName | null } | null {
+  try {
+    const raw = localStorage.getItem(ANCHOR_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+export function saveAnchorKey(trackId: string, stemName: StemName | null): void {
+  try { localStorage.setItem(ANCHOR_KEY, JSON.stringify({ trackId, stemName })); } catch {}
+}
+
+export function clearAnchorKey(): void {
+  try { localStorage.removeItem(ANCHOR_KEY); } catch {}
 }
 
 export interface CollabMasterSettings {

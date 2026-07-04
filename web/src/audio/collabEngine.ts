@@ -97,18 +97,23 @@ class CollabEngine {
     const channels: Float32Array[] = [];
     for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
     const toneBuffer = new Tone.ToneAudioBuffer().fromArray(channels);
+    const bufDur = buffer.duration;
+
+    const safeLoopStart = Math.max(0, Math.min(slot.loopStart, bufDur - 0.01));
+    const safeLoopEnd = Math.min(bufDur, slot.loopEnd > 0 ? slot.loopEnd : bufDur);
 
     const player = new Tone.Player(toneBuffer).connect(chain.distortion);
     player.loop = true;
-    player.loopStart = slot.loopStart;
-    player.loopEnd = slot.loopEnd;
+    player.loopStart = safeLoopStart;
+    player.loopEnd = safeLoopEnd;
     player.playbackRate = slotPlaybackRate(slot);
 
     applyCollabEffectsChain(chain, slot.effects);
     springWet.gain.value = slot.effects.bigKnobWet ?? 0;
-
     const runtime: RuntimeSlot = {
       ...slot,
+      loopStart: safeLoopStart,
+      loopEnd: safeLoopEnd,
       player,
       chain,
       volume,
@@ -121,7 +126,7 @@ class CollabEngine {
       throwActive: false,
       throwTimer: null,
       startedAt: 0,
-      startOffset: slot.loopStart,
+      startOffset: safeLoopStart,
       playing: false,
     };
     this.slots.set(slot.id, runtime);
@@ -147,6 +152,8 @@ class CollabEngine {
     slot.chain.eqLo.disconnect(); slot.chain.eqLo.dispose();
     slot.chain.eqMid.disconnect(); slot.chain.eqMid.dispose();
     slot.chain.eqHi.disconnect(); slot.chain.eqHi.dispose();
+    slot.chain.phaser.disconnect(); slot.chain.phaser.dispose();
+    slot.chain.chorus.disconnect(); slot.chain.chorus.dispose();
     slot.chain.bass.input.disconnect(); slot.chain.bass.input.dispose();
     slot.chain.bass.bassShelf.disconnect(); slot.chain.bass.bassShelf.dispose();
     slot.chain.bass.bassSubFilter.disconnect(); slot.chain.bass.bassSubFilter.dispose();

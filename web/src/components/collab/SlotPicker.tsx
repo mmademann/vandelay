@@ -15,15 +15,21 @@ const STEM_LABELS: Record<StemName, string> = {
 };
 
 interface Props {
-  onConfirm: (trackId: string, stemName: StemName) => void;
+  onConfirm: (trackId: string, stemName: StemName | null) => void;
   onClose: () => void;
 }
 
 function extractVideoId(input: string): string {
   try {
     const url = new URL(input);
+    // ?v= param (youtube.com/watch?v=...)
     const v = url.searchParams.get("v");
     if (v) return v;
+    // youtu.be/<id> short links
+    if (url.hostname === "youtu.be") {
+      const id = url.pathname.slice(1).split("/")[0];
+      if (id) return id;
+    }
   } catch {
     // not a URL — treat raw input as the ID
   }
@@ -52,13 +58,16 @@ export function SlotPicker({ onConfirm, onClose }: Props) {
   useEffect(() => {
     const controller = new AbortController();
     setLibraryLoading(true);
-    fetchLibrary(controller.signal)
+    Promise.resolve()
+      .then(() => fetchLibrary(controller.signal))
       .then((data) => {
+        if (controller.signal.aborted) return;
         setLibrary(data);
         setLibraryLoading(false);
       })
       .catch((e) => {
         if (e instanceof Error && e.name === "AbortError") return;
+        if (controller.signal.aborted) return;
         setLibraryLoading(false);
       });
     return () => { controller.abort(); };
@@ -122,69 +131,12 @@ export function SlotPicker({ onConfirm, onClose }: Props) {
   return (
     <div className="flex h-[420px] flex-col gap-3 overflow-hidden rounded-md border border-border bg-muted/30 p-4">
       <div className="flex items-center justify-between">
-        <div className="text-xs font-medium uppercase tracking-wide text-foreground/50">Add a stem</div>
+        <div className="text-xs font-medium uppercase tracking-wide text-foreground/50">Add a stem or track</div>
         <button type="button" onClick={onClose} className="text-foreground/30 hover:text-foreground/70 text-xs px-1">✕</button>
       </div>
 
-      {/* Search */}
-      <input
-        type="text"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search tracks…"
-        className="rounded-md border border-border bg-muted/30 px-3 py-1.5 text-sm text-foreground placeholder:text-foreground/40"
-      />
-
-      {/* Track list */}
-      <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
-        {libraryLoading && (
-          <div className="py-6 text-center text-sm text-foreground/50">Loading…</div>
-        )}
-        {!libraryLoading && library.length === 0 && (
-          <div className="py-6 text-center text-sm text-foreground/50">
-            Paste a YouTube URL above to add your first track
-          </div>
-        )}
-        {!libraryLoading && library.length > 0 && filtered.length === 0 && (
-          <div className="py-6 text-center text-sm text-foreground/50">No results</div>
-        )}
-        {!libraryLoading && filtered.map((entry) => (
-          <div key={entry.id} className="flex flex-col">
-            <button
-              type="button"
-              onClick={() => setSelectedTrack(selectedTrack?.id === entry.id ? null : entry)}
-              className={cn(
-                "w-full truncate rounded-md px-3 py-2 text-left text-sm transition",
-                selectedTrack?.id === entry.id
-                  ? "bg-accent/15 text-foreground"
-                  : "text-foreground/70 hover:bg-muted/60 hover:text-foreground",
-              )}
-            >
-              {entry.title}
-            </button>
-            {selectedTrack?.id === entry.id && (
-              <div className="mb-1 mt-1 grid grid-cols-4 gap-2 px-3 pb-2">
-                {STEM_NAMES.map((stem) => (
-                  <button
-                    key={stem}
-                    type="button"
-                    onClick={() => {
-                      onConfirm(entry.id, stem);
-                      onClose();
-                    }}
-                    className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm font-medium text-foreground transition hover:border-accent/50 hover:bg-accent/10 hover:text-accent"
-                  >
-                    {STEM_LABELS[stem]}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-
       {/* URL submit */}
-      <div className="flex flex-col gap-1 border-t border-border/50 pt-2">
+      <div className="flex flex-col gap-1">
         <div className="flex gap-2">
           <input
             type="text"
@@ -206,6 +158,75 @@ export function SlotPicker({ onConfirm, onClose }: Props) {
         </div>
         {separating && <div className="text-xs text-foreground/50">Separating… 1–2 min</div>}
         {urlError && <div className="text-xs text-red-400">{urlError}</div>}
+      </div>
+
+      {/* Search */}
+      <input
+        type="text"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search tracks…"
+        className="rounded-md border border-border bg-muted/30 px-3 py-1.5 text-sm text-foreground placeholder:text-foreground/40"
+      />
+
+      {/* Track list */}
+      <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
+        {libraryLoading && (
+          <div className="py-6 text-center text-sm text-foreground/50">Loading…</div>
+        )}
+        {!libraryLoading && library.length === 0 && (
+          <div className="py-6 text-center text-sm text-foreground/50">
+            Paste a YouTube URL above to separate your first track
+          </div>
+        )}
+        {!libraryLoading && library.length > 0 && filtered.length === 0 && (
+          <div className="py-6 text-center text-sm text-foreground/50">No results</div>
+        )}
+        {!libraryLoading && filtered.map((entry) => (
+          <div key={entry.id} className="flex flex-col">
+            <button
+              type="button"
+              onClick={() => setSelectedTrack(selectedTrack?.id === entry.id ? null : entry)}
+              className={cn(
+                "w-full truncate rounded-md px-3 py-2 text-left text-sm transition",
+                selectedTrack?.id === entry.id
+                  ? "bg-accent/15 text-foreground"
+                  : "text-foreground/70 hover:bg-muted/60 hover:text-foreground",
+              )}
+            >
+              {entry.title}
+            </button>
+            {selectedTrack?.id === entry.id && (
+              <div className="mb-1 mt-1 px-3 pb-2">
+                <div className="grid grid-cols-5 gap-2">
+                  {STEM_NAMES.map((stem) => (
+                    <button
+                      key={stem}
+                      type="button"
+                      onClick={() => {
+                        onConfirm(entry.id, stem);
+                        onClose();
+                      }}
+                      className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm font-medium text-foreground transition hover:border-accent/50 hover:bg-accent/10 hover:text-accent"
+                    >
+                      {STEM_LABELS[stem]}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onConfirm(entry.id, null);
+                      onClose();
+                    }}
+                    className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm font-medium text-foreground/70 transition hover:border-accent/50 hover:bg-accent/10 hover:text-accent"
+                  >
+                    Full track
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );

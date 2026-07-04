@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { BrowserRouter, Link, NavLink, Route, Routes } from "react-router-dom";
+import { BrowserRouter, NavLink, Route, Routes } from "react-router-dom";
 import { pruneCache } from "./lib/audioCache";
 import { getAllTrackMeta } from "./lib/trackMetaCache";
 import { SinglePage } from "./pages/SinglePage";
@@ -17,11 +17,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <div className="flex h-dvh w-full flex-col gap-4 overflow-hidden px-4 py-4 sm:px-6">
-        <header className="flex shrink-0 items-baseline justify-between">
-          <Link to="/" className="text-2xl font-semibold tracking-tight">
-            vandelay
-          </Link>
-          <nav className="flex items-center gap-4 text-xs uppercase tracking-widest">
+        <header className="flex shrink-0 items-center justify-between">
+          <div id="collab-transport-portal" className="flex min-w-0 flex-1 items-center" />
+          <nav className="flex shrink-0 items-center gap-4 text-xs uppercase tracking-widest">
             <NavLink
               to="/"
               end

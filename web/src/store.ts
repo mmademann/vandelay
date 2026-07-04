@@ -23,6 +23,8 @@ export const EFFECTS_LIMITS = {
   eqLow: { min: -12, max: 12 },
   eqMid: { min: -12, max: 12 },
   eqHigh: { min: -12, max: 12 },
+  phaserWet: { min: 0, max: 1 },
+  chorusWet: { min: 0, max: 1 },
 } as const;
 
 export interface Track {
@@ -52,6 +54,8 @@ export interface EffectsState {
   eqLow?: number;
   eqMid?: number;
   eqHigh?: number;
+  phaserWet?: number;
+  chorusWet?: number;
 }
 
 function clamp(v: number, min: number, max: number) { return Math.min(max, Math.max(min, v)); }
@@ -78,6 +82,8 @@ export function sanitizeEffects(e: EffectsState): EffectsState {
     eqLow: clamp(e.eqLow ?? 0, EFFECTS_LIMITS.eqLow.min, EFFECTS_LIMITS.eqLow.max),
     eqMid: clamp(e.eqMid ?? 0, EFFECTS_LIMITS.eqMid.min, EFFECTS_LIMITS.eqMid.max),
     eqHigh: clamp(e.eqHigh ?? 0, EFFECTS_LIMITS.eqHigh.min, EFFECTS_LIMITS.eqHigh.max),
+    phaserWet: clamp(e.phaserWet ?? 0, EFFECTS_LIMITS.phaserWet.min, EFFECTS_LIMITS.phaserWet.max),
+    chorusWet: clamp(e.chorusWet ?? 0, EFFECTS_LIMITS.chorusWet.min, EFFECTS_LIMITS.chorusWet.max),
   };
 }
 
@@ -99,6 +105,8 @@ export const DEFAULT_EFFECTS: EffectsState = {
   eqLow: 0,
   eqMid: 0,
   eqHigh: 0,
+  phaserWet: 0,
+  chorusWet: 0,
 };
 
 /** Applied when effects are toggled off; slider values are kept in state. */
@@ -120,6 +128,8 @@ export const BYPASS_EFFECTS: EffectsState = {
   eqLow: 0,
   eqMid: 0,
   eqHigh: 0,
+  phaserWet: 0,
+  chorusWet: 0,
 };
 
 export function effectiveEffects(

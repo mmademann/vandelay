@@ -5,6 +5,8 @@ export interface CachedTrackMeta {
   title: string;
   duration: number;
   addedAt: number;
+  detectedKey?: string | null;  // undefined = not run; null = ran, failed/low-confidence; string = success
+  detectedBpm?: number;
 }
 
 export async function putTrackMeta(meta: CachedTrackMeta): Promise<void> {

@@ -14,6 +14,8 @@ export interface CollabEffectsChain {
   eqLo: Tone.Filter;
   eqMid: Tone.Filter;
   eqHi: Tone.Filter;
+  phaser: Tone.Phaser;
+  chorus: Tone.Chorus;
   bass: BassChain;
   delay: TapeDelay;
   reverbs: DualReverbNodes;
@@ -28,11 +30,14 @@ export async function createCollabEffectsChain(output: Tone.ToneAudioNode): Prom
   delay.connect(reverbs.convInput);
   delay.connect(reverbs.convDry);
   const bass = await createBassChain(delay.input);
-  const eqHi = new Tone.Filter({ type: "highshelf", frequency: 6000, gain: 0 }).connect(bass.input);
+  const chorus = new Tone.Chorus({ frequency: 1.5, delayTime: 3.5, depth: 0.7, wet: 0 }).connect(bass.input);
+  chorus.start();
+  const phaser = new Tone.Phaser({ frequency: 0.5, octaves: 3, baseFrequency: 350, wet: 0 }).connect(chorus);
+  const eqHi = new Tone.Filter({ type: "highshelf", frequency: 6000, gain: 0 }).connect(phaser);
   const eqMid = new Tone.Filter({ type: "peaking", frequency: 1000, Q: 1.0, gain: 0 }).connect(eqHi);
   const eqLo = new Tone.Filter({ type: "lowshelf", frequency: 100, gain: 0 }).connect(eqMid);
   const distortion = new Tone.Distortion({ distortion: 0.5, wet: 0 }).connect(eqLo);
-  return { distortion, eqLo, eqMid, eqHi, bass, delay, reverbs, gain };
+  return { distortion, eqLo, eqMid, eqHi, phaser, chorus, bass, delay, reverbs, gain };
 }
 
 export async function createOfflineCollabEqChain(
@@ -85,7 +90,10 @@ export async function createOfflineCollabEqChain(
   bassInput.connect(bassShelf);
   bassInput.connect(bassSubFilter);
 
-  const eqHiOff = new Tone.Filter({ type: "highshelf", frequency: 6000, gain: clamp(effects.eqHigh ?? 0, EFFECTS_LIMITS.eqHigh.min, EFFECTS_LIMITS.eqHigh.max) }).connect(bassInput);
+  const chorusOff = new Tone.Chorus({ frequency: 1.5, delayTime: 3.5, depth: 0.7, wet: clamp(effects.chorusWet ?? 0, 0, 1) }).connect(bassInput);
+  chorusOff.start();
+  const phaserOff = new Tone.Phaser({ frequency: 0.5, octaves: 3, baseFrequency: 350, wet: clamp(effects.phaserWet ?? 0, 0, 1) }).connect(chorusOff);
+  const eqHiOff = new Tone.Filter({ type: "highshelf", frequency: 6000, gain: clamp(effects.eqHigh ?? 0, EFFECTS_LIMITS.eqHigh.min, EFFECTS_LIMITS.eqHigh.max) }).connect(phaserOff);
   const eqMidOff = new Tone.Filter({ type: "peaking", frequency: 1000, Q: 1.0, gain: clamp(effects.eqMid ?? 0, EFFECTS_LIMITS.eqMid.min, EFFECTS_LIMITS.eqMid.max) }).connect(eqHiOff);
   const eqLoOff = new Tone.Filter({ type: "lowshelf", frequency: 100, gain: clamp(effects.eqLow ?? 0, EFFECTS_LIMITS.eqLow.min, EFFECTS_LIMITS.eqLow.max) }).connect(eqMidOff);
 
@@ -104,6 +112,8 @@ export function applyCollabEffectsChain(chain: CollabEffectsChain, e: EffectsSta
   chain.eqLo.gain.value = clamp(e.eqLow ?? 0, EFFECTS_LIMITS.eqLow.min, EFFECTS_LIMITS.eqLow.max);
   chain.eqMid.gain.value = clamp(e.eqMid ?? 0, EFFECTS_LIMITS.eqMid.min, EFFECTS_LIMITS.eqMid.max);
   chain.eqHi.gain.value = clamp(e.eqHigh ?? 0, EFFECTS_LIMITS.eqHigh.min, EFFECTS_LIMITS.eqHigh.max);
+  chain.phaser.wet.value = clamp(e.phaserWet ?? 0, 0, 1);
+  chain.chorus.wet.value = clamp(e.chorusWet ?? 0, 0, 1);
   applyBassBoost(chain.bass, e.bassBoost);
   const grit = clamp(e.grit ?? 0, 0, 1);
   chain.distortion.wet.value = grit;
