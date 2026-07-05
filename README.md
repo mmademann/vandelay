@@ -83,6 +83,8 @@ Multi-slot stem layering with full per-slot dub effects. Load stems from the lib
 - **THROW** — momentary per-slot button that blasts the slot through a configurable Space Echo + spring reverb burst. Throw character (delay time, feedback, wet; reverb decay, wet) is set globally in the Throw panel in the transport bar.
 - **Mute / Solo** per slot; **Play All / Pause All / Rewind All** in the transport bar.
 - **Named sessions** — save/load the full arrangement (slot lineup, all per-slot settings, master settings, throw character).
+- **GENRE** — apply a genre preset (Dub, Lo-fi, Ambient, Dry) across all slots at once, tuned per stem role. Or hit **Randomize All** for random per-stem effects within genre-appropriate ranges.
+- **RANDOM** — instantly build a random session from your stems library, picking one stem role per track and skipping non-viable (silent) stems.
 - **Export** — renders all slots in sync as a WAV/MP3/OGG/FLAC, respecting mute/solo and all effects.
 
 ## Mix mode (`/mix`)

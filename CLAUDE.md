@@ -61,7 +61,7 @@ Loop regions are managed in engine code, not via the player's native loop points
 
 ### Key detection + auto-match (collab)
 
-- **Essentia.js** (WASM, lazy-loaded) runs `KeyExtractor` + `RhythmExtractor2013` on each decoded buffer. Results cached in `trackMetaCache` (`detectedKey`, `detectedBpm`). Detection is skipped if already cached (`detectedKey !== undefined`). `null` = ran and failed/low confidence.
+- **Essentia.js** runs in a **Web Worker** (`audioAnalysisWorker.ts`) — offloaded to avoid blocking the audio thread. `audioAnalysis.ts` manages the worker singleton and routes requests/responses via a pending-callback map. WASM loads once in the worker; subsequent calls reuse it. Results cached in `trackMetaCache` (`detectedKey`, `detectedBpm`). Detection is skipped if already cached (`detectedKey !== undefined`). `null` = ran and failed/low confidence.
 - **Confidence threshold**: < 0.5 → show `?` badge, treat as no key for auto-match.
 - **Root-semitone only**: key string (e.g. `"C# major"`) → chromatic semitone 0–11. Major/minor ignored to avoid wrong transposition between relative keys.
 - **Auto-match on load**: if a reference slot is pinned, incoming slot gets `speed` + `linkPitch` copied from reference, and `pitch` offset by `refSem - tgtSem`. If either side has no detected key, speed/linkPitch are still copied but pitch stays 0.
@@ -91,6 +91,8 @@ web/src/
     tapeDelay.ts     TapeDelay class — filtered feedback + LFO wow (S.ECHO knob)
     renderCollab.ts  Offline render for /collab export
     graph.ts         Shared effects chain (Distortion → EQ → Delay → Reverb → Gain)
+  workers/
+    audioAnalysisWorker.ts  Essentia WASM runs here (key + BPM extraction off main thread)
     reverbSlot.ts    DualReverb nodes + synthesizeSpringImpulse + createOfflineEqChain (single/mix)
   components/        UI (mix/ subfolder for mixer, collab/ subfolder for collab)
     collab/
@@ -100,13 +102,15 @@ web/src/
   lib/               Loaders, caches, persistence, format helpers, presets
     collabSettings.ts    CollabSlot/Session types, per-slot localStorage CRUD, named sessions, anchor key, throw settings
     collabExport.ts      CollabExportFile type, buildExport/saveExportToServer/loadExportFromServer/applyImport — full state backup to server
-    audioAnalysis.ts     Essentia.js wrapper — analyzeAudio(), rootSemitone(), preloadEssentia()
+    vibePresets.ts       GENRE_PRESETS (Dub/Lo-fi/Ambient/Dry × stem role), STEM_AUTO_PRESETS, randomizeEffects(), RANDOMIZE_RANGES
+    randomCombinator.ts  buildRandomSlots() — picks one stem role per track from library, skipping non-viable stems
+    audioAnalysis.ts     Web Worker manager for Essentia — analyzeAudio(), rootSemitone(), preloadEssentia()
     trackMetaCache.ts    IndexedDB track metadata including detectedKey/detectedBpm
 ```
 
 ## Collab UI layout (current)
 
-**Transport bar** (top): `Sessions (N)` button (dropdown) · `▶ Play All` · `⏮ Rewind All` · `↯ Throw` (floating panel) · `Match All to Anchor` (visible when reference pinned + ≥2 slots) · `↓ Export` (floating panel) · `Clear`
+**Transport bar** (top): `Sessions (N)` button (dropdown) · `▶ Play All` · `⏮ Rewind All` · `↯ Throw` (floating panel) · `+ GENRE` (floating panel: Dub / Lo-fi / Ambient / Dry presets + Randomize All) · `RANDOM` (random session from library) · `Match All to Anchor` (visible when reference pinned + ≥2 slots) · `↓ Export` (floating panel) · `Clear`
 
 **Per-slot (SlotStrip)**:
 - Header row: key badge (`C# min`, BPM on hover, `?` if unknown) · `Set Key Anchor` / `Key Anchor ✓` button · `MATCH` button (hidden when already matched or this is the reference) · `MATCHED ▼ ▲` badge (octave shift buttons, visible when matched) · stem/track label · track title · remove (✕)
@@ -158,7 +162,9 @@ Slot IDs are UUIDs generated at runtime, not derived from trackId+stemName. Pars
 - **Named session load vs. per-slot autosave**: two separate systems. `pendingSessionSlotsRef` in `CollabPage.tsx` stages session slot data before navigation so the URL reconciler reads from the session snapshot, not per-slot autosave. `isReference` is stored in named sessions only, not per-slot autosave.
 - **Throw reverb decay changes require `reverb.generate()`** — debounced 300ms in `collabEngine.setThrowSettings`.
 - **youtu.be short-link parsing**: `extractVideoId()` in `SlotPicker.tsx` handles both `youtube.com/watch?v=ID` and `youtu.be/ID` formats.
+- **Viability map**: `viabilityMapRef` in `CollabPage` tracks `"trackId:stemName" → boolean` for whether a stem has meaningful audio (via `computeStemViability`). Used by `buildRandomSlots` to skip dead stems in RANDOM sessions. Populated lazily as stems load — absence means uncached (included), `false` means explicitly non-viable (skipped).
 - **`SlotStrip.update()` vs `onChange()`**: always call the local `update()` function (engine + state + persist) not `onChange()` directly (state only) when changing slot properties from within SlotStrip.
+- **`rawContext.createConvolver()` required in offline context**: always use `Tone.getContext().rawContext.createConvolver()`, not `Tone.getContext().createConvolver()`. The latter delegates silently in the live context but breaks in `Tone.Offline()`, so spring reverb drops from exports. See `collabChain.ts`.
 - **Tone.js context config is module-level in `collabEngine.ts`**: `Tone.setContext(new Tone.Context({ latencyHint: "playback", lookAhead: 0.3, updateInterval: 0.08 }))` runs before any imports that create nodes. Do not move it or duplicate it — must stay at the very top of that file.
 - **POST `/api/stems` returns 202 (not 200) when separation is needed**: blocks only for `extractAudio` (WAV download), then fires demucs in the background and returns immediately. Client polls `GET /api/stems/:id/status` every 2s. Returns 200 with full data only when already fully cached.
 - **Collab state backup**: `buildExport(masterSettings)` + `saveExportToServer()` in `collabExport.ts` snapshot all localStorage collab keys to `collab-state.json` at repo root. Auto-fires on page unmount (if any slots loaded). Import via Sessions panel `↑ Import` button — writes localStorage then syncs live React state.

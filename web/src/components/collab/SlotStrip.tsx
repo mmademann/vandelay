@@ -627,10 +627,11 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
           ref={presetsBtnRef}
           type="button"
           onClick={() => setPresetsPanelOpen((o) => !o)}
-          className="text-[10px] uppercase tracking-wide text-foreground/40 hover:text-foreground/70 transition flex-1"
+          className="text-[10px] uppercase tracking-wide text-foreground/40 hover:text-foreground/70 transition text-left"
         >
           Presets {presets.length > 0 ? `(${presets.length})` : ""}{activePreset ? ` · ${activePreset}` : ""} {presetsPanelOpen ? "▲" : "▼"}
         </button>
+        <span className="flex-1" />
         <button type="button" onClick={handleReset}
           className="rounded px-2 py-0.5 text-[9px] uppercase tracking-wide font-semibold text-foreground/25 hover:text-foreground/60 hover:bg-muted transition">
           ↺ Reset
