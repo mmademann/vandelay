@@ -92,7 +92,24 @@ export function History({
       }
       setSeeded(true);
     }
-    setEntries(cached);
+    // Backfill entries where title === id (stored without a real title)
+    const broken = cached.filter((e) => e.title === e.id);
+    if (broken.length > 0) {
+      try {
+        const res = await fetch("/api/history");
+        if (res.ok) {
+          const serverEntries = await res.json() as CachedTrackMeta[];
+          const serverMap = new Map(serverEntries.map((e) => [e.id, e]));
+          await Promise.all(
+            broken.flatMap((e) => {
+              const server = serverMap.get(e.id);
+              return server && server.title !== e.id ? [putTrackMeta(server)] : [];
+            })
+          );
+        }
+      } catch { /* server unavailable */ }
+    }
+    setEntries(await getAllTrackMeta());
   }, [seeded]);
 
   useEffect(() => {

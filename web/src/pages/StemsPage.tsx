@@ -98,6 +98,32 @@ export function StemsPage() {
         if (!res.ok) throw new Error(data.error ?? "Server error");
 
         setTrackTitle(data.title);
+
+        // 202 means separation is running in background — poll until ready
+        if (res.status === 202) {
+          setPhase("separating");
+          await new Promise<void>((resolve, reject) => {
+            let retries = 0;
+            const MAX_RETRIES = 180; // 6 min at 2s
+            const interval = setInterval(async () => {
+              if (cancelled) { clearInterval(interval); resolve(); return; }
+              if (++retries > MAX_RETRIES) {
+                clearInterval(interval);
+                reject(new Error("Separation timed out — check server logs"));
+                return;
+              }
+              try {
+                const s = await fetch(`/api/stems/${id}/status`);
+                if (s.ok) {
+                  const { ready } = await s.json() as { ready: boolean };
+                  if (ready) { clearInterval(interval); resolve(); }
+                }
+              } catch { /* transient — keep polling */ }
+            }, 2000);
+          });
+          if (cancelled) return;
+        }
+
         setPhase("loading");
 
         const buffers = await decodeStemBuffers(id);
