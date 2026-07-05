@@ -305,6 +305,13 @@ class CollabEngine {
     slot.player.loop = true;
     slot.startOffset = Math.max(slot.loopStart, Math.min(slot.loopEnd - 0.01, slot.startOffset));
     const t = Tone.now() + 0.05;
+    const anySoloed = Array.from(this.slots.values()).some((s) => s.soloed);
+    const effectiveMute = slot.muted || (anySoloed && !slot.soloed);
+    if (!effectiveMute) {
+      slot.volume.volume.cancelScheduledValues(t);
+      slot.volume.volume.setValueAtTime(-60, t);
+      slot.volume.volume.linearRampToValueAtTime(slot.gain, t + 5);
+    }
     slot.player.start(t, slot.startOffset);
     slot.startedAt = t;
     slot.playing = true;
@@ -314,7 +321,11 @@ class CollabEngine {
     const slot = this.slots.get(id);
     if (!slot) return;
     slot.startOffset = this.getSlotPosition(id);
-    try { slot.player.stop(); } catch { /* ignore */ }
+    const now = Tone.now();
+    slot.volume.volume.cancelScheduledValues(now);
+    slot.volume.volume.setValueAtTime(slot.volume.volume.value, now);
+    slot.volume.volume.linearRampToValueAtTime(-60, now + 5);
+    try { slot.player.stop(now + 5); } catch { /* ignore */ }
     slot.playing = false;
   }
 

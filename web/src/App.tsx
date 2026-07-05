@@ -27,23 +27,23 @@ export default function App() {
                 isActive ? "text-accent" : "text-foreground/50 hover:text-foreground/80"
               }
             >
-              Single
+              Single Track
             </NavLink>
-            <NavLink
+            {/* <NavLink
               to="/mix"
               className={({ isActive }) =>
                 isActive ? "text-accent" : "text-foreground/50 hover:text-foreground/80"
               }
             >
-              Mix
-            </NavLink>
+              Multi Track
+            </NavLink> */}
             <NavLink
               to="/stems"
               className={({ isActive }) =>
                 isActive ? "text-accent" : "text-foreground/50 hover:text-foreground/80"
               }
             >
-              Stems
+              Track Stems
             </NavLink>
             <NavLink
               to="/collab"
@@ -51,7 +51,7 @@ export default function App() {
                 isActive ? "text-accent" : "text-foreground/50 hover:text-foreground/80"
               }
             >
-              Collab
+              Multi Track Stems
             </NavLink>
           </nav>
         </header>
