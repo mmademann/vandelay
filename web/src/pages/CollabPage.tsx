@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { collabEngine } from "../audio/collabEngine";
 import { DRY_EFFECTS, type StemName } from "../audio/dubEngine";
+import { sanitizeEffects } from "../store";
 import type { CollabMasterSettings, CollabSlot, CollabSession, ThrowSettings } from "../lib/collabSettings";
 import { getCachedAudio, putCachedAudio } from "../lib/audioCache";
 import {
@@ -25,15 +26,18 @@ import {
   saveAnchorKey,
   clearAnchorKey,
 } from "../lib/collabSettings";
-import { getTrackMeta, putTrackMeta } from "../lib/trackMetaCache";
+import { getAllTrackMeta, getTrackMeta, putTrackMeta } from "../lib/trackMetaCache";
 import { analyzeAudio, rootSemitone, preloadEssentia } from "../lib/audioAnalysis";
+import { computeAutoGain, computeStemViability } from "../lib/autoGain";
+import { STEM_AUTO_PRESETS, GENRE_PRESETS, randomizeEffects, type StemRole, type GenreName } from "../lib/vibePresets";
+import { buildRandomSlots } from "../lib/randomCombinator";
 import { SlotStrip } from "../components/collab/SlotStrip";
 import { SlotPicker } from "../components/collab/SlotPicker";
 import { CollabTransport } from "../components/collab/CollabTransport";
+import { buildExport, saveExportToServer, loadExportFromServer, applyImport } from "../lib/collabExport";
 
 const STEM_NAMES_SET = new Set<string>(["drums", "bass", "vocals", "other"]);
 const MAX_STEMS = 8;
-
 
 interface SlotEntry {
   slot: CollabSlot;
@@ -44,44 +48,64 @@ interface SlotEntry {
   detectedKey: string | null | undefined;
   detectedBpm: number | undefined;
   isMatched: boolean;
-  matchedBasePitch: number; // pitch value at time of match — octave/interval grid is anchored here
+  matchedBasePitch: number;
   pitchInterval: 1 | 7 | 12;
 }
 
-function parseSlotsParam(raw: string): Array<{ trackId: string; stemName: StemName | null }> {
-  if (!raw) return [];
-  const seen = new Set<string>();
-  return raw
-    .split(",")
-    .map((token) => {
-      const colonIdx = token.indexOf(":");
-      if (colonIdx === -1) {
-        const trackId = token.trim();
-        if (!trackId) return null;
-        return { trackId, stemName: null };
+function parseSlotsParam(raw: string): {
+  tokens: Array<{ uuid: string; trackId: string; stemName: StemName | null }>;
+  redirect: string | null;
+} {
+  if (!raw) return { tokens: [], redirect: null };
+  const isUUID = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(s);
+  const results: Array<{ uuid: string; trackId: string; stemName: StemName | null }> = [];
+  let needsRedirect = false;
+
+  for (const rawToken of raw.split(",")) {
+    const token = rawToken.trim();
+    if (!token) continue;
+    const firstColon = token.indexOf(":");
+    if (firstColon === -1) {
+      // Legacy bare trackId
+      results.push({ uuid: crypto.randomUUID(), trackId: token, stemName: null });
+      needsRedirect = true;
+      continue;
+    }
+    const firstPart = token.slice(0, firstColon);
+    const rest = token.slice(firstColon + 1);
+    if (isUUID(firstPart)) {
+      // New format: uuid:trackId or uuid:trackId:stemName
+      const secondColon = rest.indexOf(":");
+      if (secondColon === -1) {
+        results.push({ uuid: firstPart, trackId: rest, stemName: null });
+      } else {
+        const trackId = rest.slice(0, secondColon);
+        const stemName = rest.slice(secondColon + 1);
+        if (!STEM_NAMES_SET.has(stemName)) continue;
+        results.push({ uuid: firstPart, trackId, stemName: stemName as StemName });
       }
-      const trackId = token.slice(0, colonIdx).trim();
-      const stemName = token.slice(colonIdx + 1).trim();
-      if (!trackId || !stemName || !STEM_NAMES_SET.has(stemName)) return null;
-      return { trackId, stemName: stemName as StemName };
-    })
-    .filter((x): x is { trackId: string; stemName: StemName | null } => {
-      if (x === null) return false;
-      const key = x.stemName ? `${x.trackId}:${x.stemName}` : x.trackId;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+    } else {
+      // Legacy trackId:stemName
+      const stemName = rest;
+      if (!STEM_NAMES_SET.has(stemName)) continue;
+      results.push({ uuid: crypto.randomUUID(), trackId: firstPart, stemName: stemName as StemName });
+      needsRedirect = true;
+    }
+  }
+
+  if (!needsRedirect) return { tokens: results, redirect: null };
+  const param = results
+    .map(t => t.stemName ? `${t.uuid}:${t.trackId}:${t.stemName}` : `${t.uuid}:${t.trackId}`)
+    .join(",");
+  return { tokens: results, redirect: param };
 }
 
 function encodeSlotsParam(entries: SlotEntry[]): string {
   return entries
-    .map((e) => (e.slot.stemName ? `${e.slot.trackId}:${e.slot.stemName}` : e.slot.trackId))
+    .map((e) => e.slot.stemName
+      ? `${e.slot.id}:${e.slot.trackId}:${e.slot.stemName}`
+      : `${e.slot.id}:${e.slot.trackId}`)
     .join(",");
-}
-
-function slotId(trackId: string, stemName: StemName | null): string {
-  return stemName ? `${trackId}:${stemName}` : trackId;
 }
 
 function pendingKey(trackId: string, stemName: StemName | null): string {
@@ -108,25 +132,72 @@ export function CollabPage() {
   const sessionsBtnRef = useRef<HTMLButtonElement>(null);
   const [presets, setPresets] = useState<CollabPreset[]>(() => loadCollabPresets());
   const [throwPresets, setThrowPresets] = useState<ThrowPreset[]>(() => loadThrowPresets());
+  const [exportStatus, setExportStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [importStatus, setImportStatus] = useState<"idle" | "importing" | "imported" | "none" | "error">("idle");
   const [isPlayingAll, setIsPlayingAll] = useState(false);
+  const [library, setLibrary] = useState<{ id: string; title: string }[]>([]);
+  const libraryRef = useRef<{ id: string; title: string }[]>([]);
+  const [stemsLibrary, setStemsLibrary] = useState<{ id: string; title: string }[]>([]);
 
   const entriesRef = useRef(entries);
   entriesRef.current = entries;
+  const masterSettingsRef = useRef(masterSettings);
+  masterSettingsRef.current = masterSettings;
   const referenceSlotIdRef = useRef<string | null>(null);
   referenceSlotIdRef.current = referenceSlotId;
-  // Staged slot data from a named session load — consumed by the URL reconciler
   const pendingSessionSlotsRef = useRef<Map<string, CollabSlot>>(new Map());
-  // Staged reference slot ID from a session load — applied at start of next reconciler run
   const pendingReferenceIdRef = useRef<string | null>(null);
+  const viabilityMapRef = useRef<Map<string, boolean>>(new Map());
 
-  // Sync initial throw settings to engine on mount; preload Essentia WASM
+  // Sync initial throw settings to engine on mount; preload Essentia WASM; seed viability cache
   useEffect(() => {
     collabEngine.setThrowSettings(masterSettings.throwSettings);
     preloadEssentia().catch(() => {});
+    getAllTrackMeta().then((entries) => {
+      for (const entry of entries) {
+        if (!entry.stemViability) continue;
+        for (const [stem, viable] of Object.entries(entry.stemViability)) {
+          viabilityMapRef.current.set(`${entry.id}:${stem}`, viable);
+        }
+      }
+    }).catch(() => {});
     return () => {
+      if (entriesRef.current.length > 0) {
+        saveExportToServer(buildExport(masterSettingsRef.current));
+      }
       collabEngine.dispose();
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch library + history once on mount for title resolution and random session
+  useEffect(() => {
+    console.time("[collab] library+history fetch");
+    Promise.all([
+      fetch("/api/stems/library", { priority: "high" } as RequestInit).then((r) => r.ok ? r.json() as Promise<{ id: string; title: string }[]> : Promise.resolve([])),
+      fetch("/api/history", { priority: "high" } as RequestInit).then((r) => r.ok ? r.json() as Promise<{ id: string; title: string }[]> : Promise.resolve([])),
+    ]).then(([lib, history]) => {
+      console.timeEnd("[collab] library+history fetch");
+      console.log(`[collab] library: ${(lib as []).length} stems, history: ${(history as []).length} tracks`);
+      setStemsLibrary(lib as { id: string; title: string }[]);
+      const merged = new Map((history as { id: string; title: string }[]).map((e) => [e.id, e.title]));
+      for (const e of lib as { id: string; title: string }[]) merged.set(e.id, e.title);
+      const data = Array.from(merged.entries()).map(([id, title]) => ({ id, title }));
+      setLibrary(data);
+      libraryRef.current = data;
+    }).catch(() => {});
+  }, []);
+
+  // Back-fill titles when library loads (race: fast IDB-cached tracks finish before library fetch)
+  useEffect(() => {
+    if (library.length === 0) return;
+    setEntries((prev) =>
+      prev.map((e) => {
+        const libTitle = library.find((l) => l.id === e.slot.trackId)?.title;
+        if (!libTitle) return e;
+        return { ...e, title: libTitle };
+      }),
+    );
+  }, [library]);
 
   // Poll engine running state for Play All / Stop All button
   useEffect(() => {
@@ -160,31 +231,38 @@ export function CollabPage() {
 
   // URL reconciler — fires when ?slots= changes
   useEffect(() => {
-    // Apply pending reference from session load before processing entries
+    // 1. Apply pending reference from session load
     if (pendingReferenceIdRef.current !== null) {
       setReferenceSlotId(pendingReferenceIdRef.current);
       referenceSlotIdRef.current = pendingReferenceIdRef.current;
       pendingReferenceIdRef.current = null;
-    } else if (referenceSlotIdRef.current === null) {
-      // On fresh page load, restore anchor synchronously so auto-match sees it
-      // before any slot's async decode completes.
+    }
+
+    // 2. Parse + redirect check — BEFORE anchor restore
+    const { tokens: pairs, redirect } = parseSlotsParam(slotsParam);
+    if (redirect !== null) {
+      navigate(`/collab?slots=${redirect}`, { replace: true });
+      return;
+    }
+
+    // 3. Anchor restore from localStorage — AFTER parseSlotsParam (needs pairs)
+    if (referenceSlotIdRef.current === null) {
       const savedAnchor = loadAnchorKey();
       if (savedAnchor) {
-        const restoredId = slotId(savedAnchor.trackId, savedAnchor.stemName);
-        setReferenceSlotId(restoredId);
-        referenceSlotIdRef.current = restoredId;
+        const anchorToken = pairs.find(t => t.trackId === savedAnchor.trackId && t.stemName === savedAnchor.stemName);
+        if (anchorToken) {
+          setReferenceSlotId(anchorToken.uuid);
+          referenceSlotIdRef.current = anchorToken.uuid;
+        }
       }
     }
 
-    const pairs = parseSlotsParam(slotsParam);
     const current = entriesRef.current;
 
     const next: SlotEntry[] = pairs.map((pair) => {
-      const existing = current.find(
-        (e) => e.slot.trackId === pair.trackId && e.slot.stemName === pair.stemName,
-      );
+      const existing = current.find((e) => e.slot.id === pair.uuid);
       if (existing) return existing;
-      const id = slotId(pair.trackId, pair.stemName);
+      const id = pair.uuid;
       const slot: CollabSlot = {
         id,
         trackId: pair.trackId,
@@ -214,52 +292,55 @@ export function CollabPage() {
 
     let cancelled = false;
     (async () => {
-      // Fetch library once for title resolution
-      let library: Array<{ id: string; title: string }> = [];
-      try {
-        const libRes = await fetch("/api/stems/library");
-        if (libRes.ok) library = await libRes.json() as typeof library;
-      } catch { /* titles fall back to trackId */ }
-
-      for (const entry of next) {
-        if (!entry.loading) continue;
+      await Promise.all(next.map(async (entry) => {
+        if (!entry.loading) return;
         if (cancelled) return;
 
         const { slot } = entry;
+        const label = slot.stemName ? `${slot.stemName}:${slot.trackId}` : `track:${slot.trackId}`;
+        console.time(`[collab] ${label} total`);
         let buffer: AudioBuffer;
         try {
           if (slot.stemName === null) {
-            // Full track slot — load from /api/audio/{trackId}
             const cacheKey = slot.trackId;
             let arrayBuffer = await getCachedAudio(cacheKey);
+            console.log(`[collab] ${label} idb: ${arrayBuffer ? "HIT" : "MISS"}`);
             if (!arrayBuffer) {
+              console.time(`[collab] ${label} fetch`);
               const res = await fetch(`/api/audio/${slot.trackId}`);
               if (!res.ok) {
                 if (res.status === 404) throw new Error("Track not found");
                 throw new Error(`Server error ${res.status}`);
               }
               arrayBuffer = await res.arrayBuffer();
+              console.timeEnd(`[collab] ${label} fetch`);
               putCachedAudio(cacheKey, arrayBuffer.slice(0));
             }
+            console.time(`[collab] ${label} decode`);
             const decodeCtx = new AudioContext();
             buffer = await decodeCtx.decodeAudioData(arrayBuffer.slice(0));
             decodeCtx.close();
+            console.timeEnd(`[collab] ${label} decode`);
           } else {
-            // Stem slot
             const cacheKey = `stem:${slot.trackId}:${slot.stemName}:mp3`;
             let arrayBuffer = await getCachedAudio(cacheKey);
+            console.log(`[collab] ${label} idb: ${arrayBuffer ? "HIT" : "MISS"}`);
             if (!arrayBuffer) {
+              console.time(`[collab] ${label} fetch`);
               const res = await fetch(`/api/stems/${slot.trackId}/${slot.stemName}`);
               if (!res.ok) {
                 if (res.status === 404) throw new Error("Stem not found — separate this track first");
                 throw new Error(`Server error ${res.status}`);
               }
               arrayBuffer = await res.arrayBuffer();
+              console.timeEnd(`[collab] ${label} fetch`);
               putCachedAudio(cacheKey, arrayBuffer.slice(0));
             }
+            console.time(`[collab] ${label} decode`);
             const decodeCtx = new AudioContext();
             buffer = await decodeCtx.decodeAudioData(arrayBuffer.slice(0));
             decodeCtx.close();
+            console.timeEnd(`[collab] ${label} decode`);
           }
         } catch (e) {
           if (cancelled) return;
@@ -270,59 +351,46 @@ export function CollabPage() {
                 : en,
             ),
           );
-          continue;
+          return;
         }
 
         if (cancelled) return;
 
-        // Key / BPM detection — check cache first, run Essentia if not yet analyzed
-        // For stem slots, analyze the full track (better harmonic content, same key)
+        // Viability check + key cache read — single IDB fetch
+        const cachedMeta = await getTrackMeta(slot.trackId);
+        // Compute + cache stem viability if not already known
+        const stemRole = slot.stemName ?? "full";
+        const viabilityKey = `${slot.trackId}:${stemRole}`;
+        const cachedViability = cachedMeta?.stemViability?.[stemRole];
+        if (cachedViability === undefined) {
+          const viable = computeStemViability(buffer);
+          viabilityMapRef.current.set(viabilityKey, viable);
+          const metaTitle = libraryRef.current.find((e) => e.id === slot.trackId)?.title ?? slot.trackId;
+          putTrackMeta({
+            ...(cachedMeta ?? { id: slot.trackId, title: metaTitle, duration: buffer.duration, addedAt: Date.now() }),
+            stemViability: { ...(cachedMeta?.stemViability ?? {}), [stemRole]: viable },
+          });
+        } else {
+          viabilityMapRef.current.set(viabilityKey, cachedViability);
+        }
+
         let detectedKey: string | null | undefined;
         let detectedBpm: number | undefined;
-        try {
-          const cached = await getTrackMeta(slot.trackId);
-          // Use cached result only if it's a real key string (not null — null means
-          // it was analyzed with stem audio before; re-try with full track)
-          if (cached && typeof cached.detectedKey === 'string') {
-            detectedKey = cached.detectedKey;
-            detectedBpm = cached.detectedBpm;
-          } else {
-            let analysisBuffer = buffer;
-            if (slot.stemName !== null) {
-              try {
-                let ab = await getCachedAudio(slot.trackId);
-                if (!ab) {
-                  const res = await fetch(`/api/audio/${slot.trackId}`);
-                  if (res.ok) {
-                    ab = await res.arrayBuffer();
-                    putCachedAudio(slot.trackId, ab.slice(0));
-                  }
-                }
-                if (ab) {
-                  const ctx = new AudioContext();
-                  analysisBuffer = await ctx.decodeAudioData(ab.slice(0));
-                  ctx.close();
-                }
-              } catch {
-                // fall back to stem audio
-              }
-            }
-            const result = await analyzeAudio(analysisBuffer);
-            detectedKey = result?.key ?? null;
-            detectedBpm = result?.bpm;
-            if (cached) {
-              await putTrackMeta({ ...cached, detectedKey, detectedBpm });
-            }
-          }
-        } catch {
-          detectedKey = null;
+        if (cachedMeta && cachedMeta.detectedKey !== undefined) {
+          detectedKey = cachedMeta.detectedKey;
+          detectedBpm = cachedMeta.detectedBpm;
+          console.log(`[collab] ${label} key cache: HIT (${detectedKey ?? "null"})`);
+        } else {
+          console.log(`[collab] ${label} key cache: MISS — Essentia will run in background`);
         }
+        // If not cached, detectedKey stays undefined — slot shows ? badge, Essentia runs later
 
         if (cancelled) return;
 
         const dur = buffer.duration;
         const pk = pendingKey(slot.trackId, slot.stemName);
         const pendingSlot = pendingSessionSlotsRef.current.get(pk);
+        const saved = pendingSlot ? null : loadSlotSettings(slot.id, slot.trackId, slot.stemName);
         let finalSlot: CollabSlot;
         if (pendingSlot) {
           pendingSessionSlotsRef.current.delete(pk);
@@ -333,7 +401,7 @@ export function CollabPage() {
             loopEnd: Math.min(dur, pendingSlot.loopEnd > 0 ? pendingSlot.loopEnd : dur),
           };
         } else {
-          const saved = loadSlotSettings(slot.trackId, slot.stemName);
+          const stemRole: StemRole = slot.stemName ?? "full";
           finalSlot = {
             ...slot,
             loopStart: saved ? Math.max(0, saved.loopStartFrac * dur) : 0,
@@ -341,77 +409,73 @@ export function CollabPage() {
             speed: saved?.speed ?? slot.speed,
             pitch: saved?.pitch ?? slot.pitch,
             linkPitch: saved?.linkPitch ?? slot.linkPitch,
-            gain: saved?.gain ?? slot.gain,
+            gain: saved?.gain ?? computeAutoGain(buffer),
             muted: saved?.muted ?? slot.muted,
-            effects: saved?.effects ?? slot.effects,
+            effects: saved?.effects ?? sanitizeEffects({ ...DRY_EFFECTS }),
           };
         }
 
-        // Restore saved matched state (overridden below if live auto-match runs)
-        let autoMatched = finalSlot.isMatched ?? false;
-        let matchedBasePitch = finalSlot.matchedBasePitch ?? 0;
-        const savedForMatch = loadSlotSettings(slot.trackId, slot.stemName);
-        if (!autoMatched && savedForMatch?.isMatched) {
-          autoMatched = true;
-          matchedBasePitch = savedForMatch.matchedBasePitch ?? 0;
-        }
-        const pitchInterval: 1 | 7 | 12 = savedForMatch?.pitchInterval ?? 12;
+        const isMatched = saved?.isMatched ?? false;
+        const matchedBasePitch = saved?.matchedBasePitch ?? 0;
+        const pitchInterval: 1 | 7 | 12 = saved?.pitchInterval ?? 12;
 
-
-        // Auto-match to reference if one is pinned and this is not the reference.
-        // Skip if already matched from saved state — trust the saved pitch (user may have octave-shifted).
-        const currentRefId = referenceSlotIdRef.current;
-        if (currentRefId && slot.id !== currentRefId && !autoMatched) {
-          const refEntry = entriesRef.current.find((e) => e.slot.id === currentRefId);
-          if (refEntry) {
-            const speed = refEntry.slot.speed;
-            const linkPitch = refEntry.slot.linkPitch;
-            let pitch = 0;
-            const refKey = refEntry.detectedKey;
-            if (refKey && detectedKey) {
-              const refSem = rootSemitone(refKey);
-              const tgtSem = rootSemitone(detectedKey);
-              if (refSem !== null && tgtSem !== null) {
-                pitch = refEntry.slot.pitch - (tgtSem - refSem);
-              }
-            }
-            finalSlot = { ...finalSlot, speed, pitch, linkPitch };
-            autoMatched = true;
-            matchedBasePitch = pitch;
-          }
-        }
-
-        const title =
-          library.find((e) => e.id === slot.trackId)?.title ?? slot.trackId;
+        const title = libraryRef.current.find((e) => e.id === slot.trackId)?.title ?? slot.trackId;
 
         if (cancelled) return;
 
         await collabEngine.addSlot(finalSlot, buffer);
+        console.timeEnd(`[collab] ${label} total`);
+        console.log(`[collab] ${label} READY (key: ${detectedKey ?? "pending"})`);
 
+        // Slot is now playable — display immediately
         setEntries((prev) =>
           prev.map((en) =>
             en.slot.id === slot.id
-              ? { ...en, slot: finalSlot, title, loading: false, error: null, buffer, detectedKey, detectedBpm, isMatched: autoMatched, matchedBasePitch, pitchInterval }
+              ? { ...en, slot: finalSlot, title, loading: false, error: null, buffer, detectedKey, detectedBpm, isMatched, matchedBasePitch, pitchInterval }
               : en,
           ),
         );
 
-        if (autoMatched) {
-          const dur = buffer.duration;
-          saveSlotSettings(finalSlot.trackId, finalSlot.stemName, {
-            speed: finalSlot.speed,
-            pitch: finalSlot.pitch,
-            linkPitch: finalSlot.linkPitch,
-            gain: finalSlot.gain,
-            muted: finalSlot.muted,
-            effects: finalSlot.effects,
-            loopStartFrac: finalSlot.loopStart / dur,
-            loopEndFrac: finalSlot.loopEnd / dur,
-            isMatched: true,
-            matchedBasePitch,
-          });
+        if (!pendingSlot) {
+          // Always write to stable key so settings survive across page loads (UUIDs are ephemeral)
+          saveSlotSettings(finalSlot.id, {
+            speed: finalSlot.speed, pitch: finalSlot.pitch, linkPitch: finalSlot.linkPitch,
+            gain: finalSlot.gain, muted: finalSlot.muted, effects: finalSlot.effects,
+            loopStartFrac: finalSlot.loopStart / dur, loopEndFrac: finalSlot.loopEnd / dur,
+          }, finalSlot.trackId, finalSlot.stemName);
         }
-      }
+
+        // Background key detection — only if not already cached
+        if (cachedMeta?.detectedKey === undefined) {
+          (async () => {
+            try {
+              console.time(`[collab] ${label} essentia`);
+              const result = await analyzeAudio(buffer);
+              console.timeEnd(`[collab] ${label} essentia`);
+              console.log(`[collab] ${label} key detected: ${result?.key ?? "null"}`);
+              if (cancelled) return;
+              const key = result?.key ?? null;
+              const bpm = result?.bpm;
+              const metaTitle = libraryRef.current.find((e) => e.id === slot.trackId)?.title ?? slot.trackId;
+              await putTrackMeta({
+                ...(cachedMeta ?? { id: slot.trackId, title: metaTitle, duration: dur, addedAt: Date.now() }),
+                detectedKey: key,
+                detectedBpm: bpm,
+              });
+              if (cancelled) return;
+
+              // Update key badge only — matching is manual via "Match All"
+              setEntries((prev) =>
+                prev.map((en) =>
+                  en.slot.id === slot.id ? { ...en, detectedKey: key, detectedBpm: bpm } : en,
+                ),
+              );
+            } catch {
+              if (!cancelled) setEntries((prev) => prev.map((en) => en.slot.id === slot.id ? { ...en, detectedKey: null } : en));
+            }
+          })();
+        }
+      }));
     })();
 
     return () => { cancelled = true; };
@@ -424,15 +488,14 @@ export function CollabPage() {
         const clearMatch = patch.speed !== undefined;
         const updated = { ...e, slot: { ...e.slot, ...patch }, isMatched: clearMatch ? false : e.isMatched };
         if (clearMatch) {
-          // Persist cleared matched state
           const dur = e.buffer?.duration ?? 1;
           const s = updated.slot;
-          saveSlotSettings(s.trackId, s.stemName, {
+          saveSlotSettings(s.id, {
             speed: s.speed, pitch: s.pitch, linkPitch: s.linkPitch,
             gain: s.gain, muted: s.muted, effects: s.effects,
             loopStartFrac: s.loopStart / dur, loopEndFrac: s.loopEnd / dur,
             isMatched: false, matchedBasePitch: 0,
-          });
+          }, s.trackId, s.stemName);
         }
         return updated;
       }),
@@ -452,9 +515,10 @@ export function CollabPage() {
   function handlePickerConfirm(trackId: string, stemName: StemName | null) {
     setShowPicker(false);
     if (entries.length >= MAX_STEMS) return;
+    const uuid = crypto.randomUUID();
+    const token = stemName ? `${uuid}:${trackId}:${stemName}` : `${uuid}:${trackId}`;
     const current = encodeSlotsParam(entries);
-    const added = stemName ? `${trackId}:${stemName}` : trackId;
-    const param = current ? `${current},${added}` : added;
+    const param = current ? `${current},${token}` : token;
     navigate(`/collab?slots=${param}`);
   }
 
@@ -462,7 +526,6 @@ export function CollabPage() {
     const isAlreadyRef = referenceSlotIdRef.current === slotId;
     const newRefId = isAlreadyRef ? null : slotId;
     setReferenceSlotId(newRefId);
-    // Clear matched state on all slots — they're not matched to the new reference
     setEntries((prev) => prev.map((e) => ({ ...e, isMatched: false })));
     if (newRefId) {
       const entry = entriesRef.current.find((e) => e.slot.id === newRefId);
@@ -475,7 +538,7 @@ export function CollabPage() {
   function persistMatchedState(entry: SlotEntry, isMatched: boolean, matchedBasePitch: number) {
     const dur = entry.buffer?.duration ?? 1;
     const s = entry.slot;
-    saveSlotSettings(s.trackId, s.stemName, {
+    saveSlotSettings(s.id, {
       speed: s.speed,
       pitch: s.pitch,
       linkPitch: s.linkPitch,
@@ -486,7 +549,7 @@ export function CollabPage() {
       loopEndFrac: s.loopEnd / dur,
       isMatched,
       matchedBasePitch,
-    });
+    }, s.trackId, s.stemName);
   }
 
   function matchSlotToReference(targetSlotId: string) {
@@ -516,7 +579,6 @@ export function CollabPage() {
           : e,
       ),
     );
-    // Persist matched state so it survives reload
     persistMatchedState({ ...targetEntry, slot: { ...targetEntry.slot, speed, pitch, linkPitch } }, true, pitch);
   }
 
@@ -528,6 +590,56 @@ export function CollabPage() {
         matchSlotToReference(entry.slot.id);
       }
     }
+  }
+
+  function handleApplyGenre(genre: GenreName) {
+    setEntries((prev) => prev.map((e) => {
+      if (e.loading || e.error) return e;
+      const role: StemRole = e.slot.stemName ?? "full";
+      const overrides = GENRE_PRESETS[genre][role];
+      const newEffects = sanitizeEffects({ ...e.slot.effects, ...overrides });
+      const newSlot = { ...e.slot, effects: newEffects };
+      collabEngine.updateSlot(newSlot.id, { effects: newEffects });
+      const dur = e.buffer?.duration ?? 1;
+      saveSlotSettings(newSlot.id, {
+        speed: newSlot.speed, pitch: newSlot.pitch, linkPitch: newSlot.linkPitch,
+        gain: newSlot.gain, muted: newSlot.muted, effects: newEffects,
+        loopStartFrac: newSlot.loopStart / dur, loopEndFrac: newSlot.loopEnd / dur,
+      }, newSlot.trackId, newSlot.stemName);
+      return { ...e, slot: newSlot };
+    }));
+  }
+
+  function handleRandomizeAll() {
+    setEntries((prev) => prev.map((e) => {
+      if (e.loading || e.error) return e;
+      const role: StemRole = e.slot.stemName ?? "full";
+      const newEffects = randomizeEffects(e.slot.effects, role);
+      const newSlot = { ...e.slot, effects: newEffects };
+      collabEngine.updateSlot(newSlot.id, { effects: newEffects });
+      const dur = e.buffer?.duration ?? 1;
+      saveSlotSettings(newSlot.id, {
+        speed: newSlot.speed, pitch: newSlot.pitch, linkPitch: newSlot.linkPitch,
+        gain: newSlot.gain, muted: newSlot.muted, effects: newEffects,
+        loopStartFrac: newSlot.loopStart / dur, loopEndFrac: newSlot.loopEnd / dur,
+      }, newSlot.trackId, newSlot.stemName);
+      return { ...e, slot: newSlot };
+    }));
+  }
+
+  function handleRandomSession() {
+    const slots = buildRandomSlots(stemsLibrary, viabilityMapRef.current);
+    if (!slots) return;
+    const uuids = slots.map(() => crypto.randomUUID());
+    const param = slots.map((s, i) => `${uuids[i]}:${s.trackId}:${s.stemName}`).join(",");
+    // Prefer pitched stems as anchor — drums have no key so avoid them
+    const anchorPriority = ["vocals", "bass", "other", "drums"];
+    const anchorIdx = anchorPriority.reduce((best, stemName) => {
+      if (best !== -1) return best;
+      return slots.findIndex((s) => s.stemName === stemName);
+    }, -1);
+    pendingReferenceIdRef.current = uuids[anchorIdx === -1 ? 0 : anchorIdx];
+    navigate(`/collab?slots=${param}`);
   }
 
   function handleSaveSession() {
@@ -549,19 +661,22 @@ export function CollabPage() {
     collabEngine.setMasterSettings(ms);
     collabEngine.setThrowSettings(ms.throwSettings);
 
+    const slotsWithIds = session.slots.map((s) => ({
+      ...s,
+      id: crypto.randomUUID(), // always fresh so URL changes and reconciler re-runs
+    }));
+
     pendingSessionSlotsRef.current = new Map(
-      session.slots.map((s) => [pendingKey(s.trackId, s.stemName), s]),
+      slotsWithIds.map((s) => [pendingKey(s.trackId, s.stemName), s]),
     );
 
-    // Stage reference to be applied when reconciler runs
-    const refSlot = session.slots.find((s) => s.isReference);
-    pendingReferenceIdRef.current = refSlot
-      ? slotId(refSlot.trackId, refSlot.stemName)
-      : null;
+    const refSlot = slotsWithIds.find((s) => s.isReference);
+    pendingReferenceIdRef.current = refSlot ? refSlot.id : null;
 
-    const param = session.slots
-      .map((s) => (s.stemName ? `${s.trackId}:${s.stemName}` : s.trackId))
+    const param = slotsWithIds
+      .map((s) => s.stemName ? `${s.id}:${s.trackId}:${s.stemName}` : `${s.id}:${s.trackId}`)
       .join(",");
+    collabEngine.stop();
     navigate(param ? `/collab?slots=${param}` : "/collab");
   }
 
@@ -587,7 +702,18 @@ export function CollabPage() {
     };
     collabEngine.updateSlot(slotId, patch);
     setEntries((prev) =>
-      prev.map((e) => e.slot.id === slotId ? { ...e, slot: { ...e.slot, ...patch } } : e),
+      prev.map((e) => {
+        if (e.slot.id !== slotId) return e;
+        const s = { ...e.slot, ...patch };
+        const dur = e.buffer?.duration ?? 1;
+        saveSlotSettings(s.id, {
+          speed: s.speed, pitch: s.pitch, linkPitch: s.linkPitch,
+          gain: s.gain, muted: s.muted, effects: s.effects,
+          loopStartFrac: s.loopStart / dur, loopEndFrac: s.loopEnd / dur,
+          isMatched: false, matchedBasePitch: 0,
+        }, s.trackId, s.stemName);
+        return { ...e, slot: s, isMatched: false, matchedBasePitch: 0 };
+      }),
     );
   }
 
@@ -615,6 +741,46 @@ export function CollabPage() {
     saveThrowSettings(preset.settings);
   }
 
+  async function handleExport() {
+    setExportStatus("saving");
+    try {
+      await saveExportToServer(buildExport(masterSettings));
+      setExportStatus("saved");
+      setTimeout(() => setExportStatus("idle"), 2000);
+    } catch {
+      setExportStatus("error");
+      setTimeout(() => setExportStatus("idle"), 2000);
+    }
+  }
+
+  async function handleImport() {
+    setImportStatus("importing");
+    try {
+      const data = await loadExportFromServer();
+      if (!data) {
+        setImportStatus("none");
+        setTimeout(() => setImportStatus("idle"), 2000);
+        return;
+      }
+      if (!window.confirm("This will replace all existing sessions, presets, and settings. Continue?")) {
+        setImportStatus("idle");
+        return;
+      }
+      applyImport(data);
+      setNamedSessions(data.namedSessions);
+      setPresets(data.presets);
+      setThrowPresets(data.throwPresets);
+      setMasterSettings(data.masterSettings);
+      collabEngine.setMasterSettings(data.masterSettings);
+      collabEngine.setThrowSettings(data.masterSettings.throwSettings);
+      setImportStatus("imported");
+      setTimeout(() => setImportStatus("idle"), 2000);
+    } catch {
+      setImportStatus("error");
+      setTimeout(() => setImportStatus("idle"), 2000);
+    }
+  }
+
   async function handlePlayAll() {
     await collabEngine.play();
   }
@@ -629,7 +795,7 @@ export function CollabPage() {
 
   const portalTarget = document.getElementById("collab-transport-portal");
   const topBar = (
-    <div className="relative flex min-w-0 flex-1 items-center gap-2">
+    <div className="relative flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
         {/* Sessions dropdown button */}
         <button
           ref={sessionsBtnRef}
@@ -711,6 +877,32 @@ export function CollabPage() {
                 </button>
               )}
             </form>
+
+            <div className="flex items-center gap-2 border-t border-border/30 pt-2 mt-1">
+              <button
+                type="button"
+                onClick={handleImport}
+                disabled={importStatus === "importing"}
+                className="flex-1 rounded border border-border bg-muted/40 px-2 py-1.5 text-xs text-foreground/50 transition hover:text-foreground disabled:opacity-50"
+              >
+                {importStatus === "importing" ? "…"
+                  : importStatus === "imported" ? "Imported ✓"
+                  : importStatus === "none" ? "No saved state"
+                  : importStatus === "error" ? "Error"
+                  : "↑ Import"}
+              </button>
+              <button
+                type="button"
+                onClick={handleExport}
+                disabled={exportStatus === "saving"}
+                className="flex-1 rounded border border-border bg-muted/40 px-2 py-1.5 text-xs text-foreground/50 transition hover:text-foreground disabled:opacity-50"
+              >
+                {exportStatus === "saving" ? "…"
+                  : exportStatus === "saved" ? "Saved ✓"
+                  : exportStatus === "error" ? "Error"
+                  : "↓ Export"}
+              </button>
+            </div>
           </div>
         )}
 
@@ -731,6 +923,10 @@ export function CollabPage() {
           onApplyThrowPreset={handleApplyThrowPreset}
           isPlaying={isPlayingAll}
           onMatchAll={handleMatchAll}
+          onApplyGenre={handleApplyGenre}
+          onRandomizeAll={handleRandomizeAll}
+          onRandomSession={handleRandomSession}
+          randomDisabled={stemsLibrary.length < 2}
         />
 
         {entries.length > 0 && (
@@ -748,10 +944,16 @@ export function CollabPage() {
   return (
     <>
       {portalTarget && createPortal(topBar, portalTarget)}
-      <div className="grid min-h-0 flex-1 auto-rows-min grid-cols-2 gap-3 overflow-y-auto content-start">
+      <div className="grid min-h-0 flex-1 auto-rows-min grid-cols-1 sm:grid-cols-2 gap-3 overflow-y-auto content-start">
         {entries.length === 0 && !showPicker && (
-          <div className="col-span-2 flex items-center justify-center rounded-md border border-dashed border-border px-4 py-16 text-center text-sm text-foreground/40">
-            Add stems from any separated track and layer them together. Each stem gets its own speed, pitch, and effects.
+          <div className="col-span-2 flex items-center justify-center py-24">
+            <button
+              type="button"
+              onClick={() => setShowPicker(true)}
+              className="text-sm text-foreground/30 hover:text-foreground/60 transition"
+            >
+              + Add stem or track
+            </button>
           </div>
         )}
 
@@ -802,6 +1004,7 @@ export function CollabPage() {
               isMatched={!isReference && entry.isMatched}
               matchedBasePitch={entry.matchedBasePitch}
               pitchInterval={entry.pitchInterval}
+
               onPitchIntervalChange={(n) => setEntries((prev) => prev.map((e) => e.slot.id === entry.slot.id ? { ...e, pitchInterval: n } : e))}
               onRemove={() => handleRemoveSlot(entry.slot.id)}
               onChange={(patch) => handleSlotChange(entry.slot.id, patch)}
@@ -814,7 +1017,7 @@ export function CollabPage() {
           );
         })}
 
-        {entries.length < MAX_STEMS && !showPicker && (
+        {entries.length > 0 && entries.length < MAX_STEMS && !showPicker && (
           <button
             type="button"
             onClick={() => setShowPicker(true)}
@@ -826,8 +1029,10 @@ export function CollabPage() {
 
         {showPicker && (
           <SlotPicker
+            library={stemsLibrary}
             onConfirm={handlePickerConfirm}
             onClose={() => setShowPicker(false)}
+            onLibraryUpdated={(lib) => setStemsLibrary(lib)}
           />
         )}
       </div>

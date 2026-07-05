@@ -7,6 +7,7 @@ export interface CachedTrackMeta {
   addedAt: number;
   detectedKey?: string | null;  // undefined = not run; null = ran, failed/low-confidence; string = success
   detectedBpm?: number;
+  stemViability?: Record<string, boolean>; // key = stemName | "full"; undefined = not yet checked
 }
 
 export async function putTrackMeta(meta: CachedTrackMeta): Promise<void> {

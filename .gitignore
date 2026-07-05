@@ -6,6 +6,7 @@ build
 cache
 stems
 history.json
+collab-state.json
 
 .DS_Store
 *.log

@@ -9,6 +9,7 @@ import {
 } from "../../lib/collabSettings";
 import { DRY_EFFECTS, type StemName } from "../../audio/dubEngine";
 import { EFFECTS_LIMITS } from "../../store";
+import { randomizeEffects, type StemRole } from "../../lib/vibePresets";
 
 const STEM_LABELS: Record<StemName, string> = {
   drums: "Drums",
@@ -24,7 +25,7 @@ const STEM_COLORS: Record<StemName, string> = {
   other: "bg-emerald-500/15 text-emerald-400",
 };
 
-const WAVEFORM_H = 80;
+const WAVEFORM_H = 56;
 const LOOP_MIN_GAP = 0.05;
 
 // --- Waveform ---
@@ -270,6 +271,12 @@ function SlotWaveform({
   );
 }
 
+function formatTime(secs: number): string {
+  const s = Math.max(0, secs);
+  const m = Math.floor(s / 60);
+  return `${m}:${Math.floor(s % 60).toString().padStart(2, "0")}`;
+}
+
 // --- SlotStrip ---
 
 function formatKeyBadge(key: string | null | undefined): string {
@@ -310,6 +317,7 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
   const [throwActive, setThrowActive] = useState(false);
   const [activePreset, setActivePreset] = useState<string | null>(null);
   const [seekRevision, setSeekRevision] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
   const [presetsPanelOpen, setPresetsPanelOpen] = useState(false);
   const presetsPanelRef = useRef<HTMLDivElement>(null);
   const presetsBtnRef = useRef<HTMLButtonElement>(null);
@@ -319,6 +327,7 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
     const id = setInterval(() => {
       setIsPlaying(collabEngine.isSlotPlaying(slot.id));
       setThrowActive(collabEngine.isThrowActive(slot.id));
+      setCurrentTime(collabEngine.getSlotPosition(slot.id));
     }, 100);
     return () => clearInterval(id);
   }, [slot.id]);
@@ -347,8 +356,8 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
 
   function persistSettings(patch: Partial<CollabSlot>, overridePitchInterval?: 1 | 7 | 12) {
     const merged = { ...slot, ...patch };
-    const dur = buffer?.duration ?? 1;
-    saveSlotSettings(slot.trackId, slot.stemName, {
+    const dur = (buffer?.duration ?? 0) > 0 ? buffer!.duration : 1;
+    saveSlotSettings(slot.id, {
       speed: merged.speed,
       pitch: merged.pitch,
       linkPitch: merged.linkPitch,
@@ -360,7 +369,7 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
       isMatched,
       matchedBasePitch,
       pitchInterval: overridePitchInterval ?? pitchInterval,
-    });
+    }, slot.trackId, slot.stemName);
   }
 
   function update(patch: Partial<CollabSlot>) {
@@ -410,15 +419,28 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
 
   return (
     <div className={cn(
-      "flex flex-col gap-3 rounded-md border bg-muted/30 p-4 transition",
+      "flex flex-col gap-2 rounded-md border bg-muted/30 p-3 transition",
       slot.muted && "opacity-40",
       isReference ? "border-accent/60 ring-1 ring-accent/20 bg-accent/5" : "border-border",
     )}>
-      {/* Header: buttons left, title right */}
-      <div className="flex items-center gap-2">
-        <div className="flex items-center gap-1.5 shrink-0">
+      {/* Header: two rows — title row + controls row */}
+      <div className="flex flex-col gap-1.5">
+        {/* Row 1: stem label + title + remove */}
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={cn("shrink-0 rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider",
+            slot.stemName ? STEM_COLORS[slot.stemName as StemName] : "bg-zinc-500/15 text-zinc-400"
+          )}>
+            {slot.stemName ? STEM_LABELS[slot.stemName as StemName] : "Track"}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground/70">{title}</span>
+          <button type="button" onClick={onRemove}
+            className="shrink-0 text-foreground/20 transition hover:text-foreground/60 text-sm px-1"
+            aria-label="Remove">✕</button>
+        </div>
+        {/* Row 2: playback controls + key/match badges — wraps on narrow slots */}
+        <div className="flex items-center gap-1.5 flex-wrap">
           <button type="button" onClick={handlePlayStop} disabled={!buffer}
-            className={cn("rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
+            className={cn("rounded px-2 py-1 text-xs font-bold uppercase tracking-wide transition",
               isPlaying ? "bg-accent/25 text-accent ring-1 ring-accent/40" : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted",
               !buffer && "opacity-30 cursor-not-allowed")}>
             {isPlaying ? "⏸ Pause" : "▶ Play"}
@@ -430,17 +452,17 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
             ⏮
           </button>
           <button type="button" onClick={() => update({ soloed: !slot.soloed })}
-            className={cn("rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
+            className={cn("rounded px-2 py-1 text-xs font-bold uppercase tracking-wide transition",
               slot.soloed ? "bg-yellow-500/25 text-yellow-400 ring-1 ring-yellow-500/40" : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted")}>
             ✦ Solo
           </button>
           <button type="button" onClick={() => update({ muted: !slot.muted })}
-            className={cn("rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
+            className={cn("rounded px-2 py-1 text-xs font-bold uppercase tracking-wide transition",
               slot.muted ? "bg-red-500/25 text-red-400 ring-1 ring-red-500/40" : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted")}>
             {slot.muted ? "✕ Muted" : "◎ Mute"}
           </button>
           <button type="button" onClick={() => collabEngine.throwSlot(slot.id)} disabled={!buffer}
-            className={cn("rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
+            className={cn("rounded px-2 py-1 text-xs font-bold uppercase tracking-wide transition",
               throwActive
                 ? "bg-teal-500/25 text-teal-400 ring-1 ring-teal-400/60"
                 : "bg-muted/80 text-foreground/50 hover:text-teal-400 hover:bg-muted",
@@ -448,9 +470,7 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
             title="Throw — tape echo burst + spring reverb">
             ↯ Throw
           </button>
-        </div>
-        <div className="flex flex-1 items-center gap-2 min-w-0 justify-end">
-          {/* Key badge — shown once buffer has loaded (detectedKey !== undefined) */}
+          {/* Key badge */}
           {detectedKey !== undefined && (
             <span
               title={detectedBpm ? `${detectedBpm} bpm` : undefined}
@@ -483,7 +503,7 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
                   const diff = slot.pitch - matchedBasePitch;
                   const step = Math.floor(diff / pitchInterval);
                   const snapped = matchedBasePitch + step * pitchInterval;
-                  const next = Math.abs(snapped - slot.pitch) < 0.01 ? snapped - pitchInterval : snapped;
+                  const next = Math.max(-24, Math.abs(snapped - slot.pitch) < 0.01 ? snapped - pitchInterval : snapped);
                   update({ pitch: next, linkPitch: false });
                 }}
                 className="px-1.5 py-0.5 text-[11px] text-accent/60 hover:text-accent hover:bg-accent/10 transition border-l border-accent/20"
@@ -495,7 +515,7 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
                   const diff = slot.pitch - matchedBasePitch;
                   const step = Math.ceil(diff / pitchInterval);
                   const snapped = matchedBasePitch + step * pitchInterval;
-                  const next = Math.abs(snapped - slot.pitch) < 0.01 ? snapped + pitchInterval : snapped;
+                  const next = Math.min(24, Math.abs(snapped - slot.pitch) < 0.01 ? snapped + pitchInterval : snapped);
                   update({ pitch: next, linkPitch: false });
                 }}
                 className="px-1.5 py-0.5 text-[11px] text-accent/60 hover:text-accent hover:bg-accent/10 transition border-l border-accent/20"
@@ -527,30 +547,28 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
               Match
             </button>
           )}
-          <span className={cn("shrink-0 rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider",
-            slot.stemName ? STEM_COLORS[slot.stemName as StemName] : "bg-zinc-500/15 text-zinc-400"
-          )}>
-            {slot.stemName ? STEM_LABELS[slot.stemName as StemName] : "Track"}
-          </span>
-          <span className="min-w-0 truncate text-sm font-medium text-foreground/70">{title}</span>
-          <button type="button" onClick={onRemove}
-            className="shrink-0 text-foreground/20 transition hover:text-foreground/60 text-sm px-1"
-            aria-label="Remove">✕</button>
         </div>
       </div>
 
       {/* Waveform */}
       {buffer ? (
-        <SlotWaveform
-          buffer={buffer}
-          isPlaying={isPlaying}
-          loopStart={slot.loopStart}
-          loopEnd={slot.loopEnd}
-          seekRevision={seekRevision}
-          getPosition={() => collabEngine.getSlotPosition(slot.id)}
-          onLoopChange={(start, end) => update({ loopStart: start, loopEnd: end })}
-          onSeek={(time) => { collabEngine.seekSlot(slot.id, time); setSeekRevision((n) => n + 1); }}
-        />
+        <div className="relative">
+          <SlotWaveform
+            buffer={buffer}
+            isPlaying={isPlaying}
+            loopStart={slot.loopStart}
+            loopEnd={slot.loopEnd}
+            seekRevision={seekRevision}
+            getPosition={() => collabEngine.getSlotPosition(slot.id)}
+            onLoopChange={(start, end) => update({ loopStart: start, loopEnd: end })}
+            onSeek={(time) => { collabEngine.seekSlot(slot.id, time); setSeekRevision((n) => n + 1); }}
+          />
+          <div className="pointer-events-none absolute bottom-1 left-1.5 flex gap-1.5 text-[9px] font-mono tabular-nums text-white/40">
+            <span>{formatTime(currentTime)}</span>
+            <span className="text-white/20">/</span>
+            <span>{formatTime(slot.loopEnd - slot.loopStart)}</span>
+          </div>
+        </div>
       ) : (
         <div style={{ height: WAVEFORM_H }} className="w-full rounded bg-muted/30 flex items-center justify-center text-[10px] text-foreground/20">
           loading…
@@ -558,13 +576,13 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
       )}
 
       {/* Knobs */}
-      <div className="flex flex-wrap gap-x-4 gap-y-3 border-t border-border/50 pt-3">
-        <Knob label="Gain" value={slot.gain} min={-24} max={6} step={0.5} defaultValue={0}
+      <div className="flex flex-wrap gap-x-3 gap-y-2 border-t border-border/50 pt-2">
+        <Knob label="Gain" value={slot.gain} min={-24} max={6} step={0.5} defaultValue={0} size={40}
           displayValue={`${slot.gain > 0 ? "+" : ""}${slot.gain.toFixed(1)}dB`} onChange={(v) => update({ gain: v })} />
-        <Knob label="Speed" value={slot.speed} min={0.1} max={1} step={0.01} defaultValue={1}
+        <Knob label="Speed" value={slot.speed} min={0.1} max={1} step={0.01} defaultValue={1} size={40}
           displayValue={`${slot.speed.toFixed(2)}×`} onChange={(v) => update({ speed: v })} />
         <div className="flex flex-col items-center gap-0.5">
-          <Knob label="Pitch" value={slot.pitch} min={-12} max={12} step={1} defaultValue={0}
+          <Knob label="Pitch" value={slot.pitch} min={-24} max={24} step={1} defaultValue={0} size={40}
             displayValue={`${slot.pitch > 0 ? "+" : ""}${slot.pitch}st`} disabled={slot.linkPitch}
             onChange={(v) => update({ pitch: v })} />
           <button type="button" onClick={() => update({ linkPitch: !slot.linkPitch })}
@@ -573,51 +591,54 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
             Link
           </button>
         </div>
-        <Knob label="Reverb" value={slot.effects.reverbWet} min={EFFECTS_LIMITS.reverbWet.min} max={EFFECTS_LIMITS.reverbWet.max} step={0.01} defaultValue={0}
+        <Knob label="Reverb" value={slot.effects.reverbWet} min={EFFECTS_LIMITS.reverbWet.min} max={EFFECTS_LIMITS.reverbWet.max} step={0.01} defaultValue={0} size={40}
           displayValue={`${Math.round(slot.effects.reverbWet * 100)}%`} onChange={(v) => updateEffect({ reverbWet: v })} />
-        <Knob label="Decay" value={slot.effects.reverbDecay} min={EFFECTS_LIMITS.reverbDecay.min} max={EFFECTS_LIMITS.reverbDecay.max} step={0.1} defaultValue={0.1}
+        <Knob label="Decay" value={slot.effects.reverbDecay} min={EFFECTS_LIMITS.reverbDecay.min} max={EFFECTS_LIMITS.reverbDecay.max} step={0.1} defaultValue={0.1} size={40}
           displayValue={`${slot.effects.reverbDecay.toFixed(1)}s`} onChange={(v) => updateEffect({ reverbDecay: v })} />
-        <Knob label="Delay" value={slot.effects.delayWet} min={EFFECTS_LIMITS.delayWet.min} max={EFFECTS_LIMITS.delayWet.max} step={0.01} defaultValue={0}
+        <Knob label="Delay" value={slot.effects.delayWet} min={EFFECTS_LIMITS.delayWet.min} max={EFFECTS_LIMITS.delayWet.max} step={0.01} defaultValue={0} size={40}
           displayValue={`${Math.round(slot.effects.delayWet * 100)}%`} onChange={(v) => updateEffect({ delayWet: v })} />
-        <Knob label="D.Time" value={slot.effects.delayTime} min={EFFECTS_LIMITS.delayTime.min} max={EFFECTS_LIMITS.delayTime.max} step={0.01} defaultValue={0}
+        <Knob label="D.Time" value={slot.effects.delayTime} min={EFFECTS_LIMITS.delayTime.min} max={EFFECTS_LIMITS.delayTime.max} step={0.01} defaultValue={0} size={40}
           displayValue={`${slot.effects.delayTime.toFixed(2)}s`} onChange={(v) => updateEffect({ delayTime: v })} />
-        <Knob label="D.Feedbk" value={slot.effects.delayFeedback} min={EFFECTS_LIMITS.delayFeedback.min} max={EFFECTS_LIMITS.delayFeedback.max} step={0.01} defaultValue={0}
+        <Knob label="D.Feedbk" value={slot.effects.delayFeedback} min={EFFECTS_LIMITS.delayFeedback.min} max={EFFECTS_LIMITS.delayFeedback.max} step={0.01} defaultValue={0} size={40}
           displayValue={`${Math.round(slot.effects.delayFeedback * 100)}%`} onChange={(v) => updateEffect({ delayFeedback: v })} />
-        <Knob label="Bass" value={slot.effects.bassBoost} min={EFFECTS_LIMITS.bassBoost.min} max={EFFECTS_LIMITS.bassBoost.max} step={1} defaultValue={0}
-          displayValue={`${slot.effects.bassBoost > 0 ? "+" : ""}${slot.effects.bassBoost}dB`} onChange={(v) => updateEffect({ bassBoost: v })} />
-        <Knob label="Grit" value={slot.effects.grit ?? 0} min={0} max={1} step={0.01} defaultValue={0}
+        <Knob label="Bass" value={slot.effects.bassBoost} min={EFFECTS_LIMITS.bassBoost.min} max={EFFECTS_LIMITS.bassBoost.max} step={1} defaultValue={0} size={40}
+          displayValue={`${slot.effects.bassBoost > 0 ? "+" : ""}${Math.round(slot.effects.bassBoost)}dB`} onChange={(v) => updateEffect({ bassBoost: v })} />
+        <Knob label="Grit" value={slot.effects.grit ?? 0} min={0} max={1} step={0.01} defaultValue={0} size={40}
           displayValue={`${Math.round((slot.effects.grit ?? 0) * 100)}%`} onChange={(v) => updateEffect({ grit: v })} />
-        <Knob label="S.Echo" value={slot.effects.spaceEchoWow ?? 0} min={0} max={1} step={0.01} defaultValue={0}
+        <Knob label="S.Echo" value={slot.effects.spaceEchoWow ?? 0} min={0} max={1} step={0.01} defaultValue={0} size={40}
           displayValue={`${Math.round((slot.effects.spaceEchoWow ?? 0) * 100)}%`} onChange={(v) => updateEffect({ spaceEchoWow: v })} />
-        <Knob label="B.Knob" value={slot.effects.bigKnobWet ?? 0} min={0} max={1} step={0.01} defaultValue={0}
+        <Knob label="B.Knob" value={slot.effects.bigKnobWet ?? 0} min={0} max={1} step={0.01} defaultValue={0} size={40}
           displayValue={`${Math.round((slot.effects.bigKnobWet ?? 0) * 100)}%`} onChange={(v) => updateEffect({ bigKnobWet: v })} />
-        <Knob label="EQ Lo" value={slot.effects.eqLow ?? 0} min={-12} max={12} step={0.5} defaultValue={0}
+        <Knob label="EQ Lo" value={slot.effects.eqLow ?? 0} min={-12} max={12} step={0.5} defaultValue={0} size={40}
           displayValue={`${(slot.effects.eqLow ?? 0) > 0 ? "+" : ""}${(slot.effects.eqLow ?? 0).toFixed(1)}dB`} onChange={(v) => updateEffect({ eqLow: v })} />
-        <Knob label="EQ Mid" value={slot.effects.eqMid ?? 0} min={-12} max={12} step={0.5} defaultValue={0}
+        <Knob label="EQ Mid" value={slot.effects.eqMid ?? 0} min={-12} max={12} step={0.5} defaultValue={0} size={40}
           displayValue={`${(slot.effects.eqMid ?? 0) > 0 ? "+" : ""}${(slot.effects.eqMid ?? 0).toFixed(1)}dB`} onChange={(v) => updateEffect({ eqMid: v })} />
-        <Knob label="EQ Hi" value={slot.effects.eqHigh ?? 0} min={-12} max={12} step={0.5} defaultValue={0}
+        <Knob label="EQ Hi" value={slot.effects.eqHigh ?? 0} min={-12} max={12} step={0.5} defaultValue={0} size={40}
           displayValue={`${(slot.effects.eqHigh ?? 0) > 0 ? "+" : ""}${(slot.effects.eqHigh ?? 0).toFixed(1)}dB`} onChange={(v) => updateEffect({ eqHigh: v })} />
-        <Knob label="Phaser" value={slot.effects.phaserWet ?? 0} min={0} max={1} step={0.01} defaultValue={0}
+        <Knob label="Phaser" value={slot.effects.phaserWet ?? 0} min={0} max={1} step={0.01} defaultValue={0} size={40}
           displayValue={`${Math.round((slot.effects.phaserWet ?? 0) * 100)}%`} onChange={(v) => updateEffect({ phaserWet: v })} />
-        <Knob label="Chorus" value={slot.effects.chorusWet ?? 0} min={0} max={1} step={0.01} defaultValue={0}
+        <Knob label="Chorus" value={slot.effects.chorusWet ?? 0} min={0} max={1} step={0.01} defaultValue={0} size={40}
           displayValue={`${Math.round((slot.effects.chorusWet ?? 0) * 100)}%`} onChange={(v) => updateEffect({ chorusWet: v })} />
-        <div className="flex flex-col items-center justify-end gap-0.5 ml-auto">
-          <button type="button" onClick={handleReset}
-            className="rounded px-2 py-1 text-[9px] uppercase tracking-wide font-semibold text-foreground/30 bg-muted/60 hover:text-foreground/60 hover:bg-muted transition">
-            ↺ Reset
-          </button>
-        </div>
       </div>
 
-      {/* Presets dropdown */}
-      <div className="relative border-t border-border/50 pt-3">
+      {/* Presets row */}
+      <div className="relative flex items-center gap-2 border-t border-border/50 pt-2">
         <button
           ref={presetsBtnRef}
           type="button"
           onClick={() => setPresetsPanelOpen((o) => !o)}
-          className="text-[10px] uppercase tracking-wide text-foreground/40 hover:text-foreground/70 transition"
+          className="text-[10px] uppercase tracking-wide text-foreground/40 hover:text-foreground/70 transition flex-1"
         >
           Presets {presets.length > 0 ? `(${presets.length})` : ""}{activePreset ? ` · ${activePreset}` : ""} {presetsPanelOpen ? "▲" : "▼"}
+        </button>
+        <button type="button" onClick={handleReset}
+          className="rounded px-2 py-0.5 text-[9px] uppercase tracking-wide font-semibold text-foreground/25 hover:text-foreground/60 hover:bg-muted transition">
+          ↺ Reset
+        </button>
+        <button type="button"
+          onClick={() => { const role: StemRole = slot.stemName ?? "full"; update({ effects: randomizeEffects(slot.effects, role) }); }}
+          className="rounded px-2 py-0.5 text-[9px] uppercase tracking-wide font-semibold text-foreground/25 hover:text-foreground/60 hover:bg-muted transition">
+          ⚄ Rand
         </button>
         {presetsPanelOpen && (
           <div

@@ -61,12 +61,17 @@ export async function createOfflineCollabEqChain(
   if (bigWet > 0) {
     const sampleRate = Tone.getContext().sampleRate;
     const springIR = synthesizeSpringImpulse(sampleRate);
-    const springConvolver = Tone.getContext().createConvolver();
-    springConvolver.normalize = true;
+    const springConvolver = Tone.getContext().rawContext.createConvolver();
+    springConvolver.normalize = false;
     springConvolver.buffer = springIR;
+    const springLp = Tone.getContext().rawContext.createBiquadFilter();
+    springLp.type = "lowpass";
+    springLp.frequency.value = 3200;
+    springLp.Q.value = 0.5;
     const springWet = new Tone.Gain(bigWet).connect(output);
     gain.connect(springConvolver);
-    springConvolver.connect(springWet.input);
+    springConvolver.connect(springLp);
+    springLp.connect(springWet.input);
   }
 
   // TapeDelay (Space Echo) — LFO runs natively in Tone.Offline so wow bakes in

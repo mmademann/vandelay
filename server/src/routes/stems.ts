@@ -13,7 +13,7 @@ const ID_RE = /^[a-zA-Z0-9_-]{11}$/;
 
 const PostBody = z.object({ url: z.string().url() });
 
-/** POST /api/stems — download + separate. Blocks until demucs finishes. */
+/** POST /api/stems — download WAV (blocking), then separate in background. Returns 202 immediately after download. */
 router.post("/stems", async (req, res) => {
   const parsed = PostBody.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Invalid body" });
@@ -22,19 +22,23 @@ router.post("/stems", async (req, res) => {
   if (!id) return res.status(400).json({ error: "Could not extract YouTube video ID" });
 
   try {
-    // Ensure source WAV exists (reuses cache if already downloaded)
+    // Download WAV first — demucs needs it on disk before it can start
     const info = await extractAudio(id);
 
-    const cached = stemsReady(id);
-    if (!cached) {
-      await separateStems(id);
-    }
-    if (!stemsMp3Ready(id)) {
-      await transcodeStems(id);
+    // Already fully done — return 200 immediately
+    if (stemsReady(id) && stemsMp3Ready(id)) {
+      recordHistory({ id: info.id, title: info.title, duration: info.duration });
+      return res.json({ id, title: info.title, duration: info.duration, stems: STEM_NAMES, cached: true });
     }
 
-    recordHistory({ id: info.id, title: info.title, duration: info.duration });
-    res.json({ id, title: info.title, duration: info.duration, stems: STEM_NAMES, cached });
+    // Fire-and-forget separation; browser polls GET /api/stems/:id/status for completion
+    Promise.resolve()
+      .then(() => stemsReady(id) ? Promise.resolve() : separateStems(id))
+      .then(() => stemsMp3Ready(id) ? Promise.resolve() : transcodeStems(id))
+      .then(() => recordHistory({ id: info.id, title: info.title, duration: info.duration }))
+      .catch((e) => console.error(`[stems] background separation failed for ${id}:`, e instanceof Error ? e.message : e));
+
+    return res.status(202).json({ id, title: info.title });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error";
     res.status(500).json({ error: message });
@@ -57,6 +61,7 @@ router.get("/stems/library", (_req, res) => {
   const titleMap = new Map(history.map((e) => [e.id, e.title]));
 
   const results = ids.map((id) => ({ id, title: titleMap.get(id) ?? id }));
+  res.setHeader("Cache-Control", "public, max-age=10");
   res.json(results);
 });
 

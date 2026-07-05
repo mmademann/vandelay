@@ -19,7 +19,7 @@ export interface CollabSlot {
   matchedBasePitch?: number;
 }
 
-// Per-slot saved settings (keyed by trackId:stemName)
+// Per-slot saved settings (keyed by slot UUID)
 export interface CollabSlotSavedSettings {
   speed: number;
   pitch: number;
@@ -36,10 +36,6 @@ export interface CollabSlotSavedSettings {
 
 const SLOT_SETTINGS_KEY = "vandelay:collab:slot-settings:v1";
 
-function slotKey(trackId: string, stemName: StemName | null): string {
-  return stemName ? `${trackId}:${stemName}` : trackId;
-}
-
 function loadAllSlotSettings(): Record<string, CollabSlotSavedSettings> {
   try {
     const raw = localStorage.getItem(SLOT_SETTINGS_KEY);
@@ -48,14 +44,30 @@ function loadAllSlotSettings(): Record<string, CollabSlotSavedSettings> {
   } catch { return {}; }
 }
 
-export function loadSlotSettings(trackId: string, stemName: StemName | null): CollabSlotSavedSettings | null {
+export function loadSlotSettings(uuid: string, fallbackTrackId?: string, fallbackStemName?: StemName | null): CollabSlotSavedSettings | null {
   const all = loadAllSlotSettings();
-  return all[slotKey(trackId, stemName)] ?? null;
+  if (all[uuid]) return all[uuid];
+  // Migrate legacy trackId:stemName key to UUID on first access
+  if (fallbackTrackId !== undefined) {
+    const oldKey = fallbackStemName ? `${fallbackTrackId}:${fallbackStemName}` : fallbackTrackId;
+    const legacy = all[oldKey];
+    if (legacy) {
+      all[uuid] = legacy;
+      try { localStorage.setItem(SLOT_SETTINGS_KEY, JSON.stringify(all)); } catch {}
+      return legacy;
+    }
+  }
+  return null;
 }
 
-export function saveSlotSettings(trackId: string, stemName: StemName | null, settings: CollabSlotSavedSettings): void {
+export function saveSlotSettings(uuid: string, settings: CollabSlotSavedSettings, trackId?: string, stemName?: StemName | null): void {
   const all = loadAllSlotSettings();
-  all[slotKey(trackId, stemName)] = settings;
+  all[uuid] = settings;
+  // Also write to stable key so settings survive page reloads (UUIDs are ephemeral)
+  if (trackId) {
+    const stableKey = stemName ? `${trackId}:${stemName}` : trackId;
+    all[stableKey] = settings;
+  }
   try { localStorage.setItem(SLOT_SETTINGS_KEY, JSON.stringify(all)); } catch {}
 }
 

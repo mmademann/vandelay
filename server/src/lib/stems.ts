@@ -110,16 +110,19 @@ export function separateStems(id: string): Promise<void> {
       "-n", "htdemucs",
       "-o", STEMS_DIR,
       wavPath,
-    ], { env: { ...process.env, TORCHAUDIO_BACKEND: "soundfile" } });
+    ], { env: { ...process.env, TORCHAUDIO_BACKEND: "soundfile" }, detached: true });
+
+    // detach so demucs survives server restarts (tsx watch)
+    proc.unref();
 
     const timer = setTimeout(() => {
-      proc.kill("SIGKILL");
+      try { process.kill(-proc.pid!, "SIGKILL"); } catch {}
       reject(new Error(`demucs timed out after ${TIMEOUT_MS / 60000} minutes`));
     }, TIMEOUT_MS);
 
     let stderr = "";
-    proc.stderr.on("data", (d) => { stderr += d.toString(); });
-    proc.stdout.on("data", () => {});
+    proc.stderr.on("data", (d) => { const s = d.toString(); stderr += s; process.stderr.write(s); });
+    proc.stdout.on("data", (d) => { process.stdout.write(d); });
     proc.on("error", (e) => { clearTimeout(timer); reject(e); });
     proc.on("close", (code) => {
       clearTimeout(timer);

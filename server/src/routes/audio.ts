@@ -30,6 +30,7 @@ router.post("/audio", async (req, res) => {
 });
 
 router.get("/history", (_req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=10");
   res.json(readHistory());
 });
 
@@ -53,6 +54,7 @@ router.get("/audio/:id", (req, res) => {
 
   res.setHeader("Content-Type", "audio/wav");
   res.setHeader("Accept-Ranges", "bytes");
+  res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
 
   if (!range) {
     res.setHeader("Content-Length", stat.size);

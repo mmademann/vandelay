@@ -15,8 +15,10 @@ const STEM_LABELS: Record<StemName, string> = {
 };
 
 interface Props {
+  library?: LibraryEntry[];
   onConfirm: (trackId: string, stemName: StemName | null) => void;
   onClose: () => void;
+  onLibraryUpdated?: (library: LibraryEntry[]) => void;
 }
 
 function extractVideoId(input: string): string {
@@ -36,9 +38,9 @@ function extractVideoId(input: string): string {
   return input.trim();
 }
 
-export function SlotPicker({ onConfirm, onClose }: Props) {
-  const [library, setLibrary] = useState<LibraryEntry[]>([]);
-  const [libraryLoading, setLibraryLoading] = useState(true);
+export function SlotPicker({ library: libraryProp, onConfirm, onClose, onLibraryUpdated }: Props) {
+  const [library, setLibrary] = useState<LibraryEntry[]>(libraryProp ?? []);
+  const [libraryLoading, setLibraryLoading] = useState(libraryProp === undefined);
   const [search, setSearch] = useState("");
   const [selectedTrack, setSelectedTrack] = useState<LibraryEntry | null>(null);
 
@@ -56,8 +58,8 @@ export function SlotPicker({ onConfirm, onClose }: Props) {
   }
 
   useEffect(() => {
+    if (libraryProp !== undefined) return;
     const controller = new AbortController();
-    setLibraryLoading(true);
     Promise.resolve()
       .then(() => fetchLibrary(controller.signal))
       .then((data) => {
@@ -71,7 +73,7 @@ export function SlotPicker({ onConfirm, onClose }: Props) {
         setLibraryLoading(false);
       });
     return () => { controller.abort(); };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     return () => {
@@ -98,7 +100,15 @@ export function SlotPicker({ onConfirm, onClose }: Props) {
 
       const title = data.title ?? id;
 
+      let retries = 0;
+      const MAX_RETRIES = 180; // 6 min at 2s
       pollRef.current = setInterval(async () => {
+        if (++retries > MAX_RETRIES) {
+          if (pollRef.current) clearInterval(pollRef.current);
+          setSeparating(false);
+          setUrlError("Separation timed out — check server logs");
+          return;
+        }
         try {
           const statusRes = await fetch(`/api/stems/${id}/status`);
           if (!statusRes.ok) return;
@@ -109,6 +119,7 @@ export function SlotPicker({ onConfirm, onClose }: Props) {
 
           const updatedLibrary = await fetchLibrary();
           setLibrary(updatedLibrary);
+          onLibraryUpdated?.(updatedLibrary);
           setSeparating(false);
           setUrlInput("");
 
@@ -156,7 +167,7 @@ export function SlotPicker({ onConfirm, onClose }: Props) {
             {separating ? "…" : "Add"}
           </button>
         </div>
-        {separating && <div className="text-xs text-foreground/50">Separating… 1–2 min</div>}
+        {separating && <div className="text-xs text-foreground/50">Separating… 5–10 min</div>}
         {urlError && <div className="text-xs text-red-400">{urlError}</div>}
       </div>
 

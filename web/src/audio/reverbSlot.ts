@@ -58,25 +58,25 @@ export function synthesizeSpringImpulse(sampleRate: number): AudioBuffer {
   const left = buffer.getChannelData(0);
   const right = buffer.getChannelData(1);
 
-  // Initial transient after pre-delay
+  // Initial transient after pre-delay — kept small so it doesn't dominate the IR
   if (preDelaySamples < length) {
-    left[preDelaySamples] = 0.9;
-    right[preDelaySamples] = 0.85;
+    left[preDelaySamples] = 0.2;
+    right[preDelaySamples] = 0.18;
   }
 
-  // Metallic resonance at ~1.5kHz decaying over the tail
-  const resonanceFreq = 1500;
+  // Metallic resonance at ~700Hz decaying over the tail
+  const resonanceFreq = 700;
   const twoPiF = (2 * Math.PI * resonanceFreq) / sampleRate;
   let lpL = 0;
   let lpR = 0;
   for (let i = preDelaySamples + 1; i < length; i++) {
     const t = (i - preDelaySamples) / (length - preDelaySamples);
     const env = Math.exp(-3.5 * t) * (1 - Math.exp(-40 * t));
-    const resonance = Math.sin(twoPiF * i) * 0.3;
+    const resonance = Math.sin(twoPiF * i) * 0.25;
     const nL = ((Math.random() * 2 - 1) * env + resonance * env);
-    const nR = ((Math.random() * 2 - 1) * env + resonance * env * 0.85); // narrower stereo
-    lpL = lpL * 0.88 + nL * 0.12;
-    lpR = lpR * 0.87 + nR * 0.13;
+    const nR = ((Math.random() * 2 - 1) * env + resonance * env * 0.85);
+    lpL = lpL * 0.94 + nL * 0.06;
+    lpR = lpR * 0.93 + nR * 0.07;
     left[i] = lpL * 0.15;
     right[i] = lpR * 0.15;
   }
@@ -85,7 +85,7 @@ export function synthesizeSpringImpulse(sampleRate: number): AudioBuffer {
   for (let i = 0; i < length; i++) {
     peak = Math.max(peak, Math.abs(left[i]), Math.abs(right[i]));
   }
-  const gain = 0.8 / (peak || 1);
+  const gain = 0.35 / (peak || 1);
   for (let i = 0; i < length; i++) {
     left[i] *= gain;
     right[i] *= gain;

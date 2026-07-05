@@ -17,9 +17,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <div className="flex h-dvh w-full flex-col gap-4 overflow-hidden px-4 py-4 sm:px-6">
-        <header className="flex shrink-0 items-center justify-between">
-          <div id="collab-transport-portal" className="flex min-w-0 flex-1 items-center" />
-          <nav className="flex shrink-0 items-center gap-4 text-xs uppercase tracking-widest">
+        <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-1.5">
+          <div id="collab-transport-portal" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5" />
+          <nav className="flex shrink-0 items-center gap-4 text-xs uppercase tracking-widest ml-auto">
             <NavLink
               to="/"
               end

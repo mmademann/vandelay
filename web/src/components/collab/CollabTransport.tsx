@@ -12,6 +12,7 @@ import {
 import type { CollabMasterSettings, CollabSlot, ThrowSettings, ThrowPreset } from "../../lib/collabSettings";
 import { cn } from "../../lib/cn";
 import { Knob } from "./Knob";
+import type { GenreName } from "../../lib/vibePresets";
 
 function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
@@ -146,9 +147,13 @@ interface Props {
   onApplyThrowPreset: (preset: ThrowPreset) => void;
   isPlaying: boolean;
   onMatchAll: () => void;
+  onApplyGenre: (genre: GenreName) => void;
+  onRandomizeAll: () => void;
+  onRandomSession: () => void;
+  randomDisabled: boolean;
 }
 
-export function CollabTransport({ masterSettings, slotCount, referenceSlotId, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll }: Props) {
+export function CollabTransport({ masterSettings, slotCount, referenceSlotId, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll, onApplyGenre, onRandomizeAll, onRandomSession, randomDisabled }: Props) {
   const [loopCount, setLoopCount] = useState(4);
   const [format, setFormat] = useState<ExportFormat>("wav");
   const [quality, setQuality] = useState<ExportQuality>("full");
@@ -156,10 +161,13 @@ export function CollabTransport({ masterSettings, slotCount, referenceSlotId, ge
   const [exportError, setExportError] = useState<string | null>(null);
   const [throwPanelOpen, setThrowPanelOpen] = useState(false);
   const [exportPanelOpen, setExportPanelOpen] = useState(false);
+  const [genrePanelOpen, setGenrePanelOpen] = useState(false);
   const throwPanelRef = useRef<HTMLDivElement>(null);
   const throwBtnRef = useRef<HTMLButtonElement>(null);
   const exportPanelRef = useRef<HTMLDivElement>(null);
   const exportBtnRef = useRef<HTMLButtonElement>(null);
+  const genrePanelRef = useRef<HTMLDivElement>(null);
+  const genreBtnRef = useRef<HTMLButtonElement>(null);
   const masterLoopLength = collabEngine.getMasterLoopLength() ?? 0;
   const totalSec = masterLoopLength * loopCount;
   const estBytes = estimateExportBytes(totalSec, format, quality);
@@ -167,7 +175,7 @@ export function CollabTransport({ masterSettings, slotCount, referenceSlotId, ge
 
   // Close panels on outside click
   useEffect(() => {
-    if (!throwPanelOpen && !exportPanelOpen) return;
+    if (!throwPanelOpen && !exportPanelOpen && !genrePanelOpen) return;
     function handleClick(e: MouseEvent) {
       if (
         throwPanelRef.current && !throwPanelRef.current.contains(e.target as Node) &&
@@ -181,10 +189,16 @@ export function CollabTransport({ masterSettings, slotCount, referenceSlotId, ge
       ) {
         setExportPanelOpen(false);
       }
+      if (
+        genrePanelRef.current && !genrePanelRef.current.contains(e.target as Node) &&
+        genreBtnRef.current && !genreBtnRef.current.contains(e.target as Node)
+      ) {
+        setGenrePanelOpen(false);
+      }
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
-  }, [throwPanelOpen, exportPanelOpen]);
+  }, [throwPanelOpen, exportPanelOpen, genrePanelOpen]);
 
   async function handleExport() {
     if (exporting) return;
@@ -218,18 +232,18 @@ export function CollabTransport({ masterSettings, slotCount, referenceSlotId, ge
 
   return (
     <div className="relative">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
         {/* Play All / Pause All + Rewind All */}
         <button
           type="button"
-          onClick={isPlaying ? onStopAll : onPlayAll}
+          onClick={isPlaying && slotCount > 0 ? onStopAll : onPlayAll}
           disabled={slotCount === 0}
-          className={isPlaying
+          className={isPlaying && slotCount > 0
             ? "shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-accent/20 text-accent ring-1 ring-accent/40 transition hover:bg-accent/30 disabled:opacity-30"
             : "shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-muted/80 text-foreground/50 transition hover:text-foreground hover:bg-muted disabled:opacity-30"
           }
         >
-          {isPlaying ? "⏸ Pause All" : "▶ Play All"}
+          {isPlaying && slotCount > 0 ? "⏸ Pause All" : "▶ Play All"}
         </button>
         <button
           type="button"
@@ -242,20 +256,40 @@ export function CollabTransport({ masterSettings, slotCount, referenceSlotId, ge
         </button>
 
         {/* Throw character panel toggle */}
-        <button
-          ref={throwBtnRef}
-          type="button"
-          onClick={() => setThrowPanelOpen((o) => !o)}
-          className={cn(
-            "shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
-            throwPanelOpen
-              ? "bg-teal-500/20 text-teal-400 ring-1 ring-teal-400/40"
-              : "bg-muted/80 text-foreground/50 hover:text-teal-400 hover:bg-muted",
-          )}
-          title="Configure Throw character — delay time, feedback, spring reverb"
-        >
-          ↯ Throw
-        </button>
+        {slotCount > 0 && (
+          <button
+            ref={throwBtnRef}
+            type="button"
+            onClick={() => setThrowPanelOpen((o) => !o)}
+            className={cn(
+              "shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
+              throwPanelOpen
+                ? "bg-teal-500/20 text-teal-400 ring-1 ring-teal-400/40"
+                : "bg-muted/80 text-foreground/50 hover:text-teal-400 hover:bg-muted",
+            )}
+            title="Configure Throw character — delay time, feedback, spring reverb"
+          >
+            ↯ Throw
+          </button>
+        )}
+
+        {/* Genre panel toggle */}
+        {slotCount > 0 && (
+          <button
+            ref={genreBtnRef}
+            type="button"
+            onClick={() => setGenrePanelOpen((o) => !o)}
+            className={cn(
+              "shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
+              genrePanelOpen
+                ? "bg-purple-500/20 text-purple-400 ring-1 ring-purple-400/40"
+                : "bg-muted/80 text-foreground/50 hover:text-purple-400 hover:bg-muted",
+            )}
+            title="Apply genre preset or randomize effects"
+          >
+            ✦ Genre
+          </button>
+        )}
 
         {/* Match all to reference */}
         {referenceSlotId && slotCount >= 2 && (
@@ -270,20 +304,33 @@ export function CollabTransport({ masterSettings, slotCount, referenceSlotId, ge
         )}
 
         {/* Export dropdown */}
+        {slotCount > 0 && (
+          <button
+            ref={exportBtnRef}
+            type="button"
+            onClick={() => setExportPanelOpen((o) => !o)}
+            className={cn(
+              "shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
+              exportPanelOpen
+                ? "bg-accent/20 text-accent ring-1 ring-accent/40"
+                : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted",
+            )}
+          >
+            ↓ Export
+          </button>
+        )}
+
+        {/* Random session */}
         <button
-          ref={exportBtnRef}
           type="button"
-          onClick={() => setExportPanelOpen((o) => !o)}
-          disabled={slotCount === 0}
-          className={cn(
-            "shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition disabled:opacity-30",
-            exportPanelOpen
-              ? "bg-accent/20 text-accent ring-1 ring-accent/40"
-              : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted",
-          )}
+          onClick={onRandomSession}
+          disabled={randomDisabled}
+          className="shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-muted/80 text-foreground/50 transition hover:text-foreground hover:bg-muted disabled:opacity-30"
+          title="Build a random session from stems library"
         >
-          ↓ Export
+          ⚄ Random
         </button>
+
       </div>
 
       {/* Throw character floating overlay */}
@@ -305,6 +352,41 @@ export function CollabTransport({ masterSettings, slotCount, referenceSlotId, ge
             onDeletePreset={onDeleteThrowPreset}
             onApplyPreset={onApplyThrowPreset}
           />
+        </div>
+      )}
+
+      {/* Genre floating panel */}
+      {genrePanelOpen && (
+        <div
+          ref={genrePanelRef}
+          className="absolute left-0 top-full mt-1 z-50 w-64 rounded-md border border-purple-500/20 bg-zinc-900/95 shadow-xl backdrop-blur-sm ring-1 ring-border/30 p-4 flex flex-col gap-3"
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-semibold uppercase tracking-widest text-purple-400">Genre</span>
+            <button type="button" onClick={() => setGenrePanelOpen(false)}
+              className="text-foreground/30 hover:text-foreground/70 text-sm leading-none px-1">✕</button>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {(["Dub", "Lo-fi", "Ambient", "Dry"] as const).map((genre) => (
+              <button
+                key={genre}
+                type="button"
+                onClick={() => { onApplyGenre(genre); setGenrePanelOpen(false); }}
+                className="rounded border border-border bg-muted/50 px-3 py-2 text-xs font-semibold text-foreground/60 transition hover:border-purple-400/40 hover:text-purple-300 hover:bg-purple-500/10"
+              >
+                {genre}
+              </button>
+            ))}
+          </div>
+          <div className="border-t border-border/30 pt-2">
+            <button
+              type="button"
+              onClick={() => { onRandomizeAll(); setGenrePanelOpen(false); }}
+              className="w-full rounded border border-border bg-muted/50 px-3 py-2 text-xs font-semibold text-foreground/60 transition hover:border-purple-400/40 hover:text-purple-300 hover:bg-purple-500/10"
+            >
+              ⚄ Randomize All
+            </button>
+          </div>
         </div>
       )}
 

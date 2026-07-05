@@ -1,28 +1,29 @@
 import { useRef, useState } from "react";
 import { cn } from "../../lib/cn";
 
-const SIZE = 48;
 const STROKE = 4;
-const R = (SIZE - STROKE) / 2 - 1;
 const START_ANGLE = 225;
 const SWEEP = 270;
 const toRad = (deg: number) => (deg * Math.PI) / 180;
-const cx = SIZE / 2;
-const cy = SIZE / 2;
-
-function arcPath(startDeg: number, endDeg: number) {
-  const s = toRad(startDeg); const e = toRad(endDeg);
-  const x1 = cx + R * Math.cos(s); const y1 = cy + R * Math.sin(s);
-  const x2 = cx + R * Math.cos(e); const y2 = cy + R * Math.sin(e);
-  return `M ${x1} ${y1} A ${R} ${R} 0 ${endDeg - startDeg > 180 ? 1 : 0} 1 ${x2} ${y2}`;
-}
 
 export function Knob({
-  label, value, min, max, step, defaultValue, displayValue, disabled, onChange,
+  label, value, min, max, step, defaultValue, displayValue, disabled, onChange, size = 48,
 }: {
   label: string; value: number; min: number; max: number; step: number;
   defaultValue: number; displayValue: string; disabled?: boolean; onChange: (v: number) => void;
+  size?: number;
 }) {
+  const R = (size - STROKE) / 2 - 1;
+  const cx = size / 2;
+  const cy = size / 2;
+
+  function arcPath(startDeg: number, endDeg: number) {
+    const s = toRad(startDeg); const e = toRad(endDeg);
+    const x1 = cx + R * Math.cos(s); const y1 = cy + R * Math.sin(s);
+    const x2 = cx + R * Math.cos(e); const y2 = cy + R * Math.sin(e);
+    return `M ${x1} ${y1} A ${R} ${R} 0 ${endDeg - startDeg > 180 ? 1 : 0} 1 ${x2} ${y2}`;
+  }
+
   const ratio = Math.max(0, Math.min(1, (value - min) / (max - min)));
   const angle = START_ANGLE + ratio * SWEEP;
   const dragRef = useRef<{ startY: number; startVal: number } | null>(null);
@@ -42,7 +43,7 @@ export function Knob({
   return (
     <div className={cn("flex flex-col items-center gap-0.5", disabled && "opacity-35 pointer-events-none")}>
       <div className="relative select-none">
-        <svg width={SIZE} height={SIZE}
+        <svg width={size} height={size}
           onPointerDown={(e) => { if (disabled) return; e.currentTarget.setPointerCapture(e.pointerId); dragRef.current = { startY: e.clientY, startVal: value }; setDragging(true); }}
           onPointerMove={(e) => { if (!dragRef.current || disabled) return; const delta = (dragRef.current.startY - e.clientY) / 100; onChange(clampStep(dragRef.current.startVal + delta * (max - min))); }}
           onPointerUp={() => { dragRef.current = null; setDragging(false); }}

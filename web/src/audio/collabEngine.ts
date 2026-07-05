@@ -1,4 +1,9 @@
 import * as Tone from "tone";
+
+// Request a larger OS audio buffer and longer look-ahead to reduce CPU-overload glitches.
+// Must run before any Tone nodes are created (module-level).
+Tone.setContext(new Tone.Context({ latencyHint: "playback", lookAhead: 0.3, updateInterval: 0.08 }));
+
 import { disposeDualReverb, synthesizeSpringImpulse } from "./reverbSlot";
 import { createCollabEffectsChain, applyCollabEffectsChain, type CollabEffectsChain } from "./collabChain";
 import type { CollabSlot, CollabMasterSettings, ThrowSettings } from "../lib/collabSettings";
@@ -68,11 +73,16 @@ class CollabEngine {
     const sampleRate = Tone.getContext().sampleRate;
     const springIR = synthesizeSpringImpulse(sampleRate);
     const springConvolver = Tone.getContext().rawContext.createConvolver();
-    springConvolver.normalize = true;
+    springConvolver.normalize = false;
     springConvolver.buffer = springIR;
+    const springLp = Tone.getContext().rawContext.createBiquadFilter();
+    springLp.type = "lowpass";
+    springLp.frequency.value = 3200;
+    springLp.Q.value = 0.5;
     const springWet = new Tone.Gain(0).connect(this.master);
     volume.connect(springConvolver);
-    springConvolver.connect(springWet.input);
+    springConvolver.connect(springLp);
+    springLp.connect(springWet.input);
 
     // Throw parallel send — gate at INPUT so echoes blast in and ring out naturally.
     // signal path: volume → throwSend (gate) → throwFilter (env sweep) → throwDelay → throwReverb → master
@@ -275,7 +285,8 @@ class CollabEngine {
     // Debounce reverb IR regeneration (expensive)
     this.throwDebounceTimer = setTimeout(async () => {
       if (this._disposed) return;
-      for (const slot of this.slots.values()) {
+      for (const [id, slot] of this.slots.entries()) {
+        if (!this.slots.has(id)) continue;
         slot.throwReverb.decay = settings.reverbDecay;
         await slot.throwReverb.generate();
       }
@@ -334,9 +345,11 @@ class CollabEngine {
   }
 
   async play(): Promise<void> {
-    if (this.slots.size === 0) return;
     await Tone.start();
     await Tone.getContext().resume();
+    this.running = true;
+
+    if (this.slots.size === 0) return;
 
     const t = Tone.now() + 0.05;
 
@@ -351,8 +364,6 @@ class CollabEngine {
       slot.startedAt = t;
       slot.playing = true;
     }
-
-    this.running = true;
   }
 
   stop(): void {
@@ -377,6 +388,8 @@ class CollabEngine {
       slot.chain.eqLo.disconnect(); slot.chain.eqLo.dispose();
       slot.chain.eqMid.disconnect(); slot.chain.eqMid.dispose();
       slot.chain.eqHi.disconnect(); slot.chain.eqHi.dispose();
+      slot.chain.phaser.disconnect(); slot.chain.phaser.dispose();
+      slot.chain.chorus.disconnect(); slot.chain.chorus.dispose();
       slot.chain.bass.input.disconnect(); slot.chain.bass.input.dispose();
       slot.chain.bass.bassShelf.disconnect(); slot.chain.bass.bassShelf.dispose();
       slot.chain.bass.bassSubFilter.disconnect(); slot.chain.bass.bassSubFilter.dispose();

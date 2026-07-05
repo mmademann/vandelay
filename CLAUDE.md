@@ -27,11 +27,12 @@ Decode → `AudioBuffer` → real-time Tone.js playback. Offline export via `Ton
 - Each page has a **URL→store reconciler** (`useEffect` on `?v=`): load missing ids, remove extras. UI actions **navigate**; they don't write the store directly. No two-way URL sync.
 - **Zustand**: `useStore` (single), `useMixStore` (mix). Mix **persists per-id settings** to localStorage but **not** the active track list (session-only; avoids hydration races).
 
-### Persistence (three layers)
+### Persistence (four layers)
 
 | Layer | What | Where to look |
 | --- | --- | --- |
 | Server disk | YouTube WAV cache, server history index | `server/cache/`, `server/history.json` |
+| Server disk (collab) | Full collab state snapshot (gitignored JSON) | `collab-state.json` at repo root via `GET/POST /api/collab-state` |
 | IndexedDB | Raw audio bytes, track metadata (Recent) | `audioCache.ts`, `trackMetaCache.ts` |
 | localStorage | Per-track settings, presets | `settings.ts`, `mixSettings.ts`, `*Presets.ts` |
 
@@ -78,6 +79,7 @@ Loop regions are managed in engine code, not via the player's native loop points
 
 ```
 server/src/          API routes, yt-dlp/ffmpeg extract, server history, stems library
+  routes/collabState.ts  GET/POST /api/collab-state — reads/writes collab-state.json at repo root
 web/src/
   main.tsx           Entry point — no StrictMode
   pages/             Route shells + URL reconcilers
@@ -97,6 +99,7 @@ web/src/
       CollabTransport.tsx Transport bar: Sessions dropdown · Play All · Rewind All · Throw (floating panel) · Match All · Export (floating panel) · Clear
   lib/               Loaders, caches, persistence, format helpers, presets
     collabSettings.ts    CollabSlot/Session types, per-slot localStorage CRUD, named sessions, anchor key, throw settings
+    collabExport.ts      CollabExportFile type, buildExport/saveExportToServer/loadExportFromServer/applyImport — full state backup to server
     audioAnalysis.ts     Essentia.js wrapper — analyzeAudio(), rootSemitone(), preloadEssentia()
     trackMetaCache.ts    IndexedDB track metadata including detectedKey/detectedBpm
 ```
@@ -156,6 +159,9 @@ Slot IDs are UUIDs generated at runtime, not derived from trackId+stemName. Pars
 - **Throw reverb decay changes require `reverb.generate()`** — debounced 300ms in `collabEngine.setThrowSettings`.
 - **youtu.be short-link parsing**: `extractVideoId()` in `SlotPicker.tsx` handles both `youtube.com/watch?v=ID` and `youtu.be/ID` formats.
 - **`SlotStrip.update()` vs `onChange()`**: always call the local `update()` function (engine + state + persist) not `onChange()` directly (state only) when changing slot properties from within SlotStrip.
+- **Tone.js context config is module-level in `collabEngine.ts`**: `Tone.setContext(new Tone.Context({ latencyHint: "playback", lookAhead: 0.3, updateInterval: 0.08 }))` runs before any imports that create nodes. Do not move it or duplicate it — must stay at the very top of that file.
+- **POST `/api/stems` returns 202 (not 200) when separation is needed**: blocks only for `extractAudio` (WAV download), then fires demucs in the background and returns immediately. Client polls `GET /api/stems/:id/status` every 2s. Returns 200 with full data only when already fully cached.
+- **Collab state backup**: `buildExport(masterSettings)` + `saveExportToServer()` in `collabExport.ts` snapshot all localStorage collab keys to `collab-state.json` at repo root. Auto-fires on page unmount (if any slots loaded). Import via Sessions panel `↑ Import` button — writes localStorage then syncs live React state.
 
 ## Run
 
