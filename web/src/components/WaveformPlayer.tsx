@@ -196,6 +196,7 @@ export function WaveformPlayer({ onReady }: Props) {
       {ready && (
         <div className="flex flex-wrap items-end gap-3">
           <Button onClick={togglePlay}>{isPlaying ? "Stop" : "Play loop"}</Button>
+          <Button onClick={() => void engine.seek(loopStart)} title="Rewind to start">⏮</Button>
           <TimeField
             label="Start"
             seconds={loopStart}
@@ -222,6 +223,18 @@ interface TimeFieldProps {
 }
 
 function TimeField({ label, seconds, max, onCommit }: TimeFieldProps) {
+  const [editing, setEditing] = useState<string | null>(null);
+
+  const displayValue = editing ?? formatLoopTime(seconds);
+
+  function commit(raw: string) {
+    const parsed = parseLoopTime(raw);
+    if (parsed != null && parsed <= max) {
+      onCommit(parsed);
+    }
+    setEditing(null);
+  }
+
   return (
     <label className="flex flex-col gap-1 text-xs text-foreground/60">
       <span className="uppercase tracking-wide">
@@ -229,16 +242,14 @@ function TimeField({ label, seconds, max, onCommit }: TimeFieldProps) {
         <span className="normal-case text-foreground/40">({LOOP_TIME_FORMAT_HINT})</span>
       </span>
       <input
-        key={Math.round(seconds * 100)}
         placeholder="3:21.50"
-        defaultValue={formatLoopTime(seconds)}
-        onBlur={(e) => {
-          const parsed = parseLoopTime(e.target.value);
-          if (parsed != null && parsed <= max) onCommit(parsed);
-          else e.target.value = formatLoopTime(seconds);
-        }}
+        value={displayValue}
+        onChange={(e) => setEditing(e.target.value)}
+        onFocus={() => setEditing(formatLoopTime(seconds))}
+        onBlur={(e) => commit(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          if (e.key === "Escape") { setEditing(null); (e.target as HTMLInputElement).blur(); }
         }}
         className="w-28 rounded-md border border-border bg-muted px-2 py-1 text-sm text-foreground tabular-nums outline-none focus:border-accent"
       />

@@ -41,7 +41,8 @@ export function ExportPanel() {
         throw new Error("Export produced an empty file — try adjusting the loop region.");
       }
       const ext = exportExtension(format);
-      downloadBlob(blob, `${track.title} (slowed ${loopCount}x).${ext}`);
+      const speedPct = Math.round(applied.speed * 100);
+      downloadBlob(blob, `${track.title} - slowed ${speedPct}%.${ext}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Export failed");
     } finally {

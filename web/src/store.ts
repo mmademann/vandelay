@@ -88,12 +88,12 @@ export function sanitizeEffects(e: EffectsState): EffectsState {
 }
 
 export const DEFAULT_EFFECTS: EffectsState = {
-  speed: 0.8,
+  speed: 0.75,
   pitch: 0,
   linkPitch: true,
   reverbType: "algorithmic",
-  reverbDecay: 3,
-  reverbWet: 0.3,
+  reverbDecay: 4,
+  reverbWet: 0.5,
   gain: 1,
   bassBoost: 0,
   delayTime: 0,

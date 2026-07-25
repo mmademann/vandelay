@@ -34,7 +34,7 @@ export interface CollabSlotSavedSettings {
   pitchInterval?: 1 | 7 | 12;
 }
 
-const SLOT_SETTINGS_KEY = "vandelay:collab:slot-settings:v1";
+const SLOT_SETTINGS_KEY = "vandelay:multi:slot-settings:v1";
 
 function loadAllSlotSettings(): Record<string, CollabSlotSavedSettings> {
   try {
@@ -81,7 +81,7 @@ export interface CollabPreset {
   gain: number;
 }
 
-const PRESETS_KEY = "vandelay:collab:presets:v1";
+const PRESETS_KEY = "vandelay:multi:presets:v1";
 
 export function loadCollabPresets(): CollabPreset[] {
   try {
@@ -130,7 +130,7 @@ export const DEFAULT_THROW_SETTINGS: ThrowSettings = {
 };
 
 // Throw settings — persisted independently so they survive without a named session
-const THROW_SETTINGS_KEY = "vandelay:collab:throw-settings:v1";
+const THROW_SETTINGS_KEY = "vandelay:multi:throw-settings:v1";
 
 export function loadThrowSettings(): ThrowSettings {
   try {
@@ -151,7 +151,7 @@ export interface ThrowPreset {
   settings: ThrowSettings;
 }
 
-const THROW_PRESETS_KEY = "vandelay:collab:throw-presets:v1";
+const THROW_PRESETS_KEY = "vandelay:multi:throw-presets:v1";
 
 export function loadThrowPresets(): ThrowPreset[] {
   try {
@@ -176,7 +176,7 @@ export function deleteThrowPreset(name: string): ThrowPreset[] {
   return updated;
 }
 
-const ANCHOR_KEY = "vandelay:collab:anchor:v1";
+const ANCHOR_KEY = "vandelay:multi:anchor:v1";
 
 export function loadAnchorKey(): { trackId: string; stemName: StemName | null } | null {
   try {
@@ -206,7 +206,7 @@ export interface CollabSession {
   masterSettings: CollabMasterSettings;
 }
 
-const NAMED_KEY = "vandelay:collab:sessions:v1";
+const NAMED_KEY = "vandelay:multi:sessions:v1";
 
 export function loadNamedSessions(): CollabSession[] {
   try {

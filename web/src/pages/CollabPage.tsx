@@ -143,6 +143,13 @@ export function CollabPage() {
   entriesRef.current = entries;
   const masterSettingsRef = useRef(masterSettings);
   masterSettingsRef.current = masterSettings;
+  const backupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function scheduleDebouncedBackup() {
+    if (backupTimerRef.current) clearTimeout(backupTimerRef.current);
+    backupTimerRef.current = setTimeout(() => {
+      saveExportToServer(buildExport(masterSettingsRef.current));
+    }, 2000);
+  }
   const referenceSlotIdRef = useRef<string | null>(null);
   referenceSlotIdRef.current = referenceSlotId;
   const pendingSessionSlotsRef = useRef<Map<string, CollabSlot>>(new Map());
@@ -151,6 +158,11 @@ export function CollabPage() {
 
   // Sync initial throw settings to engine on mount; preload Essentia WASM; seed viability cache
   useEffect(() => {
+    if (!localStorage.getItem("vandelay:multi:sessions:v1")) {
+      loadExportFromServer().then((data) => {
+        if (data) applyImport(data);
+      }).catch(() => {});
+    }
     collabEngine.setThrowSettings(masterSettings.throwSettings);
     preloadEssentia().catch(() => {});
     getAllTrackMeta().then((entries) => {
@@ -205,6 +217,12 @@ export function CollabPage() {
     return () => clearInterval(id);
   }, []);
 
+  // Debounced backup to server on any slot change
+  useEffect(() => {
+    if (entries.length === 0) return;
+    scheduleDebouncedBackup();
+  }, [entries]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Escape collapses the picker and sessions panel
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -241,7 +259,7 @@ export function CollabPage() {
     // 2. Parse + redirect check — BEFORE anchor restore
     const { tokens: pairs, redirect } = parseSlotsParam(slotsParam);
     if (redirect !== null) {
-      navigate(`/collab?slots=${redirect}`, { replace: true });
+      navigate(`/multi?slots=${redirect}`, { replace: true });
       return;
     }
 
@@ -509,7 +527,7 @@ export function CollabPage() {
     }
     const remaining = entriesRef.current.filter((e) => e.slot.id !== id);
     const param = encodeSlotsParam(remaining);
-    navigate(param ? `/collab?slots=${param}` : "/collab");
+    navigate(param ? `/multi?slots=${param}` : "/multi");
   }
 
   function handlePickerConfirm(trackId: string, stemName: StemName | null) {
@@ -519,7 +537,7 @@ export function CollabPage() {
     const token = stemName ? `${uuid}:${trackId}:${stemName}` : `${uuid}:${trackId}`;
     const current = encodeSlotsParam(entries);
     const param = current ? `${current},${token}` : token;
-    navigate(`/collab?slots=${param}`);
+    navigate(`/multi?slots=${param}`);
   }
 
   function handleSetReference(slotId: string) {
@@ -639,7 +657,7 @@ export function CollabPage() {
       return slots.findIndex((s) => s.stemName === stemName);
     }, -1);
     pendingReferenceIdRef.current = uuids[anchorIdx === -1 ? 0 : anchorIdx];
-    navigate(`/collab?slots=${param}`);
+    navigate(`/multi?slots=${param}`);
   }
 
   function handleSaveSession() {
@@ -653,6 +671,7 @@ export function CollabPage() {
     }));
     setNamedSessions(saveNamedSession(name, slots, masterSettings));
     setSessionName("");
+    saveExportToServer(buildExport(masterSettingsRef.current));
   }
 
   function handleLoadSession(session: CollabSession) {
@@ -677,11 +696,12 @@ export function CollabPage() {
       .map((s) => s.stemName ? `${s.id}:${s.trackId}:${s.stemName}` : `${s.id}:${s.trackId}`)
       .join(",");
     collabEngine.stop();
-    navigate(param ? `/collab?slots=${param}` : "/collab");
+    navigate(param ? `/multi?slots=${param}` : "/multi");
   }
 
   function handleDeleteSession(name: string) {
     setNamedSessions(deleteNamedSession(name));
+    saveExportToServer(buildExport(masterSettingsRef.current));
   }
 
   function handleSavePreset(name: string, preset: Omit<CollabPreset, "name">) {
@@ -790,7 +810,7 @@ export function CollabPage() {
   }
 
   function handleClear() {
-    navigate("/collab");
+    navigate("/multi");
   }
 
   const portalTarget = document.getElementById("collab-transport-portal");

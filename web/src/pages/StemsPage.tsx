@@ -422,7 +422,7 @@ export function StemsPage() {
                       });
                       if (active.length === 0) return;
                       const param = active.map((s) => `${loadedId}:${s}`).join(",");
-                      navigate(`/collab?slots=${param}`);
+                      navigate(`/multi?slots=${param}`);
                     }}
                     className="ml-auto shrink-0 rounded bg-accent/15 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/25"
                   >

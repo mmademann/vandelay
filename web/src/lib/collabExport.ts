@@ -26,7 +26,7 @@ export function buildExport(masterSettings: CollabMasterSettings): CollabExportF
     exportedAt: Date.now(),
     version: 1,
     namedSessions: loadNamedSessions(),
-    slotSettings: JSON.parse(localStorage.getItem("vandelay:collab:slot-settings:v1") ?? "{}"),
+    slotSettings: JSON.parse(localStorage.getItem("vandelay:multi:slot-settings:v1") ?? "{}"),
     presets: loadCollabPresets(),
     throwPresets: loadThrowPresets(),
     masterSettings,
@@ -50,10 +50,10 @@ export async function loadExportFromServer(): Promise<CollabExportFile | null> {
 }
 
 export function applyImport(data: CollabExportFile): void {
-  localStorage.setItem("vandelay:collab:slot-settings:v1", JSON.stringify(data.slotSettings));
-  localStorage.setItem("vandelay:collab:sessions:v1", JSON.stringify(data.namedSessions));
-  localStorage.setItem("vandelay:collab:presets:v1", JSON.stringify(data.presets));
-  localStorage.setItem("vandelay:collab:throw-presets:v1", JSON.stringify(data.throwPresets));
+  localStorage.setItem("vandelay:multi:slot-settings:v1", JSON.stringify(data.slotSettings));
+  localStorage.setItem("vandelay:multi:sessions:v1", JSON.stringify(data.namedSessions));
+  localStorage.setItem("vandelay:multi:presets:v1", JSON.stringify(data.presets));
+  localStorage.setItem("vandelay:multi:throw-presets:v1", JSON.stringify(data.throwPresets));
   saveThrowSettings(data.masterSettings.throwSettings);
   if (data.anchor) {
     saveAnchorKey(data.anchor.trackId, data.anchor.stemName);

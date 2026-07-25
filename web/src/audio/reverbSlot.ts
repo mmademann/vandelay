@@ -124,7 +124,7 @@ export async function createDualReverb(output: Tone.ToneAudioNode): Promise<Dual
   const convWet = new Tone.Gain(0).connect(output);
   const convDry = new Tone.Gain(0).connect(output);
   const convInput = new Tone.Gain(1);
-  const convolver = Tone.getContext().createConvolver();
+  const convolver = Tone.getContext().rawContext.createConvolver();
   convolver.normalize = true;
   convInput.connect(convolver);
   convolver.connect(convWet.input);

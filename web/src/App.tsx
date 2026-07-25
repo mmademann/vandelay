@@ -46,7 +46,7 @@ export default function App() {
               Track Stems
             </NavLink>
             <NavLink
-              to="/collab"
+              to="/multi"
               className={({ isActive }) =>
                 isActive ? "text-accent" : "text-foreground/50 hover:text-foreground/80"
               }
@@ -61,7 +61,7 @@ export default function App() {
             <Route path="/" element={<SinglePage />} />
             <Route path="/mix" element={<MixPage />} />
             <Route path="/stems" element={<StemsPage />} />
-            <Route path="/collab" element={<CollabPage />} />
+            <Route path="/multi" element={<CollabPage />} />
           </Routes>
         </main>
       </div>
