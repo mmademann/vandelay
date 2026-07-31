@@ -34,8 +34,11 @@ router.post("/stems", async (req, res) => {
     // Fire-and-forget separation; browser polls GET /api/stems/:id/status for completion
     Promise.resolve()
       .then(() => stemsReady(id) ? Promise.resolve() : separateStems(id))
-      .then(() => stemsMp3Ready(id) ? Promise.resolve() : transcodeStems(id))
+      // Record the title as soon as the stems exist — /stems/:id/status reports ready at this
+      // point, so the client refetches the library now. Writing history after the slow mp3
+      // transcode would make that refetch fall back to `titleMap.get(id) ?? id` (the raw id).
       .then(() => recordHistory({ id: info.id, title: info.title, duration: info.duration }))
+      .then(() => stemsMp3Ready(id) ? Promise.resolve() : transcodeStems(id))
       .catch((e) => console.error(`[stems] background separation failed for ${id}:`, e instanceof Error ? e.message : e));
 
     return res.status(202).json({ id, title: info.title });

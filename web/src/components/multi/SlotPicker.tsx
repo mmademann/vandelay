@@ -59,12 +59,6 @@ export function SlotPicker({ library: libraryProp, onConfirm, onClose, onLibrary
       });
   }
 
-  // Follow prop updates — the initial useState only captures the value at mount, so a track
-  // separated after the picker opened would otherwise keep showing its raw id.
-  useEffect(() => {
-    if (libraryProp !== undefined) setLibrary(libraryProp);
-  }, [libraryProp]);
-
   // Always refetch on open (the picker remounts each time). The prop is only a first paint —
   // it can be stale if a track was separated elsewhere or after this page mounted.
   useEffect(() => {
