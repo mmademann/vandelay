@@ -188,8 +188,8 @@ export function MultiPage() {
   // bake in a raw trackId just because it decoded before this resolved.
   const refreshLibrary = useCallback(() => {
     const p = Promise.all([
-      fetch("/api/stems/library", { priority: "high" } as RequestInit).then((r) => r.ok ? r.json() as Promise<{ id: string; title: string }[]> : Promise.resolve([])),
-      fetch("/api/history", { priority: "high" } as RequestInit).then((r) => r.ok ? r.json() as Promise<{ id: string; title: string }[]> : Promise.resolve([])),
+      fetch("/api/stems/library", { priority: "high", cache: "no-store" } as RequestInit).then((r) => r.ok ? r.json() as Promise<{ id: string; title: string }[]> : Promise.resolve([])),
+      fetch("/api/history", { priority: "high", cache: "no-store" } as RequestInit).then((r) => r.ok ? r.json() as Promise<{ id: string; title: string }[]> : Promise.resolve([])),
     ]).then(([lib, history]) => {
       setStemsLibrary(lib);
       const merged = new Map(history.map((e) => [e.id, e.title]));

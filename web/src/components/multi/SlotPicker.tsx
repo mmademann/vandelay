@@ -50,7 +50,9 @@ export function SlotPicker({ library: libraryProp, onConfirm, onClose, onLibrary
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   function fetchLibrary(signal?: AbortSignal) {
-    return fetch("/api/stems/library", { signal })
+    // no-store: the endpoint sets max-age=10, so a refetch right after separation would
+    // otherwise be served from cache and still be missing the track that just finished.
+    return fetch("/api/stems/library", { signal, cache: "no-store" })
       .then((r) => {
         if (!r.ok) throw new Error("Failed to load library");
         return r.json() as Promise<LibraryEntry[]>;
