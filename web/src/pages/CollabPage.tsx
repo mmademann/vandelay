@@ -127,6 +127,7 @@ export function CollabPage() {
   }));
   const [namedSessions, setNamedSessions] = useState<CollabSession[]>(() => loadNamedSessions());
   const [sessionName, setSessionName] = useState("");
+  const [activeSessionName, setActiveSessionName] = useState<string | null>(null);
   const [sessionsPanelOpen, setSessionsPanelOpen] = useState(false);
   const sessionsPanelRef = useRef<HTMLDivElement>(null);
   const sessionsBtnRef = useRef<HTMLButtonElement>(null);
@@ -454,14 +455,15 @@ export function CollabPage() {
           ),
         );
 
-        if (!pendingSlot) {
-          // Always write to stable key so settings survive across page loads (UUIDs are ephemeral)
-          saveSlotSettings(finalSlot.id, {
-            speed: finalSlot.speed, pitch: finalSlot.pitch, linkPitch: finalSlot.linkPitch,
-            gain: finalSlot.gain, muted: finalSlot.muted, effects: finalSlot.effects,
-            loopStartFrac: finalSlot.loopStart / dur, loopEndFrac: finalSlot.loopEnd / dur,
-          }, finalSlot.trackId, finalSlot.stemName);
-        }
+        // Always write to stable key so settings survive page reloads (UUIDs are ephemeral).
+        // When loading from a named session (pendingSlot), write the session's values back
+        // to the stable key so a page refresh doesn't pull in settings from a different session.
+        saveSlotSettings(finalSlot.id, {
+          speed: finalSlot.speed, pitch: finalSlot.pitch, linkPitch: finalSlot.linkPitch,
+          gain: finalSlot.gain, muted: finalSlot.muted, effects: finalSlot.effects,
+          loopStartFrac: finalSlot.loopStart / dur, loopEndFrac: finalSlot.loopEnd / dur,
+          isMatched: pendingSlot?.isMatched, matchedBasePitch: pendingSlot?.matchedBasePitch,
+        }, finalSlot.trackId, finalSlot.stemName);
 
         // Background key detection — only if not already cached
         if (cachedMeta?.detectedKey === undefined) {
@@ -671,10 +673,12 @@ export function CollabPage() {
     }));
     setNamedSessions(saveNamedSession(name, slots, masterSettings));
     setSessionName("");
+    setActiveSessionName(name);
     saveExportToServer(buildExport(masterSettingsRef.current));
   }
 
   function handleLoadSession(session: CollabSession) {
+    setActiveSessionName(session.name);
     const ms = session.masterSettings;
     setMasterSettings(ms);
     collabEngine.setMasterSettings(ms);
@@ -932,6 +936,8 @@ export function CollabPage() {
           masterSettings={masterSettings}
           slotCount={entries.length}
           referenceSlotId={referenceSlotId}
+          activeSessionName={activeSessionName}
+          slotTitles={entries.map((e) => e.title)}
           getSlotsAndBuffers={getSlotsAndBuffers.current}
           onPlayAll={handlePlayAll}
           onStopAll={handleStopAll}

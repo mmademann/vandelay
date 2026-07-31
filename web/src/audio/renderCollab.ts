@@ -77,10 +77,18 @@ export async function renderCollab(opts: RenderCollabOptions): Promise<Blob> {
       player.playbackRate = rate;
 
       const span = slot.loopEnd - slot.loopStart;
-      const segmentDuration = span / rate;
-
-      for (let i = 0; i < loopCount; i++) {
-        player.start(i * segmentDuration, slot.loopStart, span);
+      const segDur = span / rate; // real-time duration of one play of this slot's loop region
+      // Schedule enough repeats within each master loop pass so shorter slots loop
+      // continuously (matching live engine behavior where player.loop = true).
+      const repeatsPerMaster = Math.ceil(masterLoopLength / segDur);
+      for (let pass = 0; pass < loopCount; pass++) {
+        for (let r = 0; r < repeatsPerMaster; r++) {
+          const when = pass * masterLoopLength + r * segDur;
+          // Don't schedule beyond this pass's end
+          if (when >= (pass + 1) * masterLoopLength) break;
+          const remaining = (pass + 1) * masterLoopLength - when;
+          player.start(when, slot.loopStart, Math.min(segDur, remaining));
+        }
       }
     }
 

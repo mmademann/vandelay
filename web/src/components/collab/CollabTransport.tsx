@@ -136,6 +136,8 @@ interface Props {
   masterSettings: CollabMasterSettings;
   slotCount: number;
   referenceSlotId: string | null;
+  activeSessionName: string | null;
+  slotTitles: string[];
   getSlotsAndBuffers: () => { slots: CollabSlot[]; buffers: Map<string, AudioBuffer> };
   onStopAll: () => void;
   onPlayAll: () => void;
@@ -153,7 +155,15 @@ interface Props {
   randomDisabled: boolean;
 }
 
-export function CollabTransport({ masterSettings, slotCount, referenceSlotId, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll, onApplyGenre, onRandomizeAll, onRandomSession, randomDisabled }: Props) {
+function buildExportFilename(activeSessionName: string | null, slotTitles: string[]): string {
+  if (activeSessionName) return activeSessionName;
+  const unique = [...new Set(slotTitles.filter(Boolean))];
+  if (unique.length === 0) return "multi-mix";
+  if (unique.length <= 2) return unique.join(" × ");
+  return `${unique.slice(0, 2).join(" × ")} +${unique.length - 2}`;
+}
+
+export function CollabTransport({ masterSettings, slotCount, referenceSlotId, activeSessionName, slotTitles, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll, onApplyGenre, onRandomizeAll, onRandomSession, randomDisabled }: Props) {
   const [loopCount, setLoopCount] = useState(4);
   const [format, setFormat] = useState<ExportFormat>("wav");
   const [quality, setQuality] = useState<ExportQuality>("full");
@@ -217,7 +227,8 @@ export function CollabTransport({ masterSettings, slotCount, referenceSlotId, ge
         export: { format, quality },
       });
       if (blob.size < 44) throw new Error("Export produced an empty file.");
-      downloadBlob(blob, `collab-mix (${loopCount}x).${exportExtension(format)}`);
+      const name = buildExportFilename(activeSessionName, slotTitles);
+      downloadBlob(blob, `${name}.${exportExtension(format)}`);
     } catch (e) {
       setExportError(e instanceof Error ? e.message : "Export failed");
     } finally {
