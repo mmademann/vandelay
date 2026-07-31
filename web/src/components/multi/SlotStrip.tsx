@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { cn } from "../../lib/cn";
-import { collabEngine } from "../../audio/collabEngine";
-import type { CollabSlot } from "../../lib/collabSettings";
+import { multiEngine } from "../../audio/multiEngine";
+import type { MultiSlot } from "../../lib/multiSettings";
 import { Knob } from "./Knob";
 import {
   saveSlotSettings,
-  type CollabPreset,
-} from "../../lib/collabSettings";
+  type MultiPreset,
+} from "../../lib/multiSettings";
 import { DRY_EFFECTS, type StemName } from "../../audio/dubEngine";
 import { EFFECTS_LIMITS } from "../../store";
 import { randomizeEffects, type StemRole } from "../../lib/vibePresets";
@@ -290,10 +290,10 @@ function formatKeyBadge(key: string | null | undefined): string {
 }
 
 interface Props {
-  slot: CollabSlot;
+  slot: MultiSlot;
   title: string;
   buffer: AudioBuffer | null;
-  presets: CollabPreset[];
+  presets: MultiPreset[];
   isReference: boolean;
   hasReference: boolean;
   detectedKey?: string | null | undefined;
@@ -303,12 +303,12 @@ interface Props {
   pitchInterval: 1 | 7 | 12;
   onPitchIntervalChange: (n: 1 | 7 | 12) => void;
   onRemove: () => void;
-  onChange: (patch: Partial<CollabSlot>) => void;
+  onChange: (patch: Partial<MultiSlot>) => void;
   onSetReference: () => void;
   onMatch: () => void;
-  onSavePreset: (name: string, preset: Omit<CollabPreset, "name">) => void;
+  onSavePreset: (name: string, preset: Omit<MultiPreset, "name">) => void;
   onDeletePreset: (name: string) => void;
-  onApplyPreset: (preset: CollabPreset) => void;
+  onApplyPreset: (preset: MultiPreset) => void;
 }
 
 export function SlotStrip({ slot, title, buffer, presets, isReference, hasReference, detectedKey, detectedBpm, isMatched, matchedBasePitch, pitchInterval, onPitchIntervalChange, onRemove, onChange, onSetReference, onMatch, onSavePreset, onDeletePreset, onApplyPreset }: Props) {
@@ -325,9 +325,9 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
   // Keep isPlaying and throwActive in sync with engine state
   useEffect(() => {
     const id = setInterval(() => {
-      setIsPlaying(collabEngine.isSlotPlaying(slot.id));
-      setThrowActive(collabEngine.isThrowActive(slot.id));
-      setCurrentTime(collabEngine.getSlotPosition(slot.id));
+      setIsPlaying(multiEngine.isSlotPlaying(slot.id));
+      setThrowActive(multiEngine.isThrowActive(slot.id));
+      setCurrentTime(multiEngine.getSlotPosition(slot.id));
     }, 100);
     return () => clearInterval(id);
   }, [slot.id]);
@@ -346,15 +346,15 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
 
   async function handlePlayStop() {
     if (isPlaying) {
-      collabEngine.stopSlot(slot.id);
+      multiEngine.stopSlot(slot.id);
       setIsPlaying(false);
     } else {
-      await collabEngine.playSlot(slot.id);
+      await multiEngine.playSlot(slot.id);
       setIsPlaying(true);
     }
   }
 
-  function persistSettings(patch: Partial<CollabSlot>, overridePitchInterval?: 1 | 7 | 12) {
+  function persistSettings(patch: Partial<MultiSlot>, overridePitchInterval?: 1 | 7 | 12) {
     const merged = { ...slot, ...patch };
     const dur = (buffer?.duration ?? 0) > 0 ? buffer!.duration : 1;
     saveSlotSettings(slot.id, {
@@ -372,8 +372,8 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
     });
   }
 
-  function update(patch: Partial<CollabSlot>) {
-    collabEngine.updateSlot(slot.id, patch);
+  function update(patch: Partial<MultiSlot>) {
+    multiEngine.updateSlot(slot.id, patch);
     onChange(patch);
     persistSettings(patch);
     if (patch.speed !== undefined || patch.pitch !== undefined || patch.linkPitch !== undefined) {
@@ -381,9 +381,9 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
     }
   }
 
-  function updateEffect(patch: Partial<CollabSlot["effects"]>) {
+  function updateEffect(patch: Partial<MultiSlot["effects"]>) {
     const effects = { ...slot.effects, ...patch };
-    collabEngine.updateSlot(slot.id, { effects });
+    multiEngine.updateSlot(slot.id, { effects });
     onChange({ effects });
     persistSettings({ effects });
     setActivePreset(null);
@@ -391,13 +391,13 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
 
   function handleReset() {
     const patch = { effects: { ...DRY_EFFECTS, phaserWet: 0, chorusWet: 0 }, speed: 1, pitch: 0, linkPitch: true, gain: 0 };
-    collabEngine.updateSlot(slot.id, patch);
+    multiEngine.updateSlot(slot.id, patch);
     onChange(patch);
     persistSettings(patch);
     setActivePreset(null);
   }
 
-  function applyPreset(preset: CollabPreset) {
+  function applyPreset(preset: MultiPreset) {
     onApplyPreset(preset);
     setActivePreset(preset.name);
   }
@@ -445,7 +445,7 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
               !buffer && "opacity-30 cursor-not-allowed")}>
             {isPlaying ? "⏸ Pause" : "▶ Play"}
           </button>
-          <button type="button" onClick={() => { collabEngine.seekSlot(slot.id, slot.loopStart); setSeekRevision((n) => n + 1); }} disabled={!buffer}
+          <button type="button" onClick={() => { multiEngine.seekSlot(slot.id, slot.loopStart); setSeekRevision((n) => n + 1); }} disabled={!buffer}
             className={cn("rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted",
               !buffer && "opacity-30 cursor-not-allowed")}
             title="Rewind to loop start">
@@ -461,7 +461,7 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
               slot.muted ? "bg-red-500/25 text-red-400 ring-1 ring-red-500/40" : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted")}>
             {slot.muted ? "✕ Muted" : "◎ Mute"}
           </button>
-          <button type="button" onClick={() => collabEngine.throwSlot(slot.id)} disabled={!buffer}
+          <button type="button" onClick={() => multiEngine.throwSlot(slot.id)} disabled={!buffer}
             className={cn("rounded px-2 py-1 text-xs font-bold uppercase tracking-wide transition",
               throwActive
                 ? "bg-teal-500/25 text-teal-400 ring-1 ring-teal-400/60"
@@ -559,9 +559,9 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
             loopStart={slot.loopStart}
             loopEnd={slot.loopEnd}
             seekRevision={seekRevision}
-            getPosition={() => collabEngine.getSlotPosition(slot.id)}
+            getPosition={() => multiEngine.getSlotPosition(slot.id)}
             onLoopChange={(start, end) => update({ loopStart: start, loopEnd: end })}
-            onSeek={(time) => { collabEngine.seekSlot(slot.id, time); setSeekRevision((n) => n + 1); }}
+            onSeek={(time) => { multiEngine.seekSlot(slot.id, time); setSeekRevision((n) => n + 1); }}
           />
           <div className="pointer-events-none absolute bottom-1 left-1.5 flex gap-1.5 text-[9px] font-mono tabular-nums text-white/40">
             <span>{formatTime(currentTime)}</span>

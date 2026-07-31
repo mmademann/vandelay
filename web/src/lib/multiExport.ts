@@ -1,55 +1,55 @@
 import type { StemName } from "../audio/dubEngine";
-import type { CollabMasterSettings, CollabSession, CollabPreset, ThrowPreset } from "./collabSettings";
+import type { MultiMasterSettings, MultiSession, MultiPreset, ThrowPreset } from "./multiSettings";
 import {
   loadNamedSessions,
-  loadCollabPresets,
+  loadMultiPresets,
   loadThrowPresets,
   loadAnchorKey,
   saveThrowSettings,
   saveAnchorKey,
   clearAnchorKey,
-} from "./collabSettings";
+} from "./multiSettings";
 
-export interface CollabExportFile {
+export interface MultiExportFile {
   exportedAt: number;
   version: 1;
-  namedSessions: CollabSession[];
+  namedSessions: MultiSession[];
   slotSettings: Record<string, unknown>;
-  presets: CollabPreset[];
+  presets: MultiPreset[];
   throwPresets: ThrowPreset[];
-  masterSettings: CollabMasterSettings;
+  masterSettings: MultiMasterSettings;
   anchor: { trackId: string; stemName: StemName | null } | null;
 }
 
-export function buildExport(masterSettings: CollabMasterSettings): CollabExportFile {
+export function buildExport(masterSettings: MultiMasterSettings): MultiExportFile {
   return {
     exportedAt: Date.now(),
     version: 1,
     namedSessions: loadNamedSessions(),
     slotSettings: JSON.parse(localStorage.getItem("vandelay:multi:slot-settings:v1") ?? "{}"),
-    presets: loadCollabPresets(),
+    presets: loadMultiPresets(),
     throwPresets: loadThrowPresets(),
     masterSettings,
     anchor: loadAnchorKey(),
   };
 }
 
-export async function saveExportToServer(data: CollabExportFile): Promise<void> {
-  await fetch("/api/collab-state", {
+export async function saveExportToServer(data: MultiExportFile): Promise<void> {
+  await fetch("/api/multi-state", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
 }
 
-export async function loadExportFromServer(): Promise<CollabExportFile | null> {
-  const res = await fetch("/api/collab-state");
+export async function loadExportFromServer(): Promise<MultiExportFile | null> {
+  const res = await fetch("/api/multi-state");
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Server error ${res.status}`);
-  return res.json() as Promise<CollabExportFile>;
+  return res.json() as Promise<MultiExportFile>;
 }
 
-export function applyImport(data: CollabExportFile): void {
+export function applyImport(data: MultiExportFile): void {
   localStorage.setItem("vandelay:multi:slot-settings:v1", JSON.stringify(data.slotSettings));
   localStorage.setItem("vandelay:multi:sessions:v1", JSON.stringify(data.namedSessions));
   localStorage.setItem("vandelay:multi:presets:v1", JSON.stringify(data.presets));

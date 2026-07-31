@@ -1,28 +1,28 @@
 import * as Tone from "tone";
-import type { CollabSlot, CollabMasterSettings } from "../lib/collabSettings";
+import type { MultiSlot, MultiMasterSettings } from "../lib/multiSettings";
 import { encodeExport } from "./encodeExport";
 import { reverbExportTailSec } from "./reverbSlot";
-import { createOfflineCollabEqChain } from "./collabChain";
+import { createOfflineMultiEqChain } from "./multiChain";
 import type { ExportEncodeOptions } from "./exportOptions";
 
-function slotPlaybackRate(slot: CollabSlot): number {
+function slotPlaybackRate(slot: MultiSlot): number {
   return slot.linkPitch ? slot.speed : slot.speed * Math.pow(2, slot.pitch / 12);
 }
 
-export interface RenderCollabOptions {
-  slots: CollabSlot[];
+export interface RenderMultiOptions {
+  slots: MultiSlot[];
   buffers: Map<string, AudioBuffer>;
-  masterSettings: CollabMasterSettings;
+  masterSettings: MultiMasterSettings;
   masterLoopLength: number;
   loopCount: number;
   export: ExportEncodeOptions;
 }
 
-function effectiveMute(slot: CollabSlot, anySoloed: boolean): boolean {
+function effectiveMute(slot: MultiSlot, anySoloed: boolean): boolean {
   return slot.muted || (anySoloed && !slot.soloed);
 }
 
-export function canExportCollab(opts: Pick<RenderCollabOptions, "slots" | "buffers" | "masterLoopLength">): boolean {
+export function canExportMulti(opts: Pick<RenderMultiOptions, "slots" | "buffers" | "masterLoopLength">): boolean {
   if (opts.masterLoopLength <= 0) return false;
   const anySoloed = opts.slots.some((s) => s.soloed);
   return opts.slots.some(
@@ -30,7 +30,7 @@ export function canExportCollab(opts: Pick<RenderCollabOptions, "slots" | "buffe
   );
 }
 
-export async function renderCollab(opts: RenderCollabOptions): Promise<Blob> {
+export async function renderMulti(opts: RenderMultiOptions): Promise<Blob> {
   const { slots, buffers, masterSettings, masterLoopLength, loopCount, export: exportOpts } = opts;
 
   const anySoloed = slots.some((s) => s.soloed);
@@ -66,7 +66,7 @@ export async function renderCollab(opts: RenderCollabOptions): Promise<Blob> {
       const rate = slotPlaybackRate(slot);
 
       const volume = new Tone.Volume(slot.gain).connect(master);
-      const eq = await createOfflineCollabEqChain(slot.effects, volume);
+      const eq = await createOfflineMultiEqChain(slot.effects, volume);
 
       const channels: Float32Array[] = [];
       for (let c = 0; c < src.numberOfChannels; c++) channels.push(src.getChannelData(c));

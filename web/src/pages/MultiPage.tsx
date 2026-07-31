@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { collabEngine } from "../audio/collabEngine";
+import { multiEngine } from "../audio/multiEngine";
 import { DRY_EFFECTS, type StemName } from "../audio/dubEngine";
 import { sanitizeEffects } from "../store";
-import type { CollabMasterSettings, CollabSlot, CollabSession, ThrowSettings } from "../lib/collabSettings";
+import type { MultiMasterSettings, MultiSlot, MultiSession, ThrowSettings } from "../lib/multiSettings";
 import { getCachedAudio, putCachedAudio } from "../lib/audioCache";
 import {
   loadNamedSessions,
@@ -12,35 +12,35 @@ import {
   deleteNamedSession,
   loadSlotSettings,
   saveSlotSettings,
-  loadCollabPresets,
-  saveCollabPreset,
-  deleteCollabPreset,
+  loadMultiPresets,
+  saveMultiPreset,
+  deleteMultiPreset,
   loadThrowSettings,
   saveThrowSettings,
   loadThrowPresets,
   saveThrowPreset,
   deleteThrowPreset,
-  type CollabPreset,
+  type MultiPreset,
   type ThrowPreset,
   loadAnchorKey,
   saveAnchorKey,
   clearAnchorKey,
-} from "../lib/collabSettings";
+} from "../lib/multiSettings";
 import { getAllTrackMeta, getTrackMeta, putTrackMeta } from "../lib/trackMetaCache";
 import { analyzeAudio, rootSemitone, preloadEssentia } from "../lib/audioAnalysis";
 import { computeAutoGain, computeStemViability } from "../lib/autoGain";
 import { STEM_AUTO_PRESETS, GENRE_PRESETS, randomizeEffects, type StemRole, type GenreName } from "../lib/vibePresets";
 import { buildRandomSlots } from "../lib/randomCombinator";
-import { SlotStrip } from "../components/collab/SlotStrip";
-import { SlotPicker } from "../components/collab/SlotPicker";
-import { CollabTransport } from "../components/collab/CollabTransport";
-import { buildExport, saveExportToServer, loadExportFromServer, applyImport } from "../lib/collabExport";
+import { SlotStrip } from "../components/multi/SlotStrip";
+import { SlotPicker } from "../components/multi/SlotPicker";
+import { MultiTransport } from "../components/multi/MultiTransport";
+import { buildExport, saveExportToServer, loadExportFromServer, applyImport } from "../lib/multiExport";
 
 const STEM_NAMES_SET = new Set<string>(["drums", "bass", "vocals", "other"]);
 const MAX_STEMS = 8;
 
 interface SlotEntry {
-  slot: CollabSlot;
+  slot: MultiSlot;
   title: string;
   error: string | null;
   loading: boolean;
@@ -112,7 +112,7 @@ function pendingKey(trackId: string, stemName: StemName | null): string {
   return stemName ? `${trackId}:${stemName}` : trackId;
 }
 
-export function CollabPage() {
+export function MultiPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const slotsParam = searchParams.get("slots") ?? "";
@@ -120,18 +120,18 @@ export function CollabPage() {
   const [entries, setEntries] = useState<SlotEntry[]>([]);
   const [showPicker, setShowPicker] = useState(false);
   const [referenceSlotId, setReferenceSlotId] = useState<string | null>(null);
-  const [masterSettings, setMasterSettings] = useState<CollabMasterSettings>(() => ({
+  const [masterSettings, setMasterSettings] = useState<MultiMasterSettings>(() => ({
     gain: 0,
     loopLengthOverride: null,
     throwSettings: loadThrowSettings(),
   }));
-  const [namedSessions, setNamedSessions] = useState<CollabSession[]>(() => loadNamedSessions());
+  const [namedSessions, setNamedSessions] = useState<MultiSession[]>(() => loadNamedSessions());
   const [sessionName, setSessionName] = useState("");
   const [activeSessionName, setActiveSessionName] = useState<string | null>(null);
   const [sessionsPanelOpen, setSessionsPanelOpen] = useState(false);
   const sessionsPanelRef = useRef<HTMLDivElement>(null);
   const sessionsBtnRef = useRef<HTMLButtonElement>(null);
-  const [presets, setPresets] = useState<CollabPreset[]>(() => loadCollabPresets());
+  const [presets, setPresets] = useState<MultiPreset[]>(() => loadMultiPresets());
   const [throwPresets, setThrowPresets] = useState<ThrowPreset[]>(() => loadThrowPresets());
   const [exportStatus, setExportStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [importStatus, setImportStatus] = useState<"idle" | "importing" | "imported" | "none" | "error">("idle");
@@ -153,7 +153,7 @@ export function CollabPage() {
   }
   const referenceSlotIdRef = useRef<string | null>(null);
   referenceSlotIdRef.current = referenceSlotId;
-  const pendingSessionSlotsRef = useRef<Map<string, CollabSlot>>(new Map());
+  const pendingSessionSlotsRef = useRef<Map<string, MultiSlot>>(new Map());
   const pendingReferenceIdRef = useRef<string | null>(null);
   const viabilityMapRef = useRef<Map<string, boolean>>(new Map());
 
@@ -164,7 +164,7 @@ export function CollabPage() {
         if (data) applyImport(data);
       }).catch(() => {});
     }
-    collabEngine.setThrowSettings(masterSettings.throwSettings);
+    multiEngine.setThrowSettings(masterSettings.throwSettings);
     preloadEssentia().catch(() => {});
     getAllTrackMeta().then((entries) => {
       for (const entry of entries) {
@@ -178,19 +178,19 @@ export function CollabPage() {
       if (entriesRef.current.length > 0) {
         saveExportToServer(buildExport(masterSettingsRef.current));
       }
-      collabEngine.dispose();
+      multiEngine.dispose();
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch library + history once on mount for title resolution and random session
   useEffect(() => {
-    console.time("[collab] library+history fetch");
+    console.time("[multi] library+history fetch");
     Promise.all([
       fetch("/api/stems/library", { priority: "high" } as RequestInit).then((r) => r.ok ? r.json() as Promise<{ id: string; title: string }[]> : Promise.resolve([])),
       fetch("/api/history", { priority: "high" } as RequestInit).then((r) => r.ok ? r.json() as Promise<{ id: string; title: string }[]> : Promise.resolve([])),
     ]).then(([lib, history]) => {
-      console.timeEnd("[collab] library+history fetch");
-      console.log(`[collab] library: ${(lib as []).length} stems, history: ${(history as []).length} tracks`);
+      console.timeEnd("[multi] library+history fetch");
+      console.log(`[multi] library: ${(lib as []).length} stems, history: ${(history as []).length} tracks`);
       setStemsLibrary(lib as { id: string; title: string }[]);
       const merged = new Map((history as { id: string; title: string }[]).map((e) => [e.id, e.title]));
       for (const e of lib as { id: string; title: string }[]) merged.set(e.id, e.title);
@@ -214,7 +214,7 @@ export function CollabPage() {
 
   // Poll engine running state for Play All / Stop All button
   useEffect(() => {
-    const id = setInterval(() => setIsPlayingAll(collabEngine.isRunning()), 100);
+    const id = setInterval(() => setIsPlayingAll(multiEngine.isRunning()), 100);
     return () => clearInterval(id);
   }, []);
 
@@ -260,7 +260,7 @@ export function CollabPage() {
     // 2. Parse + redirect check — BEFORE anchor restore
     const { tokens: pairs, redirect } = parseSlotsParam(slotsParam);
     if (redirect !== null) {
-      navigate(`/multi?slots=${redirect}`, { replace: true });
+      navigate(`/?slots=${redirect}`, { replace: true });
       return;
     }
 
@@ -282,7 +282,7 @@ export function CollabPage() {
       const existing = current.find((e) => e.slot.id === pair.uuid);
       if (existing) return existing;
       const id = pair.uuid;
-      const slot: CollabSlot = {
+      const slot: MultiSlot = {
         id,
         trackId: pair.trackId,
         stemName: pair.stemName,
@@ -303,7 +303,7 @@ export function CollabPage() {
     const nextIds = new Set(next.map((e) => e.slot.id));
     for (const old of current) {
       if (!nextIds.has(old.slot.id)) {
-        collabEngine.removeSlot(old.slot.id);
+        multiEngine.removeSlot(old.slot.id);
       }
     }
 
@@ -317,49 +317,49 @@ export function CollabPage() {
 
         const { slot } = entry;
         const label = slot.stemName ? `${slot.stemName}:${slot.trackId}` : `track:${slot.trackId}`;
-        console.time(`[collab] ${label} total`);
+        console.time(`[multi] ${label} total`);
         let buffer: AudioBuffer;
         try {
           if (slot.stemName === null) {
             const cacheKey = slot.trackId;
             let arrayBuffer = await getCachedAudio(cacheKey);
-            console.log(`[collab] ${label} idb: ${arrayBuffer ? "HIT" : "MISS"}`);
+            console.log(`[multi] ${label} idb: ${arrayBuffer ? "HIT" : "MISS"}`);
             if (!arrayBuffer) {
-              console.time(`[collab] ${label} fetch`);
+              console.time(`[multi] ${label} fetch`);
               const res = await fetch(`/api/audio/${slot.trackId}`);
               if (!res.ok) {
                 if (res.status === 404) throw new Error("Track not found");
                 throw new Error(`Server error ${res.status}`);
               }
               arrayBuffer = await res.arrayBuffer();
-              console.timeEnd(`[collab] ${label} fetch`);
+              console.timeEnd(`[multi] ${label} fetch`);
               putCachedAudio(cacheKey, arrayBuffer.slice(0));
             }
-            console.time(`[collab] ${label} decode`);
+            console.time(`[multi] ${label} decode`);
             const decodeCtx = new AudioContext();
             buffer = await decodeCtx.decodeAudioData(arrayBuffer.slice(0));
             decodeCtx.close();
-            console.timeEnd(`[collab] ${label} decode`);
+            console.timeEnd(`[multi] ${label} decode`);
           } else {
             const cacheKey = `stem:${slot.trackId}:${slot.stemName}:mp3`;
             let arrayBuffer = await getCachedAudio(cacheKey);
-            console.log(`[collab] ${label} idb: ${arrayBuffer ? "HIT" : "MISS"}`);
+            console.log(`[multi] ${label} idb: ${arrayBuffer ? "HIT" : "MISS"}`);
             if (!arrayBuffer) {
-              console.time(`[collab] ${label} fetch`);
+              console.time(`[multi] ${label} fetch`);
               const res = await fetch(`/api/stems/${slot.trackId}/${slot.stemName}`);
               if (!res.ok) {
                 if (res.status === 404) throw new Error("Stem not found — separate this track first");
                 throw new Error(`Server error ${res.status}`);
               }
               arrayBuffer = await res.arrayBuffer();
-              console.timeEnd(`[collab] ${label} fetch`);
+              console.timeEnd(`[multi] ${label} fetch`);
               putCachedAudio(cacheKey, arrayBuffer.slice(0));
             }
-            console.time(`[collab] ${label} decode`);
+            console.time(`[multi] ${label} decode`);
             const decodeCtx = new AudioContext();
             buffer = await decodeCtx.decodeAudioData(arrayBuffer.slice(0));
             decodeCtx.close();
-            console.timeEnd(`[collab] ${label} decode`);
+            console.timeEnd(`[multi] ${label} decode`);
           }
         } catch (e) {
           if (cancelled) return;
@@ -398,9 +398,9 @@ export function CollabPage() {
         if (cachedMeta && cachedMeta.detectedKey !== undefined) {
           detectedKey = cachedMeta.detectedKey;
           detectedBpm = cachedMeta.detectedBpm;
-          console.log(`[collab] ${label} key cache: HIT (${detectedKey ?? "null"})`);
+          console.log(`[multi] ${label} key cache: HIT (${detectedKey ?? "null"})`);
         } else {
-          console.log(`[collab] ${label} key cache: MISS — Essentia will run in background`);
+          console.log(`[multi] ${label} key cache: MISS — Essentia will run in background`);
         }
         // If not cached, detectedKey stays undefined — slot shows ? badge, Essentia runs later
 
@@ -410,7 +410,7 @@ export function CollabPage() {
         const pk = pendingKey(slot.trackId, slot.stemName);
         const pendingSlot = pendingSessionSlotsRef.current.get(pk);
         const saved = pendingSlot ? null : loadSlotSettings(slot.id);
-        let finalSlot: CollabSlot;
+        let finalSlot: MultiSlot;
         if (pendingSlot) {
           pendingSessionSlotsRef.current.delete(pk);
           finalSlot = {
@@ -442,9 +442,9 @@ export function CollabPage() {
 
         if (cancelled) return;
 
-        await collabEngine.addSlot(finalSlot, buffer);
-        console.timeEnd(`[collab] ${label} total`);
-        console.log(`[collab] ${label} READY (key: ${detectedKey ?? "pending"})`);
+        await multiEngine.addSlot(finalSlot, buffer);
+        console.timeEnd(`[multi] ${label} total`);
+        console.log(`[multi] ${label} READY (key: ${detectedKey ?? "pending"})`);
 
         // Slot is now playable — display immediately
         setEntries((prev) =>
@@ -466,10 +466,10 @@ export function CollabPage() {
         if (cachedMeta?.detectedKey === undefined) {
           (async () => {
             try {
-              console.time(`[collab] ${label} essentia`);
+              console.time(`[multi] ${label} essentia`);
               const result = await analyzeAudio(buffer);
-              console.timeEnd(`[collab] ${label} essentia`);
-              console.log(`[collab] ${label} key detected: ${result?.key ?? "null"}`);
+              console.timeEnd(`[multi] ${label} essentia`);
+              console.log(`[multi] ${label} key detected: ${result?.key ?? "null"}`);
               if (cancelled) return;
               const key = result?.key ?? null;
               const bpm = result?.bpm;
@@ -498,7 +498,7 @@ export function CollabPage() {
     return () => { cancelled = true; };
   }, [slotsParam]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function handleSlotChange(id: string, patch: Partial<CollabSlot>) {
+  function handleSlotChange(id: string, patch: Partial<MultiSlot>) {
     setEntries((prev) =>
       prev.map((e) => {
         if (e.slot.id !== id) return e;
@@ -526,7 +526,7 @@ export function CollabPage() {
     }
     const remaining = entriesRef.current.filter((e) => e.slot.id !== id);
     const param = encodeSlotsParam(remaining);
-    navigate(param ? `/multi?slots=${param}` : "/multi");
+    navigate(param ? `/?slots=${param}` : "/");
   }
 
   function handlePickerConfirm(trackId: string, stemName: StemName | null) {
@@ -536,7 +536,7 @@ export function CollabPage() {
     const token = stemName ? `${uuid}:${trackId}:${stemName}` : `${uuid}:${trackId}`;
     const current = encodeSlotsParam(entries);
     const param = current ? `${current},${token}` : token;
-    navigate(`/multi?slots=${param}`);
+    navigate(`/?slots=${param}`);
   }
 
   function handleSetReference(slotId: string) {
@@ -588,7 +588,7 @@ export function CollabPage() {
       }
     }
 
-    collabEngine.updateSlot(targetSlotId, { speed, pitch, linkPitch });
+    multiEngine.updateSlot(targetSlotId, { speed, pitch, linkPitch });
     setEntries((prev) =>
       prev.map((e) =>
         e.slot.id === targetSlotId
@@ -616,7 +616,7 @@ export function CollabPage() {
       const overrides = GENRE_PRESETS[genre][role];
       const newEffects = sanitizeEffects({ ...e.slot.effects, ...overrides });
       const newSlot = { ...e.slot, effects: newEffects };
-      collabEngine.updateSlot(newSlot.id, { effects: newEffects });
+      multiEngine.updateSlot(newSlot.id, { effects: newEffects });
       const dur = e.buffer?.duration ?? 1;
       saveSlotSettings(newSlot.id, {
         speed: newSlot.speed, pitch: newSlot.pitch, linkPitch: newSlot.linkPitch,
@@ -633,7 +633,7 @@ export function CollabPage() {
       const role: StemRole = e.slot.stemName ?? "full";
       const newEffects = randomizeEffects(e.slot.effects, role);
       const newSlot = { ...e.slot, effects: newEffects };
-      collabEngine.updateSlot(newSlot.id, { effects: newEffects });
+      multiEngine.updateSlot(newSlot.id, { effects: newEffects });
       const dur = e.buffer?.duration ?? 1;
       saveSlotSettings(newSlot.id, {
         speed: newSlot.speed, pitch: newSlot.pitch, linkPitch: newSlot.linkPitch,
@@ -656,7 +656,7 @@ export function CollabPage() {
       return slots.findIndex((s) => s.stemName === stemName);
     }, -1);
     pendingReferenceIdRef.current = uuids[anchorIdx === -1 ? 0 : anchorIdx];
-    navigate(`/multi?slots=${param}`);
+    navigate(`/?slots=${param}`);
   }
 
   function handleSaveSession() {
@@ -674,12 +674,12 @@ export function CollabPage() {
     saveExportToServer(buildExport(masterSettingsRef.current));
   }
 
-  function handleLoadSession(session: CollabSession) {
+  function handleLoadSession(session: MultiSession) {
     setActiveSessionName(session.name);
     const ms = session.masterSettings;
     setMasterSettings(ms);
-    collabEngine.setMasterSettings(ms);
-    collabEngine.setThrowSettings(ms.throwSettings);
+    multiEngine.setMasterSettings(ms);
+    multiEngine.setThrowSettings(ms.throwSettings);
 
     const slotsWithIds = session.slots.map((s) => ({
       ...s,
@@ -696,8 +696,8 @@ export function CollabPage() {
     const param = slotsWithIds
       .map((s) => s.stemName ? `${s.id}:${s.trackId}:${s.stemName}` : `${s.id}:${s.trackId}`)
       .join(",");
-    collabEngine.stop();
-    navigate(param ? `/multi?slots=${param}` : "/multi");
+    multiEngine.stop();
+    navigate(param ? `/?slots=${param}` : "/");
   }
 
   function handleDeleteSession(name: string) {
@@ -705,15 +705,15 @@ export function CollabPage() {
     saveExportToServer(buildExport(masterSettingsRef.current));
   }
 
-  function handleSavePreset(name: string, preset: Omit<CollabPreset, "name">) {
-    setPresets(saveCollabPreset(name, preset));
+  function handleSavePreset(name: string, preset: Omit<MultiPreset, "name">) {
+    setPresets(saveMultiPreset(name, preset));
   }
 
   function handleDeletePreset(name: string) {
-    setPresets(deleteCollabPreset(name));
+    setPresets(deleteMultiPreset(name));
   }
 
-  function handleApplyPreset(slotId: string, preset: CollabPreset) {
+  function handleApplyPreset(slotId: string, preset: MultiPreset) {
     const patch = {
       effects: preset.effects,
       speed: preset.speed,
@@ -721,7 +721,7 @@ export function CollabPage() {
       linkPitch: preset.linkPitch,
       gain: preset.gain,
     };
-    collabEngine.updateSlot(slotId, patch);
+    multiEngine.updateSlot(slotId, patch);
     setEntries((prev) =>
       prev.map((e) => {
         if (e.slot.id !== slotId) return e;
@@ -757,7 +757,7 @@ export function CollabPage() {
   }
 
   function handleApplyThrowPreset(preset: ThrowPreset) {
-    collabEngine.setThrowSettings(preset.settings);
+    multiEngine.setThrowSettings(preset.settings);
     setMasterSettings((prev) => ({ ...prev, throwSettings: preset.settings }));
     saveThrowSettings(preset.settings);
   }
@@ -792,8 +792,8 @@ export function CollabPage() {
       setPresets(data.presets);
       setThrowPresets(data.throwPresets);
       setMasterSettings(data.masterSettings);
-      collabEngine.setMasterSettings(data.masterSettings);
-      collabEngine.setThrowSettings(data.masterSettings.throwSettings);
+      multiEngine.setMasterSettings(data.masterSettings);
+      multiEngine.setThrowSettings(data.masterSettings.throwSettings);
       setImportStatus("imported");
       setTimeout(() => setImportStatus("idle"), 2000);
     } catch {
@@ -803,18 +803,18 @@ export function CollabPage() {
   }
 
   async function handlePlayAll() {
-    await collabEngine.play();
+    await multiEngine.play();
   }
 
   function handleStopAll() {
-    collabEngine.stop();
+    multiEngine.stop();
   }
 
   function handleClear() {
-    navigate("/multi");
+    navigate("/");
   }
 
-  const portalTarget = document.getElementById("collab-transport-portal");
+  const portalTarget = document.getElementById("multi-transport-portal");
   const topBar = (
     <div className="relative flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
         {/* Sessions dropdown button */}
@@ -929,7 +929,7 @@ export function CollabPage() {
 
         <div className="h-4 w-px shrink-0 bg-border/50" />
 
-        <CollabTransport
+        <MultiTransport
           masterSettings={masterSettings}
           slotCount={entries.length}
           referenceSlotId={referenceSlotId}
@@ -938,7 +938,7 @@ export function CollabPage() {
           getSlotsAndBuffers={getSlotsAndBuffers.current}
           onPlayAll={handlePlayAll}
           onStopAll={handleStopAll}
-          onRewindAll={() => { for (const e of entries) collabEngine.seekSlot(e.slot.id, e.slot.loopStart); }}
+          onRewindAll={() => { for (const e of entries) multiEngine.seekSlot(e.slot.id, e.slot.loopStart); }}
           onThrowSettingsChange={handleThrowSettingsChange}
           throwPresets={throwPresets}
           onSaveThrowPreset={handleSaveThrowPreset}

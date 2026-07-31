@@ -1,6 +1,6 @@
 # Vandelay
 
-A "slowed + reverb" web app with four modes: a single-track editor at `/`, a multi-track mixer at `/mix`, a stem separator at `/stems`, and a collab stem layering page at `/collab`. Paste a YouTube URL or upload a local audio file, set loop regions, dial in effects, and export.
+A "slowed + reverb" web app with four modes: a multi-track stem layering page at `/`, a single-track editor at `/single`, a multi-track mixer at `/mix`, and a stem separator at `/stems`. Paste a YouTube URL or upload a local audio file, set loop regions, dial in effects, and export.
 
 Open http://localhost:5173 after starting the dev server (see below).
 
@@ -11,7 +11,7 @@ Open http://localhost:5173 after starting the dev server (see below).
 
 `ffmpeg` is bundled via `ffmpeg-static` for YouTube extraction — no separate install needed for core features.
 
-### Stems + Collab (`/stems`, `/collab`) — optional
+### Stems + Multi (`/stems`, `/`) — optional
 
 Stem separation requires additional Python tooling. Run the setup script once:
 
@@ -52,7 +52,7 @@ Fresh terminal? Run `nvm use` again before `npm run dev`.
 
 Default ports: web **5173**, server **5174** (see `web/vite.config.ts` and `server/src/index.ts` to change).
 
-## Single-track mode (`/`)
+## Single-track mode (`/single`)
 
 Three columns: **Recent** | waveform + effects | export + presets.
 
@@ -72,7 +72,7 @@ Paste a YouTube URL and click **Separate** — the server downloads the track an
 
 - Separation takes ~2–5 min per track on CPU; stems are cached in `server/stems/` for instant reload
 
-## Collab mode (`/collab`)
+## Multi mode (`/`)
 
 Multi-slot stem layering with full per-slot dub effects. Load stems from the library (tracks you've already separated), arrange them into slots, and layer loops with independent effects per slot.
 

@@ -4,11 +4,11 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const STATE_PATH = join(__dirname, "../../..", "collab-state.json");
+const STATE_PATH = join(__dirname, "../../..", "multi-state.json");
 
 const router = Router();
 
-router.get("/collab-state", async (_req, res) => {
+router.get("/multi-state", async (_req, res) => {
   try {
     const data = await readFile(STATE_PATH, "utf-8");
     res.json(JSON.parse(data));
@@ -21,7 +21,7 @@ router.get("/collab-state", async (_req, res) => {
   }
 });
 
-router.post("/collab-state", async (req, res) => {
+router.post("/multi-state", async (req, res) => {
   const body = req.body;
   if (body?.version !== 1 || !body.namedSessions || !body.slotSettings || !body.presets || !body.masterSettings) {
     res.status(400).json({ error: "Invalid export structure" });

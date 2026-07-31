@@ -21,7 +21,7 @@ export function UrlLoader() {
     setStatus("loading");
     try {
       const meta = await resolveTrackFromUrl(url);
-      navigate(`/?v=${meta.id}`);
+      navigate(`/single?v=${meta.id}`);
     } catch (e) {
       setStatus("error", e instanceof Error ? e.message : "Unknown error");
     } finally {
@@ -37,7 +37,7 @@ export function UrlLoader() {
     setStatus("loading");
     try {
       const meta = await loadLocalFileMeta(file);
-      navigate(`/?v=${meta.id}`);
+      navigate(`/single?v=${meta.id}`);
     } catch (err) {
       setStatus("error", err instanceof Error ? err.message : "Failed to load file");
     } finally {

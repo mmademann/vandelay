@@ -1,7 +1,7 @@
 import type { StemName } from "../audio/dubEngine";
 import type { EffectsState } from "../store";
 
-export interface CollabSlot {
+export interface MultiSlot {
   id: string;
   trackId: string;
   stemName: StemName | null;
@@ -20,7 +20,7 @@ export interface CollabSlot {
 }
 
 // Per-slot saved settings (keyed by slot UUID)
-export interface CollabSlotSavedSettings {
+export interface MultiSlotSavedSettings {
   speed: number;
   pitch: number;
   linkPitch: boolean;
@@ -36,27 +36,27 @@ export interface CollabSlotSavedSettings {
 
 const SLOT_SETTINGS_KEY = "vandelay:multi:slot-settings:v1";
 
-function loadAllSlotSettings(): Record<string, CollabSlotSavedSettings> {
+function loadAllSlotSettings(): Record<string, MultiSlotSavedSettings> {
   try {
     const raw = localStorage.getItem(SLOT_SETTINGS_KEY);
     if (!raw) return {};
-    return JSON.parse(raw) as Record<string, CollabSlotSavedSettings>;
+    return JSON.parse(raw) as Record<string, MultiSlotSavedSettings>;
   } catch { return {}; }
 }
 
-export function loadSlotSettings(uuid: string): CollabSlotSavedSettings | null {
+export function loadSlotSettings(uuid: string): MultiSlotSavedSettings | null {
   const all = loadAllSlotSettings();
   return all[uuid] ?? null;
 }
 
-export function saveSlotSettings(uuid: string, settings: CollabSlotSavedSettings): void {
+export function saveSlotSettings(uuid: string, settings: MultiSlotSavedSettings): void {
   const all = loadAllSlotSettings();
   all[uuid] = settings;
   try { localStorage.setItem(SLOT_SETTINGS_KEY, JSON.stringify(all)); } catch {}
 }
 
-// Collab effect presets (shared across all slots)
-export interface CollabPreset {
+// Multi effect presets (shared across all slots)
+export interface MultiPreset {
   name: string;
   effects: EffectsState;
   speed: number;
@@ -67,27 +67,27 @@ export interface CollabPreset {
 
 const PRESETS_KEY = "vandelay:multi:presets:v1";
 
-export function loadCollabPresets(): CollabPreset[] {
+export function loadMultiPresets(): MultiPreset[] {
   try {
     const raw = localStorage.getItem(PRESETS_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return parsed
-      .filter((p): p is CollabPreset => p && typeof p.name === "string" && p.effects)
+      .filter((p): p is MultiPreset => p && typeof p.name === "string" && p.effects)
       .map((p) => (p.gain == null ? { ...p, gain: 0 } : p));
   } catch { return []; }
 }
 
-export function saveCollabPreset(name: string, preset: Omit<CollabPreset, "name">): CollabPreset[] {
-  const existing = loadCollabPresets().filter((p) => p.name !== name);
+export function saveMultiPreset(name: string, preset: Omit<MultiPreset, "name">): MultiPreset[] {
+  const existing = loadMultiPresets().filter((p) => p.name !== name);
   const updated = [{ name, ...preset }, ...existing];
   try { localStorage.setItem(PRESETS_KEY, JSON.stringify(updated)); } catch {}
   return updated;
 }
 
-export function deleteCollabPreset(name: string): CollabPreset[] {
-  const updated = loadCollabPresets().filter((p) => p.name !== name);
+export function deleteMultiPreset(name: string): MultiPreset[] {
+  const updated = loadMultiPresets().filter((p) => p.name !== name);
   try { localStorage.setItem(PRESETS_KEY, JSON.stringify(updated)); } catch {}
   return updated;
 }
@@ -177,29 +177,29 @@ export function clearAnchorKey(): void {
   try { localStorage.removeItem(ANCHOR_KEY); } catch {}
 }
 
-export interface CollabMasterSettings {
+export interface MultiMasterSettings {
   gain: number;
   loopLengthOverride: number | null;
   throwSettings: ThrowSettings;
 }
 
-export interface CollabSession {
+export interface MultiSession {
   name: string;
   savedAt: number;
-  slots: CollabSlot[];
-  masterSettings: CollabMasterSettings;
+  slots: MultiSlot[];
+  masterSettings: MultiMasterSettings;
 }
 
 const NAMED_KEY = "vandelay:multi:sessions:v1";
 
-export function loadNamedSessions(): CollabSession[] {
+export function loadNamedSessions(): MultiSession[] {
   try {
     const raw = localStorage.getItem(NAMED_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return parsed
-      .filter((s): s is CollabSession => s && typeof s.name === "string" && Array.isArray(s.slots))
+      .filter((s): s is MultiSession => s && typeof s.name === "string" && Array.isArray(s.slots))
       .map((s) => ({
         ...s,
         masterSettings: {
@@ -214,16 +214,16 @@ export function loadNamedSessions(): CollabSession[] {
 
 export function saveNamedSession(
   name: string,
-  slots: CollabSlot[],
-  masterSettings: CollabMasterSettings,
-): CollabSession[] {
+  slots: MultiSlot[],
+  masterSettings: MultiMasterSettings,
+): MultiSession[] {
   const existing = loadNamedSessions().filter((s) => s.name !== name);
-  const updated: CollabSession[] = [{ name, savedAt: Date.now(), slots, masterSettings }, ...existing];
+  const updated: MultiSession[] = [{ name, savedAt: Date.now(), slots, masterSettings }, ...existing];
   try { localStorage.setItem(NAMED_KEY, JSON.stringify(updated)); } catch {}
   return updated;
 }
 
-export function deleteNamedSession(name: string): CollabSession[] {
+export function deleteNamedSession(name: string): MultiSession[] {
   const updated = loadNamedSessions().filter((s) => s.name !== name);
   try { localStorage.setItem(NAMED_KEY, JSON.stringify(updated)); } catch {}
   return updated;

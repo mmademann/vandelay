@@ -14,7 +14,7 @@ import { Spinner } from "./ui/Spinner";
 interface HistoryProps {
   className?: string;
   scrollable?: boolean;
-  /** single: load track on `/`. mix-add: append to current mix URL. stems: load stems on `/stems`. */
+  /** single: load track on `/single`. mix-add: append to current mix URL. stems: load stems on `/stems`. */
   mode?: "single" | "mix-add" | "stems";
   /** mix-add: hide tracks already in the mix */
   excludeIds?: string[];
@@ -125,7 +125,7 @@ export function History({
     if (mode === "single") {
       if (status === "loading") return;
       if (entry.id === currentId) return;
-      navigate(`/?v=${entry.id}`);
+      navigate(`/single?v=${entry.id}`);
       return;
     }
 
@@ -151,7 +151,7 @@ export function History({
         engine.stop();
         useStore.getState().setIsPlaying(false);
         if (urlId === id) {
-          navigate("/");
+          navigate("/single");
         } else {
           engine.dispose();
           useStore.getState().clearTrack();

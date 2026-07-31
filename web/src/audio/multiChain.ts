@@ -9,7 +9,7 @@ import {
 import { applyBassBoost, createBassChain, type BassChain } from "./graph";
 import { TapeDelay } from "./tapeDelay";
 
-export interface CollabEffectsChain {
+export interface MultiEffectsChain {
   distortion: Tone.Distortion;
   eqLo: Tone.Filter;
   eqMid: Tone.Filter;
@@ -22,7 +22,7 @@ export interface CollabEffectsChain {
   gain: Tone.Gain;
 }
 
-export async function createCollabEffectsChain(output: Tone.ToneAudioNode): Promise<CollabEffectsChain> {
+export async function createMultiEffectsChain(output: Tone.ToneAudioNode): Promise<MultiEffectsChain> {
   const gain = new Tone.Gain(1).connect(output);
   const reverbs = await createDualReverb(gain);
   const delay = new TapeDelay(reverbs.algorithmic, { delayTime: 0.25, feedback: 0.3, wet: 0 });
@@ -40,7 +40,7 @@ export async function createCollabEffectsChain(output: Tone.ToneAudioNode): Prom
   return { distortion, eqLo, eqMid, eqHi, phaser, chorus, bass, delay, reverbs, gain };
 }
 
-export async function createOfflineCollabEqChain(
+export async function createOfflineMultiEqChain(
   effects: EffectsState,
   output: Tone.ToneAudioNode,
 ): Promise<Tone.Distortion> {
@@ -106,7 +106,7 @@ export async function createOfflineCollabEqChain(
   return new Tone.Distortion({ distortion: Math.pow(grit, 0.5), wet: grit }).connect(eqLoOff);
 }
 
-export function applyCollabEffectsChain(chain: CollabEffectsChain, e: EffectsState): void {
+export function applyMultiEffectsChain(chain: MultiEffectsChain, e: EffectsState): void {
   const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
   chain.gain.gain.value = e.gain;
   applyDualReverb(chain.reverbs, e);

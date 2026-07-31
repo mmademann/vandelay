@@ -1,6 +1,6 @@
 # Vandelay — context for Claude
 
-Personal-use "slowed + reverb" web app. Four routes: **`/`** (single track), **`/mix`** (multi-track + drums), **`/stems`** (demucs stem separation), **`/collab`** (multi-slot stem layering with dub effects).
+Personal-use "slowed + reverb" web app. Four routes: **`/`** (multi-slot stem layering with dub effects), **`/single`** (single track), **`/mix`** (multi-track + drums), **`/stems`** (demucs stem separation). Legacy `/multi` redirects to `/`, preserving `?slots=`.
 
 **User-facing behavior** (features, defaults, export options): see `README.md`.  
 **Implementation details** (limits, keys, presets): read the source — don't trust hardcoded values in this file.
@@ -32,7 +32,7 @@ Decode → `AudioBuffer` → real-time Tone.js playback. Offline export via `Ton
 | Layer | What | Where to look |
 | --- | --- | --- |
 | Server disk | YouTube WAV cache, server history index | `server/cache/`, `server/history.json` |
-| Server disk (collab) | Full collab state snapshot (gitignored JSON) | `collab-state.json` at repo root via `GET/POST /api/collab-state` |
+| Server disk (multi) | Full multi state snapshot (gitignored JSON) | `multi-state.json` at repo root via `GET/POST /api/multi-state` |
 | IndexedDB | Raw audio bytes, track metadata (Recent) | `audioCache.ts`, `trackMetaCache.ts` |
 | localStorage | Per-track settings, presets | `settings.ts`, `mixSettings.ts`, `*Presets.ts` |
 
@@ -45,21 +45,21 @@ Decoded `AudioBuffer`s are **in-memory only** (per session). WAV bytes and metad
 | `engine` | Single track | `Player → Distortion → EQ → Delay → Reverb → Gain → destination` |
 | `mixEngine` | Per audio strip | Same chain → `Volume → PauseGain → master` |
 | `drumEngine` | Drums | Synths → separate kick/hat effect chains → master |
-| `collabEngine` | Per slot | `Player → Distortion → EqLo → EqMid → EqHi → Bass → TapeDelay → DualReverb → Gain → Volume → master` (+ parallel: `springConvolver → springWet → master`; `throwSend → throwFilter → throwDelay → throwReverb → master`) |
+| `multiEngine` | Per slot | `Player → Distortion → EqLo → EqMid → EqHi → Bass → TapeDelay → DualReverb → Gain → Volume → master` (+ parallel: `springConvolver → springWet → master`; `throwSend → throwFilter → throwDelay → throwReverb → master`) |
 
 Loop regions are managed in engine code, not via the player's native loop points. Pitch/speed go through **`playbackRateForEffects`** on `Tone.Player`.
 
-**Collab engine specifics**: each slot has independent playback position tracking (`startedAt` + `startOffset`). All timing uses `Tone.now()` — never mix with raw `AudioContext.currentTime`. Position formula: `loopStart + ((offsetInLoop + elapsed) % loopDur + loopDur) % loopDur` (positive modulo required). `play()`/`stop()` skip already-playing/paused slots so Play All / Pause All respect individual slot states.
+**Multi engine specifics**: each slot has independent playback position tracking (`startedAt` + `startOffset`). All timing uses `Tone.now()` — never mix with raw `AudioContext.currentTime`. Position formula: `loopStart + ((offsetInLoop + elapsed) % loopDur + loopDur) % loopDur` (positive modulo required). `play()`/`stop()` skip already-playing/paused slots so Play All / Pause All respect individual slot states.
 
-**Collab effects**: `TapeDelay` (in `tapeDelay.ts`) replaces `FeedbackDelay` in the collab chain — adds a feedback lowpass filter + distortion + pitch-wobble LFO controlled by `spaceEchoWow` (S.ECHO knob). **Big Knob** (`bigKnobWet`) drives a parallel spring reverb send (`springConvolver → springWet → master`) tapped from the slot's gain output, independent of all other effects. **3-band EQ** (`eqLo/eqMid/eqHi`) sits pre-delay so echoes inherit the EQ'd tone. **Throw** (`throwSend → throwFilter → throwDelay → throwReverb → master`) is a momentary gated send per slot; throw character (delay + reverb settings) is global via `ThrowSettings` in `CollabMasterSettings`. The throw filter adds an env-swept resonant lowpass on the echoes.
+**Multi effects**: `TapeDelay` (in `tapeDelay.ts`) replaces `FeedbackDelay` in the multi chain — adds a feedback lowpass filter + distortion + pitch-wobble LFO controlled by `spaceEchoWow` (S.ECHO knob). **Big Knob** (`bigKnobWet`) drives a parallel spring reverb send (`springConvolver → springWet → master`) tapped from the slot's gain output, independent of all other effects. **3-band EQ** (`eqLo/eqMid/eqHi`) sits pre-delay so echoes inherit the EQ'd tone. **Throw** (`throwSend → throwFilter → throwDelay → throwReverb → master`) is a momentary gated send per slot; throw character (delay + reverb settings) is global via `ThrowSettings` in `MultiMasterSettings`. The throw filter adds an env-swept resonant lowpass on the echoes.
 
 **Lazy graph build**: audio context needs a user gesture. URL loads decode the buffer first; Tone graph builds on first Play (`ensureGraph` / `playAll`). **Re-apply settings after graph rebuild** (track switch, `engine.load`) or the chain stays at factory defaults.
 
-**Collab pitch/speed**: `slotPlaybackRate(slot)` computes the Tone.Player `playbackRate`. When `linkPitch: true`, only `speed` drives rate; `pitch` is ignored. When `linkPitch: false`, rate = `speed * 2^(pitch/12)`. Octave shift buttons force `linkPitch: false` so pitch changes are audible.
+**Multi pitch/speed**: `slotPlaybackRate(slot)` computes the Tone.Player `playbackRate`. When `linkPitch: true`, only `speed` drives rate; `pitch` is ignored. When `linkPitch: false`, rate = `speed * 2^(pitch/12)`. Octave shift buttons force `linkPitch: false` so pitch changes are audible.
 
-**Loop bounds clamping**: `collabEngine.addSlot` clamps `loopStart/loopEnd` against the actual buffer duration before setting them on the Tone Player. This is the authoritative clamp — upstream code in `CollabPage` also clamps but the engine is the safety net.
+**Loop bounds clamping**: `multiEngine.addSlot` clamps `loopStart/loopEnd` against the actual buffer duration before setting them on the Tone Player. This is the authoritative clamp — upstream code in `MultiPage` also clamps but the engine is the safety net.
 
-### Key detection + auto-match (collab)
+### Key detection + auto-match (multi)
 
 - **Essentia.js** runs in a **Web Worker** (`audioAnalysisWorker.ts`) — offloaded to avoid blocking the audio thread. `audioAnalysis.ts` manages the worker singleton and routes requests/responses via a pending-callback map. WASM loads once in the worker; subsequent calls reuse it. Results cached in `trackMetaCache` (`detectedKey`, `detectedBpm`). Detection is skipped if already cached (`detectedKey !== undefined`). `null` = ran and failed/low confidence.
 - **Confidence threshold**: < 0.5 → show `?` badge, treat as no key for auto-match.
@@ -72,43 +72,43 @@ Loop regions are managed in engine code, not via the player's native loop points
 
 - Single: `render.ts` + `encodeExport.ts`
 - Mix: `renderMix.ts` + `encodeExport.ts` (respects pause/mute/effects-bypass the same way live audition should)
-- Collab: `renderCollab.ts` + `encodeExport.ts` (master loop length × loop count; respects mute/solo/effects per slot)
+- Multi: `renderMulti.ts` + `encodeExport.ts` (master loop length × loop count; respects mute/solo/effects per slot)
 - Format/quality options: `exportOptions.ts`
 
 ### Where code lives
 
 ```
 server/src/          API routes, yt-dlp/ffmpeg extract, server history, stems library
-  routes/collabState.ts  GET/POST /api/collab-state — reads/writes collab-state.json at repo root
+  routes/multiState.ts  GET/POST /api/multi-state — reads/writes multi-state.json at repo root
 web/src/
   main.tsx           Entry point — no StrictMode
   pages/             Route shells + URL reconcilers
   store.ts           Single state, EFFECTS_LIMITS, effect sanitization/bypass
   mixStore.ts        Mix state
   audio/             Engines, offline render, encode
-    collabEngine.ts  Per-slot playback engine (independent position tracking, effects, throw)
-    collabChain.ts   Collab effects chain factory (live + offline); TapeDelay wiring, spring reverb, 3-band EQ, Phaser, Chorus
+    multiEngine.ts  Per-slot playback engine (independent position tracking, effects, throw)
+    multiChain.ts   Multi effects chain factory (live + offline); TapeDelay wiring, spring reverb, 3-band EQ, Phaser, Chorus
     tapeDelay.ts     TapeDelay class — filtered feedback + LFO wow (S.ECHO knob)
-    renderCollab.ts  Offline render for /collab export
+    renderMulti.ts  Offline render for / (multi) export
     graph.ts         Shared effects chain (Distortion → EQ → Delay → Reverb → Gain)
   workers/
     audioAnalysisWorker.ts  Essentia WASM runs here (key + BPM extraction off main thread)
     reverbSlot.ts    DualReverb nodes + synthesizeSpringImpulse + createOfflineEqChain (single/mix)
-  components/        UI (mix/ subfolder for mixer, collab/ subfolder for collab)
-    collab/
+  components/        UI (mix/ subfolder for mixer, multi/ subfolder for multi)
+    multi/
       SlotStrip.tsx       Per-slot UI (waveform, knobs, presets, play/pause/rewind, THROW button, key badge, octave shift, MATCHED badge)
       SlotPicker.tsx      Inline track+stem picker panel (YouTube URL input above search; youtu.be short-link parsing)
-      CollabTransport.tsx Transport bar: Sessions dropdown · Play All · Rewind All · Throw (floating panel) · Match All · Export (floating panel) · Clear
+      MultiTransport.tsx Transport bar: Sessions dropdown · Play All · Rewind All · Throw (floating panel) · Match All · Export (floating panel) · Clear
   lib/               Loaders, caches, persistence, format helpers, presets
-    collabSettings.ts    CollabSlot/Session types, per-slot localStorage CRUD, named sessions, anchor key, throw settings
-    collabExport.ts      CollabExportFile type, buildExport/saveExportToServer/loadExportFromServer/applyImport — full state backup to server
+    multiSettings.ts    MultiSlot/Session types, per-slot localStorage CRUD, named sessions, anchor key, throw settings
+    multiExport.ts      MultiExportFile type, buildExport/saveExportToServer/loadExportFromServer/applyImport — full state backup to server
     vibePresets.ts       GENRE_PRESETS (Dub/Lo-fi/Ambient/Dry × stem role), STEM_AUTO_PRESETS, randomizeEffects(), RANDOMIZE_RANGES
     randomCombinator.ts  buildRandomSlots() — picks one stem role per track from library, skipping non-viable stems
     audioAnalysis.ts     Web Worker manager for Essentia — analyzeAudio(), rootSemitone(), preloadEssentia()
     trackMetaCache.ts    IndexedDB track metadata including detectedKey/detectedBpm
 ```
 
-## Collab UI layout (current)
+## Multi UI layout (current)
 
 **Transport bar** (top): `Sessions (N)` button (dropdown) · `▶ Play All` · `⏮ Rewind All` · `↯ Throw` (floating panel) · `+ GENRE` (floating panel: Dub / Lo-fi / Ambient / Dry presets + Randomize All) · `RANDOM` (random session from library) · `Match All to Anchor` (visible when reference pinned + ≥2 slots) · `↓ Export` (floating panel) · `Clear`
 
@@ -120,7 +120,7 @@ web/src/
 
 **SlotPicker panel**: YouTube URL input (top) → Add button · Search input · Track list with stem buttons (Drums / Bass / Vocals / Other / Full track)
 
-## Collab URL format
+## Multi URL format
 
 ```
 ?slots=trackId:stemName,trackId:stemName,...
@@ -134,16 +134,16 @@ Slot IDs are UUIDs generated at runtime, not derived from trackId+stemName. Pars
 1. **URL drives loaded tracks** — navigate, don't mutate store to add/remove.
 2. **Export matches audible settings** — same bypass/rate helpers as playback.
 3. **Settings merge with defaults on load** — `{ ...DEFAULT_EFFECTS, ...saved }` + `sanitizeEffects()` so new fields don't break old saves.
-4. **Loop bounds clamped in `addSlot`** — engine clamps `loopStart/loopEnd` against buffer duration; upstream CollabPage also clamps but engine is the safety net.
+4. **Loop bounds clamped in `addSlot`** — engine clamps `loopStart/loopEnd` against buffer duration; upstream MultiPage also clamps but engine is the safety net.
 5. **Mix pause = `pauseGain` to 0**, not stop — keeps phase on resume.
 6. **`dispose()` / `removeTrack` hard-stops** before disconnecting — prevents ghost audio.
 7. **Effects bypass preserves slider values** — `effectiveEffects` / `appliedAudioEffects` return dry/unity when disabled.
 8. **Track switch / history remove** — stop engine and reconcile URL if the removed id is currently loaded.
 9. **Mix `addTrack` / loaders idempotent** — StrictMode-safe (though StrictMode is off).
 10. **ArrayBuffers consumed by decode/IDB** — `.slice(0)` before handoff (`audioBufferStore.ts`).
-11. **Collab position tracking** — always use `Tone.now()`, never `AudioContext.currentTime`. `startedAt` is set at the scheduled start time (`Tone.now() + 0.05`), not wall clock. Use positive modulo for loop wrap.
-12. **Effects chain includes Distortion** — `Tone.Distortion` is the first node after Player in all engines. `wet = grit`, `distortion = Math.pow(grit, 0.5)`. `createOfflineEqChain` (single/mix, in `reverbSlot.ts`) and `createOfflineCollabEqChain` (collab, in `collabChain.ts`) both return the distortion node as the chain input.
-13. **Collab `addSlot` auto-join** uses `this.running` (private flag), not `isRunning()` — so manually-paused slots don't auto-join when a new slot is added mid-session.
+11. **Multi position tracking** — always use `Tone.now()`, never `AudioContext.currentTime`. `startedAt` is set at the scheduled start time (`Tone.now() + 0.05`), not wall clock. Use positive modulo for loop wrap.
+12. **Effects chain includes Distortion** — `Tone.Distortion` is the first node after Player in all engines. `wet = grit`, `distortion = Math.pow(grit, 0.5)`. `createOfflineEqChain` (single/mix, in `reverbSlot.ts`) and `createOfflineMultiEqChain` (multi, in `multiChain.ts`) both return the distortion node as the chain input.
+13. **Multi `addSlot` auto-join** uses `this.running` (private flag), not `isRunning()` — so manually-paused slots don't auto-join when a new slot is added mid-session.
 14. **Anchor restored synchronously** — `loadAnchorKey()` is called at the top of the URL reconciler effect before any `await`, and both `setReferenceSlotId` + `referenceSlotIdRef.current` are updated together so the async decode loop sees the value immediately.
 15. **Octave shift forces `linkPitch: false`** — pitch changes are only audible when unlinked; octave shift buttons set `linkPitch: false` in the same patch.
 16. **`computeIsMatched` allows octave multiples** — uses `((diff % 12) + 12) % 12 < 0.01` so MATCHED badge stays after octave shifts. Only speed must match exactly; linkPitch is not checked.
@@ -155,19 +155,19 @@ Slot IDs are UUIDs generated at runtime, not derived from trackId+stemName. Pars
 - Browsers block audio until user gesture. Tone.js creates its AudioContext eagerly on module import — the "AudioContext not allowed to start" console warnings on page load are expected and stop once the user clicks Play.
 - `charCodeAt` in `wav.ts` is intentional for ASCII header bytes.
 - Drum pattern names (e.g. "custom") are labels; playback only cares whether pattern is off.
-- Collab URL format: `?slots=trackId:stemName,...` — slot IDs are UUIDs generated at runtime, not derived from trackId+stemName.
+- Multi URL format: `?slots=trackId:stemName,...` — slot IDs are UUIDs generated at runtime, not derived from trackId+stemName.
 - `GET /api/stems/library` returns all previously-separated track IDs + titles (scans `server/stems/htdemucs/`, joins with `history.json`).
 - **S.ECHO (Space Echo) does nothing at Delay = 0** — it only modifies echo character (darkness per repeat, saturation, pitch wobble via LFO); it is not a sound source. "Delay" in the UI = `delayWet`.
 - **B.KNOB is fully independent** — taps from the slot's gain output (post all effects chain) as a parallel spring reverb send; no dependency on Delay, Reverb, or any other knob.
-- **Named session load vs. per-slot autosave**: two separate systems. `pendingSessionSlotsRef` in `CollabPage.tsx` stages session slot data before navigation so the URL reconciler reads from the session snapshot, not per-slot autosave. `isReference` is stored in named sessions only, not per-slot autosave.
-- **Throw reverb decay changes require `reverb.generate()`** — debounced 300ms in `collabEngine.setThrowSettings`.
+- **Named session load vs. per-slot autosave**: two separate systems. `pendingSessionSlotsRef` in `MultiPage.tsx` stages session slot data before navigation so the URL reconciler reads from the session snapshot, not per-slot autosave. `isReference` is stored in named sessions only, not per-slot autosave.
+- **Throw reverb decay changes require `reverb.generate()`** — debounced 300ms in `multiEngine.setThrowSettings`.
 - **youtu.be short-link parsing**: `extractVideoId()` in `SlotPicker.tsx` handles both `youtube.com/watch?v=ID` and `youtu.be/ID` formats.
-- **Viability map**: `viabilityMapRef` in `CollabPage` tracks `"trackId:stemName" → boolean` for whether a stem has meaningful audio (via `computeStemViability`). Used by `buildRandomSlots` to skip dead stems in RANDOM sessions. Populated lazily as stems load — absence means uncached (included), `false` means explicitly non-viable (skipped).
+- **Viability map**: `viabilityMapRef` in `MultiPage` tracks `"trackId:stemName" → boolean` for whether a stem has meaningful audio (via `computeStemViability`). Used by `buildRandomSlots` to skip dead stems in RANDOM sessions. Populated lazily as stems load — absence means uncached (included), `false` means explicitly non-viable (skipped).
 - **`SlotStrip.update()` vs `onChange()`**: always call the local `update()` function (engine + state + persist) not `onChange()` directly (state only) when changing slot properties from within SlotStrip.
-- **`rawContext.createConvolver()` required in offline context**: always use `Tone.getContext().rawContext.createConvolver()`, not `Tone.getContext().createConvolver()`. The latter delegates silently in the live context but breaks in `Tone.Offline()`, so spring reverb drops from exports. See `collabChain.ts`.
-- **Tone.js context config is module-level in `collabEngine.ts`**: `Tone.setContext(new Tone.Context({ latencyHint: "playback", lookAhead: 0.3, updateInterval: 0.08 }))` runs before any imports that create nodes. Do not move it or duplicate it — must stay at the very top of that file.
+- **`rawContext.createConvolver()` required in offline context**: always use `Tone.getContext().rawContext.createConvolver()`, not `Tone.getContext().createConvolver()`. The latter delegates silently in the live context but breaks in `Tone.Offline()`, so spring reverb drops from exports. See `multiChain.ts`.
+- **Tone.js context config is module-level in `multiEngine.ts`**: `Tone.setContext(new Tone.Context({ latencyHint: "playback", lookAhead: 0.3, updateInterval: 0.08 }))` runs before any imports that create nodes. Do not move it or duplicate it — must stay at the very top of that file.
 - **POST `/api/stems` returns 202 (not 200) when separation is needed**: blocks only for `extractAudio` (WAV download), then fires demucs in the background and returns immediately. Client polls `GET /api/stems/:id/status` every 2s. Returns 200 with full data only when already fully cached.
-- **Collab state backup**: `buildExport(masterSettings)` + `saveExportToServer()` in `collabExport.ts` snapshot all localStorage collab keys to `collab-state.json` at repo root. Auto-fires on page unmount (if any slots loaded). Import via Sessions panel `↑ Import` button — writes localStorage then syncs live React state.
+- **Multi state backup**: `buildExport(masterSettings)` + `saveExportToServer()` in `multiExport.ts` snapshot all localStorage multi keys to `multi-state.json` at repo root. Auto-fires on page unmount (if any slots loaded). Import via Sessions panel `↑ Import` button — writes localStorage then syncs live React state.
 
 ## Run
 

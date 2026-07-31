@@ -5,17 +5,17 @@ import * as Tone from "tone";
 Tone.setContext(new Tone.Context({ latencyHint: "playback", lookAhead: 0.3, updateInterval: 0.08 }));
 
 import { disposeDualReverb, synthesizeSpringImpulse } from "./reverbSlot";
-import { createCollabEffectsChain, applyCollabEffectsChain, type CollabEffectsChain } from "./collabChain";
-import type { CollabSlot, CollabMasterSettings, ThrowSettings } from "../lib/collabSettings";
-import { DEFAULT_THROW_SETTINGS } from "../lib/collabSettings";
+import { createMultiEffectsChain, applyMultiEffectsChain, type MultiEffectsChain } from "./multiChain";
+import type { MultiSlot, MultiMasterSettings, ThrowSettings } from "../lib/multiSettings";
+import { DEFAULT_THROW_SETTINGS } from "../lib/multiSettings";
 
-function slotPlaybackRate(slot: CollabSlot): number {
+function slotPlaybackRate(slot: MultiSlot): number {
   return slot.linkPitch ? slot.speed : slot.speed * Math.pow(2, slot.pitch / 12);
 }
 
-interface RuntimeSlot extends CollabSlot {
+interface RuntimeSlot extends MultiSlot {
   player: Tone.Player;
-  chain: CollabEffectsChain;
+  chain: MultiEffectsChain;
   volume: Tone.Volume;
   // Spring reverb (Big Knob)
   springConvolver: ConvolverNode;
@@ -33,10 +33,10 @@ interface RuntimeSlot extends CollabSlot {
   playing: boolean;
 }
 
-class CollabEngine {
+class MultiEngine {
   private slots = new Map<string, RuntimeSlot>();
   private master: Tone.Volume | null = null;
-  private masterSettings: CollabMasterSettings = {
+  private masterSettings: MultiMasterSettings = {
     gain: 0,
     loopLengthOverride: null,
     throwSettings: { ...DEFAULT_THROW_SETTINGS },
@@ -59,7 +59,7 @@ class CollabEngine {
     return max;
   }
 
-  async addSlot(slot: CollabSlot, buffer: AudioBuffer): Promise<void> {
+  async addSlot(slot: MultiSlot, buffer: AudioBuffer): Promise<void> {
     if (this.slots.has(slot.id)) return;
 
     if (!this.master) {
@@ -67,7 +67,7 @@ class CollabEngine {
     }
 
     const volume = new Tone.Volume(slot.gain).connect(this.master);
-    const chain = await createCollabEffectsChain(volume);
+    const chain = await createMultiEffectsChain(volume);
 
     // Spring reverb (Big Knob) — taps from volume output
     const sampleRate = Tone.getContext().sampleRate;
@@ -118,7 +118,7 @@ class CollabEngine {
     player.loopEnd = safeLoopEnd;
     player.playbackRate = slotPlaybackRate(slot);
 
-    applyCollabEffectsChain(chain, slot.effects);
+    applyMultiEffectsChain(chain, slot.effects);
     springWet.gain.value = slot.effects.bigKnobWet ?? 0;
     const runtime: RuntimeSlot = {
       ...slot,
@@ -183,7 +183,7 @@ class CollabEngine {
     this.recomputeAllVolumes();
   }
 
-  updateSlot(id: string, patch: Partial<CollabSlot>): void {
+  updateSlot(id: string, patch: Partial<MultiSlot>): void {
     const slot = this.slots.get(id);
     if (!slot) return;
 
@@ -212,7 +212,7 @@ class CollabEngine {
       this.recomputeAllVolumes();
     }
     if (patch.effects !== undefined) {
-      applyCollabEffectsChain(slot.chain, slot.effects);
+      applyMultiEffectsChain(slot.chain, slot.effects);
       slot.springWet.gain.value = slot.effects.bigKnobWet ?? 0;
     }
   }
@@ -329,7 +329,7 @@ class CollabEngine {
     slot.playing = false;
   }
 
-  getSlot(id: string): CollabSlot | null {
+  getSlot(id: string): MultiSlot | null {
     const slot = this.slots.get(id);
     if (!slot) return null;
     const { player: _p, chain: _c, volume: _v, springConvolver: _sc, springWet: _sw,
@@ -339,7 +339,7 @@ class CollabEngine {
     return data;
   }
 
-  getAllSlots(): CollabSlot[] {
+  getAllSlots(): MultiSlot[] {
     return Array.from(this.slots.values()).map(
       ({ player: _p, chain: _c, volume: _v, springConvolver: _sc, springWet: _sw,
          throwSend: _ts, throwFilter: _tf, throwDelay: _td, throwReverb: _tr,
@@ -348,7 +348,7 @@ class CollabEngine {
     );
   }
 
-  setMasterSettings(s: CollabMasterSettings): void {
+  setMasterSettings(s: MultiMasterSettings): void {
     this.masterSettings = s;
     if (this.master) {
       this.master.volume.value = s.gain;
@@ -431,4 +431,4 @@ class CollabEngine {
   }
 }
 
-export const collabEngine = new CollabEngine();
+export const multiEngine = new MultiEngine();

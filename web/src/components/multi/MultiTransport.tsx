@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { collabEngine } from "../../audio/collabEngine";
-import { renderCollab, canExportCollab } from "../../audio/renderCollab";
+import { multiEngine } from "../../audio/multiEngine";
+import { renderMulti, canExportMulti } from "../../audio/renderMulti";
 import {
   exportExtension,
   estimateExportBytes,
@@ -9,7 +9,7 @@ import {
   type ExportFormat,
   type ExportQuality,
 } from "../../audio/exportOptions";
-import type { CollabMasterSettings, CollabSlot, ThrowSettings, ThrowPreset } from "../../lib/collabSettings";
+import type { MultiMasterSettings, MultiSlot, ThrowSettings, ThrowPreset } from "../../lib/multiSettings";
 import { cn } from "../../lib/cn";
 import { Knob } from "./Knob";
 import type { GenreName } from "../../lib/vibePresets";
@@ -133,12 +133,12 @@ function ThrowPanel({
 }
 
 interface Props {
-  masterSettings: CollabMasterSettings;
+  masterSettings: MultiMasterSettings;
   slotCount: number;
   referenceSlotId: string | null;
   activeSessionName: string | null;
   slotTitles: string[];
-  getSlotsAndBuffers: () => { slots: CollabSlot[]; buffers: Map<string, AudioBuffer> };
+  getSlotsAndBuffers: () => { slots: MultiSlot[]; buffers: Map<string, AudioBuffer> };
   onStopAll: () => void;
   onPlayAll: () => void;
   onRewindAll: () => void;
@@ -163,7 +163,7 @@ function buildExportFilename(activeSessionName: string | null, slotTitles: strin
   return `${unique.slice(0, 2).join(" × ")} +${unique.length - 2}`;
 }
 
-export function CollabTransport({ masterSettings, slotCount, referenceSlotId, activeSessionName, slotTitles, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll, onApplyGenre, onRandomizeAll, onRandomSession, randomDisabled }: Props) {
+export function MultiTransport({ masterSettings, slotCount, referenceSlotId, activeSessionName, slotTitles, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll, onApplyGenre, onRandomizeAll, onRandomSession, randomDisabled }: Props) {
   const [loopCount, setLoopCount] = useState(4);
   const [format, setFormat] = useState<ExportFormat>("wav");
   const [quality, setQuality] = useState<ExportQuality>("full");
@@ -178,7 +178,7 @@ export function CollabTransport({ masterSettings, slotCount, referenceSlotId, ac
   const exportBtnRef = useRef<HTMLButtonElement>(null);
   const genrePanelRef = useRef<HTMLDivElement>(null);
   const genreBtnRef = useRef<HTMLButtonElement>(null);
-  const masterLoopLength = collabEngine.getMasterLoopLength() ?? 0;
+  const masterLoopLength = multiEngine.getMasterLoopLength() ?? 0;
   const totalSec = masterLoopLength * loopCount;
   const estBytes = estimateExportBytes(totalSec, format, quality);
   const preset = EXPORT_PRESETS[quality];
@@ -213,12 +213,12 @@ export function CollabTransport({ masterSettings, slotCount, referenceSlotId, ac
   async function handleExport() {
     if (exporting) return;
     const { slots, buffers } = getSlotsAndBuffers();
-    const loopLen = collabEngine.getMasterLoopLength() ?? 0;
-    if (!canExportCollab({ slots, buffers, masterLoopLength: loopLen }) || loopLen <= 0) return;
+    const loopLen = multiEngine.getMasterLoopLength() ?? 0;
+    if (!canExportMulti({ slots, buffers, masterLoopLength: loopLen }) || loopLen <= 0) return;
     setExporting(true);
     setExportError(null);
     try {
-      const blob = await renderCollab({
+      const blob = await renderMulti({
         slots,
         buffers,
         masterSettings,
@@ -237,7 +237,7 @@ export function CollabTransport({ masterSettings, slotCount, referenceSlotId, ac
   }
 
   function handleThrowChange(settings: ThrowSettings) {
-    collabEngine.setThrowSettings(settings);
+    multiEngine.setThrowSettings(settings);
     onThrowSettingsChange(settings);
   }
 
