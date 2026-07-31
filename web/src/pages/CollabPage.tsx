@@ -409,7 +409,7 @@ export function CollabPage() {
         const dur = buffer.duration;
         const pk = pendingKey(slot.trackId, slot.stemName);
         const pendingSlot = pendingSessionSlotsRef.current.get(pk);
-        const saved = pendingSlot ? null : loadSlotSettings(slot.id, slot.trackId, slot.stemName);
+        const saved = pendingSlot ? null : loadSlotSettings(slot.id);
         let finalSlot: CollabSlot;
         if (pendingSlot) {
           pendingSessionSlotsRef.current.delete(pk);
@@ -455,15 +455,12 @@ export function CollabPage() {
           ),
         );
 
-        // Always write to stable key so settings survive page reloads (UUIDs are ephemeral).
-        // When loading from a named session (pendingSlot), write the session's values back
-        // to the stable key so a page refresh doesn't pull in settings from a different session.
         saveSlotSettings(finalSlot.id, {
           speed: finalSlot.speed, pitch: finalSlot.pitch, linkPitch: finalSlot.linkPitch,
           gain: finalSlot.gain, muted: finalSlot.muted, effects: finalSlot.effects,
           loopStartFrac: finalSlot.loopStart / dur, loopEndFrac: finalSlot.loopEnd / dur,
           isMatched: pendingSlot?.isMatched, matchedBasePitch: pendingSlot?.matchedBasePitch,
-        }, finalSlot.trackId, finalSlot.stemName);
+        });
 
         // Background key detection — only if not already cached
         if (cachedMeta?.detectedKey === undefined) {
@@ -515,7 +512,7 @@ export function CollabPage() {
             gain: s.gain, muted: s.muted, effects: s.effects,
             loopStartFrac: s.loopStart / dur, loopEndFrac: s.loopEnd / dur,
             isMatched: false, matchedBasePitch: 0,
-          }, s.trackId, s.stemName);
+          });
         }
         return updated;
       }),
@@ -569,7 +566,7 @@ export function CollabPage() {
       loopEndFrac: s.loopEnd / dur,
       isMatched,
       matchedBasePitch,
-    }, s.trackId, s.stemName);
+    });
   }
 
   function matchSlotToReference(targetSlotId: string) {
@@ -625,7 +622,7 @@ export function CollabPage() {
         speed: newSlot.speed, pitch: newSlot.pitch, linkPitch: newSlot.linkPitch,
         gain: newSlot.gain, muted: newSlot.muted, effects: newEffects,
         loopStartFrac: newSlot.loopStart / dur, loopEndFrac: newSlot.loopEnd / dur,
-      }, newSlot.trackId, newSlot.stemName);
+      });
       return { ...e, slot: newSlot };
     }));
   }
@@ -642,7 +639,7 @@ export function CollabPage() {
         speed: newSlot.speed, pitch: newSlot.pitch, linkPitch: newSlot.linkPitch,
         gain: newSlot.gain, muted: newSlot.muted, effects: newEffects,
         loopStartFrac: newSlot.loopStart / dur, loopEndFrac: newSlot.loopEnd / dur,
-      }, newSlot.trackId, newSlot.stemName);
+      });
       return { ...e, slot: newSlot };
     }));
   }
@@ -735,7 +732,7 @@ export function CollabPage() {
           gain: s.gain, muted: s.muted, effects: s.effects,
           loopStartFrac: s.loopStart / dur, loopEndFrac: s.loopEnd / dur,
           isMatched: false, matchedBasePitch: 0,
-        }, s.trackId, s.stemName);
+        });
         return { ...e, slot: s, isMatched: false, matchedBasePitch: 0 };
       }),
     );

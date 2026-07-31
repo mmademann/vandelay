@@ -44,30 +44,14 @@ function loadAllSlotSettings(): Record<string, CollabSlotSavedSettings> {
   } catch { return {}; }
 }
 
-export function loadSlotSettings(uuid: string, fallbackTrackId?: string, fallbackStemName?: StemName | null): CollabSlotSavedSettings | null {
+export function loadSlotSettings(uuid: string): CollabSlotSavedSettings | null {
   const all = loadAllSlotSettings();
-  if (all[uuid]) return all[uuid];
-  // Migrate legacy trackId:stemName key to UUID on first access
-  if (fallbackTrackId !== undefined) {
-    const oldKey = fallbackStemName ? `${fallbackTrackId}:${fallbackStemName}` : fallbackTrackId;
-    const legacy = all[oldKey];
-    if (legacy) {
-      all[uuid] = legacy;
-      try { localStorage.setItem(SLOT_SETTINGS_KEY, JSON.stringify(all)); } catch {}
-      return legacy;
-    }
-  }
-  return null;
+  return all[uuid] ?? null;
 }
 
-export function saveSlotSettings(uuid: string, settings: CollabSlotSavedSettings, trackId?: string, stemName?: StemName | null): void {
+export function saveSlotSettings(uuid: string, settings: CollabSlotSavedSettings): void {
   const all = loadAllSlotSettings();
   all[uuid] = settings;
-  // Also write to stable key so settings survive page reloads (UUIDs are ephemeral)
-  if (trackId) {
-    const stableKey = stemName ? `${trackId}:${stemName}` : trackId;
-    all[stableKey] = settings;
-  }
   try { localStorage.setItem(SLOT_SETTINGS_KEY, JSON.stringify(all)); } catch {}
 }
 

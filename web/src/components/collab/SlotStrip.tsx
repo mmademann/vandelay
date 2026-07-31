@@ -369,7 +369,7 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
       isMatched,
       matchedBasePitch,
       pitchInterval: overridePitchInterval ?? pitchInterval,
-    }, slot.trackId, slot.stemName);
+    });
   }
 
   function update(patch: Partial<CollabSlot>) {
