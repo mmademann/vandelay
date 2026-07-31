@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { multiEngine } from "../audio/multiEngine";
@@ -138,6 +138,7 @@ export function MultiPage() {
   const [isPlayingAll, setIsPlayingAll] = useState(false);
   const [library, setLibrary] = useState<{ id: string; title: string }[]>([]);
   const libraryRef = useRef<{ id: string; title: string }[]>([]);
+  const libraryPromiseRef = useRef<Promise<{ id: string; title: string }[]> | null>(null);
   const [stemsLibrary, setStemsLibrary] = useState<{ id: string; title: string }[]>([]);
 
   const entriesRef = useRef(entries);
@@ -182,23 +183,27 @@ export function MultiPage() {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fetch library + history once on mount for title resolution and random session
-  useEffect(() => {
-    console.time("[multi] library+history fetch");
-    Promise.all([
+  // Fetch library + history for title resolution and random session. Slot loading awaits
+  // `libraryPromiseRef` rather than reading `libraryRef` opportunistically, so a slot can never
+  // bake in a raw trackId just because it decoded before this resolved.
+  const refreshLibrary = useCallback(() => {
+    const p = Promise.all([
       fetch("/api/stems/library", { priority: "high" } as RequestInit).then((r) => r.ok ? r.json() as Promise<{ id: string; title: string }[]> : Promise.resolve([])),
       fetch("/api/history", { priority: "high" } as RequestInit).then((r) => r.ok ? r.json() as Promise<{ id: string; title: string }[]> : Promise.resolve([])),
     ]).then(([lib, history]) => {
-      console.timeEnd("[multi] library+history fetch");
-      console.log(`[multi] library: ${(lib as []).length} stems, history: ${(history as []).length} tracks`);
-      setStemsLibrary(lib as { id: string; title: string }[]);
-      const merged = new Map((history as { id: string; title: string }[]).map((e) => [e.id, e.title]));
-      for (const e of lib as { id: string; title: string }[]) merged.set(e.id, e.title);
+      setStemsLibrary(lib);
+      const merged = new Map(history.map((e) => [e.id, e.title]));
+      for (const e of lib) merged.set(e.id, e.title);
       const data = Array.from(merged.entries()).map(([id, title]) => ({ id, title }));
       setLibrary(data);
       libraryRef.current = data;
-    }).catch(() => {});
+      return data;
+    }).catch(() => libraryRef.current);
+    libraryPromiseRef.current = p;
+    return p;
   }, []);
+
+  useEffect(() => { refreshLibrary(); }, [refreshLibrary]);
 
   // Back-fill titles when library loads (race: fast IDB-cached tracks finish before library fetch)
   useEffect(() => {
@@ -438,7 +443,12 @@ export function MultiPage() {
         const matchedBasePitch = saved?.matchedBasePitch ?? 0;
         const pitchInterval: 1 | 7 | 12 = saved?.pitchInterval ?? 12;
 
-        const title = libraryRef.current.find((e) => e.id === slot.trackId)?.title ?? slot.trackId;
+        // Wait for the in-flight library fetch, then refetch once if this id is still unknown
+        // (separated in another tab after we mounted). Only falls back to the raw id if the
+        // server genuinely has no title for it.
+        let lib = (await libraryPromiseRef.current) ?? libraryRef.current;
+        if (!lib.some((e) => e.id === slot.trackId)) lib = await refreshLibrary();
+        const title = lib.find((e) => e.id === slot.trackId)?.title ?? slot.trackId;
 
         if (cancelled) return;
 
@@ -907,10 +917,10 @@ export function MultiPage() {
                 className="flex-1 rounded border border-border bg-muted/40 px-2 py-1.5 text-xs text-foreground/50 transition hover:text-foreground disabled:opacity-50"
               >
                 {importStatus === "importing" ? "…"
-                  : importStatus === "imported" ? "Imported ✓"
-                  : importStatus === "none" ? "No saved state"
+                  : importStatus === "imported" ? "Restored ✓"
+                  : importStatus === "none" ? "No backup found"
                   : importStatus === "error" ? "Error"
-                  : "↑ Import"}
+                  : "↑ Restore"}
               </button>
               <button
                 type="button"
@@ -919,9 +929,9 @@ export function MultiPage() {
                 className="flex-1 rounded border border-border bg-muted/40 px-2 py-1.5 text-xs text-foreground/50 transition hover:text-foreground disabled:opacity-50"
               >
                 {exportStatus === "saving" ? "…"
-                  : exportStatus === "saved" ? "Saved ✓"
+                  : exportStatus === "saved" ? "Backed up ✓"
                   : exportStatus === "error" ? "Error"
-                  : "↓ Export"}
+                  : "↓ Backup"}
               </button>
             </div>
           </div>
@@ -1055,7 +1065,16 @@ export function MultiPage() {
             library={stemsLibrary}
             onConfirm={handlePickerConfirm}
             onClose={() => setShowPicker(false)}
-            onLibraryUpdated={(lib) => setStemsLibrary(lib)}
+            onLibraryUpdated={(lib) => {
+              setStemsLibrary(lib);
+              // Also merge into `library`/`libraryRef` — those drive slot title resolution.
+              // Without this a freshly separated track shows its raw id until a page refresh.
+              const merged = new Map(libraryRef.current.map((e) => [e.id, e.title]));
+              for (const e of lib) merged.set(e.id, e.title);
+              const next = Array.from(merged.entries()).map(([id, title]) => ({ id, title }));
+              libraryRef.current = next;
+              setLibrary(next);
+            }}
           />
         )}
       </div>

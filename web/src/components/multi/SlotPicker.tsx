@@ -57,8 +57,15 @@ export function SlotPicker({ library: libraryProp, onConfirm, onClose, onLibrary
       });
   }
 
+  // Follow prop updates — the initial useState only captures the value at mount, so a track
+  // separated after the picker opened would otherwise keep showing its raw id.
   useEffect(() => {
-    if (libraryProp !== undefined) return;
+    if (libraryProp !== undefined) setLibrary(libraryProp);
+  }, [libraryProp]);
+
+  // Always refetch on open (the picker remounts each time). The prop is only a first paint —
+  // it can be stale if a track was separated elsewhere or after this page mounted.
+  useEffect(() => {
     const controller = new AbortController();
     Promise.resolve()
       .then(() => fetchLibrary(controller.signal))
@@ -66,6 +73,8 @@ export function SlotPicker({ library: libraryProp, onConfirm, onClose, onLibrary
         if (controller.signal.aborted) return;
         setLibrary(data);
         setLibraryLoading(false);
+        // Push upward so slot title resolution sees the fresh titles too.
+        onLibraryUpdated?.(data);
       })
       .catch((e) => {
         if (e instanceof Error && e.name === "AbortError") return;

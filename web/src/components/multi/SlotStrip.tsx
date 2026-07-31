@@ -470,6 +470,17 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
             title="Throw — tape echo burst + spring reverb">
             ↯ Throw
           </button>
+          <button type="button"
+            onClick={() => update({
+              // Linked pitch so the slowdown drags pitch with it — the screwed sound.
+              speed: 0.75,
+              linkPitch: true,
+              effects: { ...slot.effects, reverbWet: 0.4, reverbDecay: 4 },
+            })}
+            className="rounded px-2 py-1 text-xs font-bold uppercase tracking-wide transition bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted"
+            title="Screw — 75% speed (linked pitch) + reverb">
+            ☾ Screw
+          </button>
           {/* Key badge */}
           {detectedKey !== undefined && (
             <span

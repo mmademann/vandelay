@@ -164,7 +164,7 @@ function buildExportFilename(activeSessionName: string | null, slotTitles: strin
 }
 
 export function MultiTransport({ masterSettings, slotCount, referenceSlotId, activeSessionName, slotTitles, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll, onApplyGenre, onRandomizeAll, onRandomSession, randomDisabled }: Props) {
-  const [loopCount, setLoopCount] = useState(4);
+  const [loopCount, setLoopCount] = useState(1);
   const [format, setFormat] = useState<ExportFormat>("wav");
   const [quality, setQuality] = useState<ExportQuality>("full");
   const [exporting, setExporting] = useState(false);
