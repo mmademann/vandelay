@@ -6,7 +6,6 @@ build
 cache
 stems
 history.json
-multi-state.json
 multi-state-history/
 
 .DS_Store

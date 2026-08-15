@@ -148,13 +148,6 @@ export function MultiPage() {
   entriesRef.current = entries;
   const masterSettingsRef = useRef(masterSettings);
   masterSettingsRef.current = masterSettings;
-  const backupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  function scheduleDebouncedBackup() {
-    if (backupTimerRef.current) clearTimeout(backupTimerRef.current);
-    backupTimerRef.current = setTimeout(() => {
-      saveExportToServer(buildExport(masterSettingsRef.current));
-    }, 2000);
-  }
   const referenceSlotIdRef = useRef<string | null>(null);
   referenceSlotIdRef.current = referenceSlotId;
   const pendingSessionSlotsRef = useRef<Map<string, MultiSlot>>(new Map());
@@ -178,10 +171,9 @@ export function MultiPage() {
         }
       }
     }).catch(() => {});
+    // No auto-backup on unmount: multi-state.json is committed to git, and writing it on every
+    // page unload left the working tree permanently dirty. Use ↓ Backup in the Sessions panel.
     return () => {
-      if (entriesRef.current.length > 0) {
-        saveExportToServer(buildExport(masterSettingsRef.current));
-      }
       multiEngine.dispose();
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -226,11 +218,6 @@ export function MultiPage() {
     return () => clearInterval(id);
   }, []);
 
-  // Debounced backup to server on any slot change
-  useEffect(() => {
-    if (entries.length === 0) return;
-    scheduleDebouncedBackup();
-  }, [entries]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Escape collapses the picker and sessions panel
   useEffect(() => {
