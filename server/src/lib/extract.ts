@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ffmpegPath from "ffmpeg-static";
@@ -62,12 +62,42 @@ function fetchMetadata(url: string): Promise<YtDlpMeta> {
   });
 }
 
-function downloadAndTranscode(url: string, outPath: string): Promise<void> {
+/**
+ * YouTube rate-limits repeated requests with HTTP 403. yt-dlp's own --retries doesn't cover it
+ * (it treats 403 as fatal, not transient), so retry the whole download with a backoff.
+ * Observed ~50% failure rate on rapid repeats; a few spaced attempts get through reliably.
+ */
+async function downloadAndTranscode(url: string, outPath: string): Promise<void> {
+  const MAX_ATTEMPTS = 4;
+  let lastErr: Error | undefined;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      return await attemptDownload(url, outPath);
+    } catch (e) {
+      lastErr = e instanceof Error ? e : new Error(String(e));
+      const is403 = /403|forbidden/i.test(lastErr.message);
+      if (!is403 || attempt === MAX_ATTEMPTS) throw lastErr;
+      const backoffMs = attempt * 1500;
+      console.warn(`[extract] 403 on attempt ${attempt}/${MAX_ATTEMPTS}, retrying in ${backoffMs}ms`);
+      await new Promise((r) => setTimeout(r, backoffMs));
+    }
+  }
+  throw lastErr ?? new Error("Download failed");
+}
+
+function attemptDownload(url: string, outPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const ytdlp = spawn("yt-dlp", [
+      // Prefer m4a — the opus (251) path 403s more often when piped to stdout.
       "-f",
-      "bestaudio",
+      "bestaudio[ext=m4a]/bestaudio",
       "--no-playlist",
+      // YouTube rate-limits repeated requests; back off and retry instead of failing outright.
+      "--retries",
+      "5",
+      "--fragment-retries",
+      "10",
       "-o",
       "-",
       url,
@@ -82,7 +112,11 @@ function downloadAndTranscode(url: string, outPath: string): Promise<void> {
       .audioChannels(2)
       .audioCodec("pcm_s16le")
       .format("wav")
-      .on("error", (e) => reject(new Error(`ffmpeg: ${e.message} | yt-dlp: ${ytdlpErr}`)))
+      .on("error", (e) => {
+        // ffmpeg may have written a truncated file before dying — drop it so a retry starts clean.
+        try { if (existsSync(outPath)) unlinkSync(outPath); } catch { /* best effort */ }
+        reject(new Error(`ffmpeg: ${e.message} | yt-dlp: ${ytdlpErr}`));
+      })
       .on("end", () => resolve())
       .save(outPath);
   });

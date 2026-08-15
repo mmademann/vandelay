@@ -223,6 +223,20 @@ export function saveNamedSession(
   return updated;
 }
 
+/**
+ * Rename in place, preserving slots/settings and list position. No-op if the new name is blank,
+ * unchanged, or already taken (sessions are keyed by name, so a collision would clobber).
+ */
+export function renameNamedSession(oldName: string, newName: string): MultiSession[] {
+  const sessions = loadNamedSessions();
+  const trimmed = newName.trim();
+  if (!trimmed || trimmed === oldName) return sessions;
+  if (sessions.some((s) => s.name === trimmed)) return sessions;
+  const updated = sessions.map((s) => (s.name === oldName ? { ...s, name: trimmed } : s));
+  try { localStorage.setItem(NAMED_KEY, JSON.stringify(updated)); } catch {}
+  return updated;
+}
+
 export function deleteNamedSession(name: string): MultiSession[] {
   const updated = loadNamedSessions().filter((s) => s.name !== name);
   try { localStorage.setItem(NAMED_KEY, JSON.stringify(updated)); } catch {}

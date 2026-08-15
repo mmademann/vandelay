@@ -434,8 +434,8 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
           </span>
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground/70">{title}</span>
           <button type="button" onClick={onRemove}
-            className="shrink-0 text-foreground/20 transition hover:text-foreground/60 text-sm px-1"
-            aria-label="Remove">✕</button>
+            className="shrink-0 text-foreground/20 transition hover:text-red-400 text-sm px-1"
+            aria-label="Remove slot" title="Remove slot">🗑</button>
         </div>
         {/* Row 2: playback controls + key/match badges — wraps on narrow slots */}
         <div className="flex items-center gap-1.5 flex-wrap">
@@ -679,7 +679,7 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
                   <span className="flex-1" />
                   <button type="button" onClick={() => { onDeletePreset(p.name); if (activePreset === p.name) setActivePreset(null); }}
                     className="text-base leading-none text-foreground/20 opacity-0 transition hover:text-red-400 group-hover:opacity-100"
-                    aria-label="Delete preset">✕</button>
+                    aria-label="Delete preset" title="Delete preset">🗑</button>
                 </div>
               ))}
             </div>

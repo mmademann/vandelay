@@ -111,8 +111,9 @@ function ThrowPanel({
                 {p.name}
               </button>
               <button type="button" onClick={() => onDeletePreset(p.name)}
+                title="Delete preset"
                 className="text-xs text-foreground/20 opacity-0 group-hover:opacity-100 hover:text-red-400 transition pl-1 border-l border-border/50">
-                ✕
+                🗑
               </button>
             </div>
           ))}
@@ -171,6 +172,8 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
   const [exportError, setExportError] = useState<string | null>(null);
   const [throwPanelOpen, setThrowPanelOpen] = useState(false);
   const [exportPanelOpen, setExportPanelOpen] = useState(false);
+  // Blank = use the auto-generated name (shown as the input's placeholder).
+  const [filenameDraft, setFilenameDraft] = useState("");
   const [genrePanelOpen, setGenrePanelOpen] = useState(false);
   const throwPanelRef = useRef<HTMLDivElement>(null);
   const throwBtnRef = useRef<HTMLButtonElement>(null);
@@ -227,7 +230,7 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
         export: { format, quality },
       });
       if (blob.size < 44) throw new Error("Export produced an empty file.");
-      const name = buildExportFilename(activeSessionName, slotTitles);
+      const name = filenameDraft.trim() || buildExportFilename(activeSessionName, slotTitles);
       downloadBlob(blob, `${name}.${exportExtension(format)}`);
     } catch (e) {
       setExportError(e instanceof Error ? e.message : "Export failed");
@@ -411,6 +414,21 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
             <span className="text-[10px] font-semibold uppercase tracking-widest text-foreground/40">Export</span>
             <button type="button" onClick={() => setExportPanelOpen(false)}
               className="text-foreground/30 hover:text-foreground/70 text-sm leading-none px-1">✕</button>
+          </div>
+
+          {/* Filename */}
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] uppercase tracking-wide text-foreground/40">Filename</span>
+            <div className="flex items-center gap-1">
+              <input
+                type="text"
+                value={filenameDraft}
+                onChange={(e) => setFilenameDraft(e.target.value)}
+                placeholder={buildExportFilename(activeSessionName, slotTitles)}
+                className="min-w-0 flex-1 rounded border border-border bg-muted/30 px-2 py-1 text-xs outline-none focus:border-accent/60 placeholder:text-foreground/30"
+              />
+              <span className="shrink-0 text-[10px] text-foreground/35">.{exportExtension(format)}</span>
+            </div>
           </div>
 
           {/* Loops */}

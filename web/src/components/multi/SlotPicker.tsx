@@ -106,12 +106,14 @@ export function SlotPicker({ library: libraryProp, onConfirm, onClose, onLibrary
       const title = data.title ?? id;
 
       let retries = 0;
-      const MAX_RETRIES = 180; // 6 min at 2s
+      // 20 min at 2s. Demucs runs roughly 1:3 against track length, plus mp3 transcode after —
+      // a 25-min track takes ~8 min, so the old 6-min cap fired while it was still working.
+      const MAX_RETRIES = 600;
       pollRef.current = setInterval(async () => {
         if (++retries > MAX_RETRIES) {
           if (pollRef.current) clearInterval(pollRef.current);
           setSeparating(false);
-          setUrlError("Separation timed out — check server logs");
+          setUrlError("Still separating — it may finish shortly; reopen this panel to check");
           return;
         }
         try {
@@ -172,7 +174,7 @@ export function SlotPicker({ library: libraryProp, onConfirm, onClose, onLibrary
             {separating ? "…" : "Add"}
           </button>
         </div>
-        {separating && <div className="text-xs text-foreground/50">Separating… 5–10 min</div>}
+        {separating && <div className="text-xs text-foreground/50">Separating… a few min (longer for long tracks)</div>}
         {urlError && <div className="text-xs text-red-400">{urlError}</div>}
       </div>
 

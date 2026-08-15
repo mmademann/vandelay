@@ -10,6 +10,7 @@ import {
   loadNamedSessions,
   saveNamedSession,
   deleteNamedSession,
+  renameNamedSession,
   loadSlotSettings,
   saveSlotSettings,
   loadMultiPresets,
@@ -128,6 +129,8 @@ export function MultiPage() {
   const [namedSessions, setNamedSessions] = useState<MultiSession[]>(() => loadNamedSessions());
   const [sessionName, setSessionName] = useState("");
   const [activeSessionName, setActiveSessionName] = useState<string | null>(null);
+  const [renamingSession, setRenamingSession] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
   const [sessionsPanelOpen, setSessionsPanelOpen] = useState(false);
   const sessionsPanelRef = useRef<HTMLDivElement>(null);
   const sessionsBtnRef = useRef<HTMLButtonElement>(null);
@@ -710,6 +713,15 @@ export function MultiPage() {
     navigate(param ? `/?slots=${param}` : "/");
   }
 
+  function commitRename(oldName: string) {
+    const next = renameDraft.trim();
+    setRenamingSession(null);
+    if (!next || next === oldName) return;
+    setNamedSessions(renameNamedSession(oldName, next));
+    // Keep the active-session label in sync if we just renamed the loaded one.
+    setActiveSessionName((cur) => (cur === oldName ? next : cur));
+  }
+
   function handleDeleteSession(name: string) {
     setNamedSessions(deleteNamedSession(name));
     saveExportToServer(buildExport(masterSettingsRef.current));
@@ -855,6 +867,21 @@ export function MultiPage() {
 
             {namedSessions.map((s) => (
               <div key={s.name} className="group flex items-center rounded border border-border bg-muted/40 px-3 py-2">
+                {renamingSession === s.name ? (
+                  <form
+                    className="flex-1"
+                    onSubmit={(e) => { e.preventDefault(); commitRename(s.name); }}
+                  >
+                    <input
+                      autoFocus
+                      value={renameDraft}
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onBlur={() => commitRename(s.name)}
+                      onKeyDown={(e) => { if (e.key === "Escape") setRenamingSession(null); }}
+                      className="w-full rounded border border-accent/50 bg-background px-1.5 py-0.5 text-sm outline-none"
+                    />
+                  </form>
+                ) : (
                 <button
                   type="button"
                   onClick={() => { handleLoadSession(s); setSessionsPanelOpen(false); }}
@@ -862,6 +889,15 @@ export function MultiPage() {
                 >
                   {s.name}
                 </button>
+                )}
+                {renamingSession !== s.name && (
+                <button
+                  type="button"
+                  onClick={() => { setRenamingSession(s.name); setRenameDraft(s.name); }}
+                  className="text-xs leading-none text-foreground/30 opacity-0 group-hover:opacity-100 transition hover:text-accent pl-3"
+                  aria-label="Rename session" title="Rename"
+                >✎</button>
+                )}
                 <button
                   type="button"
                   onClick={() => {
@@ -883,8 +919,8 @@ export function MultiPage() {
                   type="button"
                   onClick={() => handleDeleteSession(s.name)}
                   className="text-base leading-none text-foreground/30 opacity-0 group-hover:opacity-100 transition hover:text-red-400"
-                  aria-label="Delete session"
-                >✕</button>
+                  aria-label="Delete session" title="Delete session"
+                >🗑</button>
               </div>
             ))}
 
