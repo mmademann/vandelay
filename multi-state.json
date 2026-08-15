@@ -1,10 +1,10 @@
 {
-  "exportedAt": 1786796154085,
+  "exportedAt": 1786797709747,
   "version": 1,
   "namedSessions": [
     {
       "name": "FEEL",
-      "savedAt": 1786796092049,
+      "savedAt": 1786797708433,
       "slots": [
         {
           "id": "3923281d-31e1-48ef-9780-f9538f44b0e0",
@@ -13,7 +13,7 @@
           "speed": 0.6,
           "pitch": 0,
           "linkPitch": true,
-          "gain": -4,
+          "gain": -4.5,
           "muted": false,
           "soloed": false,
           "effects": {
@@ -33,7 +33,7 @@
             "bigKnobWet": 0,
             "eqLow": 0,
             "eqMid": -1.5,
-            "eqHigh": -3.5,
+            "eqHigh": -4,
             "phaserWet": 0,
             "chorusWet": 0
           },
@@ -86,7 +86,7 @@
           "speed": 0.95,
           "pitch": 0,
           "linkPitch": true,
-          "gain": 0,
+          "gain": 3,
           "muted": false,
           "soloed": false,
           "effects": {
@@ -123,7 +123,7 @@
           "speed": 0.45,
           "pitch": 0,
           "linkPitch": true,
-          "gain": -1,
+          "gain": 1,
           "muted": false,
           "soloed": false,
           "effects": {
@@ -160,8 +160,8 @@
           "speed": 0.6,
           "pitch": 0,
           "linkPitch": true,
-          "gain": 0,
-          "muted": false,
+          "gain": -2,
+          "muted": true,
           "soloed": false,
           "effects": {
             "speed": 1,
@@ -170,19 +170,19 @@
             "reverbType": "algorithmic",
             "reverbDecay": 0,
             "reverbWet": 0,
-            "delayTime": 0.55,
+            "delayTime": 0.74,
             "delayFeedback": 0.46,
-            "delayWet": 0.52,
+            "delayWet": 0.38,
             "bassBoost": 0,
             "gain": 1,
-            "grit": 0.1,
+            "grit": 0.15,
             "spaceEchoWow": 0,
             "bigKnobWet": 0,
             "eqLow": 0,
-            "eqMid": 0,
-            "eqHigh": 0,
-            "phaserWet": 0.21,
-            "chorusWet": 0.2
+            "eqMid": 5.5,
+            "eqHigh": 9,
+            "phaserWet": 0,
+            "chorusWet": 0.24
           },
           "loopStart": 147.05448989367562,
           "loopEnd": 177.3602023175681,
@@ -197,7 +197,7 @@
           "speed": 0.53,
           "pitch": 1,
           "linkPitch": false,
-          "gain": -1,
+          "gain": -2,
           "muted": false,
           "soloed": false,
           "effects": {
@@ -207,7 +207,7 @@
             "reverbType": "algorithmic",
             "reverbDecay": 5,
             "reverbWet": 0,
-            "delayTime": 1.4,
+            "delayTime": 1.12,
             "delayFeedback": 0.68,
             "delayWet": 0.64,
             "bassBoost": 0,
@@ -5667,7 +5667,7 @@
       "speed": 0.6,
       "pitch": 0,
       "linkPitch": true,
-      "gain": -4,
+      "gain": -4.5,
       "muted": false,
       "effects": {
         "speed": 1,
@@ -5686,19 +5686,22 @@
         "bigKnobWet": 0,
         "eqLow": 0,
         "eqMid": -1.5,
-        "eqHigh": -3.5,
+        "eqHigh": -4,
         "phaserWet": 0,
         "chorusWet": 0
       },
       "loopStartFrac": 0.19359130786052986,
-      "loopEndFrac": 0.25637579364575797
+      "loopEndFrac": 0.25637579364575797,
+      "isMatched": false,
+      "matchedBasePitch": 0,
+      "pitchInterval": 12
     },
     "ce70e04b-8c5d-469f-9013-dee4e4530176": {
       "speed": 0.6,
       "pitch": 0,
       "linkPitch": true,
-      "gain": 0,
-      "muted": false,
+      "gain": -2,
+      "muted": true,
       "effects": {
         "speed": 1,
         "pitch": 0,
@@ -5706,28 +5709,31 @@
         "reverbType": "algorithmic",
         "reverbDecay": 0,
         "reverbWet": 0,
-        "delayTime": 0.55,
+        "delayTime": 0.74,
         "delayFeedback": 0.46,
-        "delayWet": 0.52,
+        "delayWet": 0.38,
         "bassBoost": 0,
         "gain": 1,
-        "grit": 0.1,
+        "grit": 0.15,
         "spaceEchoWow": 0,
         "bigKnobWet": 0,
         "eqLow": 0,
-        "eqMid": 0,
-        "eqHigh": 0,
-        "phaserWet": 0.21,
-        "chorusWet": 0.2
+        "eqMid": 5.5,
+        "eqHigh": 9,
+        "phaserWet": 0,
+        "chorusWet": 0.24
       },
       "loopStartFrac": 0.4727258691504977,
-      "loopEndFrac": 0.570147540914263
+      "loopEndFrac": 0.570147540914263,
+      "isMatched": false,
+      "matchedBasePitch": 0,
+      "pitchInterval": 12
     },
     "6b95d79d-c180-4ece-92e7-0c4f94fb3c7f": {
       "speed": 0.95,
       "pitch": 0,
       "linkPitch": true,
-      "gain": 0,
+      "gain": 3,
       "muted": false,
       "effects": {
         "speed": 1,
@@ -5751,13 +5757,16 @@
         "chorusWet": 0
       },
       "loopStartFrac": 0.004228075073284012,
-      "loopEndFrac": 0.1180769873397375
+      "loopEndFrac": 0.1180769873397375,
+      "isMatched": false,
+      "matchedBasePitch": 0,
+      "pitchInterval": 12
     },
     "987dbb90-ec7c-47ea-908f-5bf85da57871": {
       "speed": 0.45,
       "pitch": 0,
       "linkPitch": true,
-      "gain": -1,
+      "gain": 1,
       "muted": false,
       "effects": {
         "speed": 1,
@@ -5781,13 +5790,16 @@
         "chorusWet": 0
       },
       "loopStartFrac": 0.1544745696208989,
-      "loopEndFrac": 0.248634012226317
+      "loopEndFrac": 0.248634012226317,
+      "isMatched": false,
+      "matchedBasePitch": 0,
+      "pitchInterval": 12
     },
     "2ca59f94-1d83-4179-8768-c4e3527e60b5": {
       "speed": 0.53,
       "pitch": 1,
       "linkPitch": false,
-      "gain": -1,
+      "gain": -2,
       "muted": false,
       "effects": {
         "speed": 1,
@@ -5796,7 +5808,7 @@
         "reverbType": "algorithmic",
         "reverbDecay": 5,
         "reverbWet": 0,
-        "delayTime": 1.4,
+        "delayTime": 1.12,
         "delayFeedback": 0.68,
         "delayWet": 0.64,
         "bassBoost": 0,
@@ -5811,7 +5823,10 @@
         "chorusWet": 0
       },
       "loopStartFrac": 0.005419198588358748,
-      "loopEndFrac": 0.10763612270037466
+      "loopEndFrac": 0.10763612270037466,
+      "isMatched": false,
+      "matchedBasePitch": 0,
+      "pitchInterval": 12
     },
     "9044b6bc-a810-4426-beb0-c12b18e6d924": {
       "speed": 0.75,
