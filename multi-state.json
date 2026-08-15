@@ -1,13 +1,13 @@
 {
-  "exportedAt": 1786757276807,
+  "exportedAt": 1786759183564,
   "version": 1,
   "namedSessions": [
     {
       "name": "FEEL",
-      "savedAt": 1786756043885,
+      "savedAt": 1786758627298,
       "slots": [
         {
-          "id": "fa75a463-4017-4906-a9b3-31b44eb5e55f",
+          "id": "3923281d-31e1-48ef-9780-f9538f44b0e0",
           "trackId": "xOQjZ-PFE1o",
           "stemName": "other",
           "speed": 0.6,
@@ -44,7 +44,7 @@
           "matchedBasePitch": 0
         },
         {
-          "id": "bcd38e14-b093-47b6-8193-b075aac094c3",
+          "id": "9044b6bc-a810-4426-beb0-c12b18e6d924",
           "trackId": "eZOT9k3e6tQ",
           "stemName": "other",
           "speed": 0.75,
@@ -80,13 +80,13 @@
           "matchedBasePitch": 0
         },
         {
-          "id": "8415007e-ded4-4743-a3d8-453686c5e29e",
+          "id": "6b95d79d-c180-4ece-92e7-0c4f94fb3c7f",
           "trackId": "ZZy3aB-jFiY",
           "stemName": "other",
           "speed": 0.95,
           "pitch": 0,
           "linkPitch": true,
-          "gain": 5,
+          "gain": 5.5,
           "muted": false,
           "soloed": false,
           "effects": {
@@ -117,13 +117,13 @@
           "matchedBasePitch": 0
         },
         {
-          "id": "ec654604-51ec-410d-a0f5-f577089778f4",
+          "id": "987dbb90-ec7c-47ea-908f-5bf85da57871",
           "trackId": "d2BzC2vaDGM",
           "stemName": "other",
           "speed": 0.45,
           "pitch": 0,
           "linkPitch": true,
-          "gain": -2,
+          "gain": -1,
           "muted": false,
           "soloed": false,
           "effects": {
@@ -154,7 +154,7 @@
           "matchedBasePitch": 0
         },
         {
-          "id": "de6d2502-c1b3-465d-bd20-0c64fe918ca6",
+          "id": "ce70e04b-8c5d-469f-9013-dee4e4530176",
           "trackId": "F4--In2AwhE",
           "stemName": "other",
           "speed": 0.6,
@@ -191,7 +191,7 @@
           "matchedBasePitch": 0
         },
         {
-          "id": "f4e313c0-8471-44f4-a1fb-4b91c6b5ed43",
+          "id": "2ca59f94-1d83-4179-8768-c4e3527e60b5",
           "trackId": "mLZelvSvh3A",
           "stemName": "other",
           "speed": 0.53,
@@ -5615,9 +5615,7 @@
         "grit": 0.36
       },
       "loopStartFrac": 0.08726109331297949,
-      "loopEndFrac": 0.157345574951459,
-      "isMatched": false,
-      "matchedBasePitch": 0
+      "loopEndFrac": 0.157345574951459
     },
     "7f377917-6b71-46c8-9c1a-26e61a0468f7": {
       "speed": 0.74,
@@ -5640,9 +5638,7 @@
         "grit": 0.11
       },
       "loopStartFrac": 0.4535876158997321,
-      "loopEndFrac": 0.572760267420238,
-      "isMatched": false,
-      "matchedBasePitch": 0
+      "loopEndFrac": 0.572760267420238
     },
     "91399ecc-0144-4e9c-a451-90b1db9195ca": {
       "speed": 0.5,
@@ -5665,9 +5661,186 @@
         "grit": 0.36
       },
       "loopStartFrac": 0.7236838981953722,
-      "loopEndFrac": 0.9536249975534924,
-      "isMatched": false,
-      "matchedBasePitch": 0
+      "loopEndFrac": 0.9536249975534924
+    },
+    "3923281d-31e1-48ef-9780-f9538f44b0e0": {
+      "speed": 0.6,
+      "pitch": 0,
+      "linkPitch": true,
+      "gain": -4,
+      "muted": false,
+      "effects": {
+        "speed": 1,
+        "pitch": 0,
+        "linkPitch": true,
+        "reverbType": "algorithmic",
+        "reverbDecay": 3,
+        "reverbWet": 0.35,
+        "delayTime": 0,
+        "delayFeedback": 0,
+        "delayWet": 0,
+        "bassBoost": 0,
+        "gain": 1,
+        "grit": 0,
+        "spaceEchoWow": 0,
+        "bigKnobWet": 0,
+        "eqLow": 0,
+        "eqMid": 0,
+        "eqHigh": 0,
+        "phaserWet": 0,
+        "chorusWet": 0
+      },
+      "loopStartFrac": 0.19359130786052986,
+      "loopEndFrac": 0.25637579364575797
+    },
+    "ce70e04b-8c5d-469f-9013-dee4e4530176": {
+      "speed": 0.6,
+      "pitch": 0,
+      "linkPitch": true,
+      "gain": 2,
+      "muted": true,
+      "effects": {
+        "speed": 1,
+        "pitch": 0,
+        "linkPitch": true,
+        "reverbType": "algorithmic",
+        "reverbDecay": 0,
+        "reverbWet": 0,
+        "delayTime": 0.55,
+        "delayFeedback": 0.46,
+        "delayWet": 0.52,
+        "bassBoost": 0,
+        "gain": 1,
+        "grit": 0.22,
+        "spaceEchoWow": 0,
+        "bigKnobWet": 0,
+        "eqLow": 0,
+        "eqMid": 0,
+        "eqHigh": 0,
+        "phaserWet": 0.21,
+        "chorusWet": 0.2
+      },
+      "loopStartFrac": 0.4727258691504977,
+      "loopEndFrac": 0.570147540914263
+    },
+    "6b95d79d-c180-4ece-92e7-0c4f94fb3c7f": {
+      "speed": 0.95,
+      "pitch": 0,
+      "linkPitch": true,
+      "gain": 5.5,
+      "muted": false,
+      "effects": {
+        "speed": 1,
+        "pitch": 0,
+        "linkPitch": true,
+        "reverbType": "algorithmic",
+        "reverbDecay": 3,
+        "reverbWet": 0.32,
+        "delayTime": 0.57,
+        "delayFeedback": 0.36,
+        "delayWet": 0.45,
+        "bassBoost": 0,
+        "gain": 1,
+        "grit": 0,
+        "spaceEchoWow": 0,
+        "bigKnobWet": 0,
+        "eqLow": 0,
+        "eqMid": 0,
+        "eqHigh": 0,
+        "phaserWet": 0,
+        "chorusWet": 0
+      },
+      "loopStartFrac": 0.004228075073284012,
+      "loopEndFrac": 0.1180769873397375
+    },
+    "987dbb90-ec7c-47ea-908f-5bf85da57871": {
+      "speed": 0.45,
+      "pitch": 0,
+      "linkPitch": true,
+      "gain": -1,
+      "muted": false,
+      "effects": {
+        "speed": 1,
+        "pitch": 0,
+        "linkPitch": true,
+        "reverbType": "algorithmic",
+        "reverbDecay": 3.6,
+        "reverbWet": 0.31,
+        "delayTime": 0.57,
+        "delayFeedback": 0.49,
+        "delayWet": 0.5,
+        "bassBoost": 0,
+        "gain": 1,
+        "grit": 0,
+        "spaceEchoWow": 0,
+        "bigKnobWet": 0,
+        "eqLow": 0,
+        "eqMid": 0,
+        "eqHigh": 0,
+        "phaserWet": 0,
+        "chorusWet": 0
+      },
+      "loopStartFrac": 0.1544745696208989,
+      "loopEndFrac": 0.248634012226317
+    },
+    "2ca59f94-1d83-4179-8768-c4e3527e60b5": {
+      "speed": 0.53,
+      "pitch": 1,
+      "linkPitch": false,
+      "gain": -1,
+      "muted": false,
+      "effects": {
+        "speed": 1,
+        "pitch": 0,
+        "linkPitch": true,
+        "reverbType": "algorithmic",
+        "reverbDecay": 5,
+        "reverbWet": 0,
+        "delayTime": 1.12,
+        "delayFeedback": 0.68,
+        "delayWet": 0.52,
+        "bassBoost": 0,
+        "gain": 1,
+        "grit": 0,
+        "spaceEchoWow": 0,
+        "bigKnobWet": 0,
+        "eqLow": 0,
+        "eqMid": 0,
+        "eqHigh": 0,
+        "phaserWet": 0,
+        "chorusWet": 0
+      },
+      "loopStartFrac": 0.005419198588358748,
+      "loopEndFrac": 0.10763612270037466
+    },
+    "9044b6bc-a810-4426-beb0-c12b18e6d924": {
+      "speed": 0.75,
+      "pitch": 18,
+      "linkPitch": true,
+      "gain": 6,
+      "muted": true,
+      "effects": {
+        "speed": 1,
+        "pitch": 0,
+        "linkPitch": true,
+        "reverbType": "algorithmic",
+        "reverbDecay": 4.6,
+        "reverbWet": 0.43,
+        "delayTime": 0.6,
+        "delayFeedback": 0.46,
+        "delayWet": 0.2,
+        "bassBoost": 0,
+        "gain": 1,
+        "grit": 0.24,
+        "spaceEchoWow": 0,
+        "bigKnobWet": 0,
+        "phaserWet": 0,
+        "chorusWet": 0,
+        "eqHigh": 1,
+        "eqMid": 1.5
+      },
+      "loopStartFrac": 0.0009844705418953254,
+      "loopEndFrac": 0.015239455095512828
     }
   },
   "presets": [
@@ -6027,7 +6200,7 @@
     "gain": 0,
     "loopLengthOverride": null,
     "throwSettings": {
-      "delayTime": 0.35,
+      "delayTime": 0.29,
       "delayFeedback": 0.76,
       "delayWet": 0.63,
       "reverbDecay": 4,

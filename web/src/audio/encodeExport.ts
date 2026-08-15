@@ -1,4 +1,7 @@
-import lamejs from "lamejs";
+// @breezystack/lamejs is the maintained ESM-correct fork. Upstream lamejs@1.2.1 declares
+// MPEGMode/Lame/BitStream as bare top-level vars, which throws "MPEGMode is not defined"
+// once bundled as a module. Same API.
+import * as lamejs from "@breezystack/lamejs";
 import { audioBufferToWav } from "./wav";
 import {
   EXPORT_PRESETS,
@@ -69,11 +72,11 @@ function encodeMp3(
   const channels = channelData.length;
   const encoder = new lamejs.Mp3Encoder(channels, sampleRate, kbps);
   const pcm = channelData.map(floatToInt16);
-  const chunks: Int8Array[] = [];
+  const chunks: Uint8Array[] = [];
 
   for (let i = 0; i < pcm[0].length; i += MP3_BLOCK) {
     const left = pcm[0].subarray(i, i + MP3_BLOCK);
-    let block: Int8Array;
+    let block: Uint8Array;
     if (channels === 2) {
       const right = pcm[1].subarray(i, i + MP3_BLOCK);
       block = encoder.encodeBuffer(left, right);
