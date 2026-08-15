@@ -328,6 +328,8 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
       setIsPlaying(multiEngine.isSlotPlaying(slot.id));
       setThrowActive(multiEngine.isThrowActive(slot.id));
       setCurrentTime(multiEngine.getSlotPosition(slot.id));
+      // Catches seeks made elsewhere (Rewind All) — a stopped slot has no repaint loop.
+      setSeekRevision(multiEngine.getSeekNonce(slot.id));
     }, 100);
     return () => clearInterval(id);
   }, [slot.id]);
@@ -445,7 +447,7 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
               !buffer && "opacity-30 cursor-not-allowed")}>
             {isPlaying ? "⏸ Pause" : "▶ Play"}
           </button>
-          <button type="button" onClick={() => { multiEngine.seekSlot(slot.id, slot.loopStart); setSeekRevision((n) => n + 1); }} disabled={!buffer}
+          <button type="button" onClick={() => { multiEngine.seekSlot(slot.id, slot.loopStart); setSeekRevision(multiEngine.getSeekNonce(slot.id)); }} disabled={!buffer}
             className={cn("rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted",
               !buffer && "opacity-30 cursor-not-allowed")}
             title="Rewind to loop start">
@@ -572,7 +574,7 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
             seekRevision={seekRevision}
             getPosition={() => multiEngine.getSlotPosition(slot.id)}
             onLoopChange={(start, end) => update({ loopStart: start, loopEnd: end })}
-            onSeek={(time) => { multiEngine.seekSlot(slot.id, time); setSeekRevision((n) => n + 1); }}
+            onSeek={(time) => { multiEngine.seekSlot(slot.id, time); setSeekRevision(multiEngine.getSeekNonce(slot.id)); }}
           />
           <div className="pointer-events-none absolute bottom-1 left-1.5 flex gap-1.5 text-[9px] font-mono tabular-nums text-white/40">
             <span>{formatTime(currentTime)}</span>

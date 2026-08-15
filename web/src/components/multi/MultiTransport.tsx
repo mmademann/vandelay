@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { multiEngine } from "../../audio/multiEngine";
 import { renderMulti, canExportMulti } from "../../audio/renderMulti";
+import { multiRecorder } from "../../audio/multiRecorder";
 import {
   exportExtension,
   estimateExportBytes,
@@ -166,6 +167,16 @@ function buildExportFilename(activeSessionName: string | null, slotTitles: strin
 
 export function MultiTransport({ masterSettings, slotCount, referenceSlotId, activeSessionName, slotTitles, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll, onApplyGenre, onRandomizeAll, onRandomSession, randomDisabled }: Props) {
   const [loopCount, setLoopCount] = useState(1);
+  const [recording, setRecording] = useState(false);
+  const [recElapsed, setRecElapsed] = useState(0);
+  const [recEncoding, setRecEncoding] = useState(false);
+  /** Recording format is independent of the export panel — takes and exports have different needs. */
+  const [recFormat, setRecFormat] = useState<ExportFormat>("wav");
+  /** Separate from exportError — that only renders inside the export panel, which may be closed. */
+  const [recError, setRecError] = useState<string | null>(null);
+  /** Encoded take held pending a filename — set on stop, cleared on save or discard. */
+  const [pendingTake, setPendingTake] = useState<{ blob: Blob; ext: string; seconds: number } | null>(null);
+  const [takeName, setTakeName] = useState("");
   const [format, setFormat] = useState<ExportFormat>("wav");
   const [quality, setQuality] = useState<ExportQuality>("full");
   const [exporting, setExporting] = useState(false);
@@ -213,6 +224,71 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
     return () => document.removeEventListener("mousedown", handleClick);
   }, [throwPanelOpen, exportPanelOpen, genrePanelOpen]);
 
+  // Tick the elapsed readout while recording.
+  useEffect(() => {
+    if (!recording) return;
+    const id = setInterval(() => setRecElapsed(multiRecorder.elapsed()), 200);
+    return () => clearInterval(id);
+  }, [recording]);
+
+  // Don't leave a live tap on the master if the transport unmounts mid-take.
+  useEffect(() => () => multiRecorder.cancel(), []);
+
+  // An unsaved take lives only in memory — warn before a reload throws it away.
+  useEffect(() => {
+    if (!pendingTake && !recording) return;
+    function warn(e: BeforeUnloadEvent) { e.preventDefault(); }
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [pendingTake, recording]);
+
+  function saveTake() {
+    if (!pendingTake) return;
+    const base = takeName.trim() || "take";
+    downloadBlob(pendingTake.blob, `${base}.${pendingTake.ext}`);
+    setPendingTake(null);
+    setTakeName("");
+  }
+
+  async function handleRecord() {
+    if (recEncoding) return;
+    setRecError(null);
+
+    if (recording) {
+      const seconds = multiRecorder.elapsed();
+      setRecording(false);
+      setRecEncoding(true);
+      try {
+        const blob = await multiRecorder.stop({ format: recFormat, quality });
+        if (!blob) throw new Error("Recording was empty.");
+        // Hold the take so it can be named before saving.
+        setTakeName(`${buildExportFilename(activeSessionName, slotTitles)}-live`);
+        setPendingTake({ blob, ext: exportExtension(recFormat), seconds });
+      } catch (e) {
+        setRecError(e instanceof Error ? e.message : "Recording failed");
+      } finally {
+        setRecEncoding(false);
+        setRecElapsed(0);
+      }
+      return;
+    }
+
+    // The pending take exists only in memory — starting over would lose it with no recovery.
+    if (pendingTake) {
+      setRecError("Save the current take first.");
+      return;
+    }
+
+    try {
+      await multiRecorder.start();
+      setRecElapsed(0);
+      setRecording(true);
+    } catch (e) {
+      console.error("[recorder] start failed", e);
+      setRecError(e instanceof Error ? e.message : "Could not start recording");
+    }
+  }
+
   async function handleExport() {
     if (exporting) return;
     const { slots, buffers } = getSlotsAndBuffers();
@@ -259,6 +335,68 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
         >
           {isPlaying && slotCount > 0 ? "⏸ Pause All" : "▶ Play All"}
         </button>
+        <div className="flex shrink-0 items-center">
+          <button
+            type="button"
+            onClick={handleRecord}
+            disabled={slotCount === 0 || recEncoding}
+            title={recording ? "Stop and save recording" : "Record master output live"}
+            className={cn(
+              "rounded-l px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition disabled:opacity-30",
+              recording
+                ? "bg-red-500/20 text-red-400 ring-1 ring-red-500/40 hover:bg-red-500/30"
+                : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted",
+            )}
+          >
+            {recEncoding ? (
+              "Saving…"
+            ) : recording ? (
+              <span className="flex items-center gap-1.5">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
+                ■ Stop {formatDuration(recElapsed)}
+              </span>
+            ) : (
+              "● Rec"
+            )}
+          </button>
+          {/* Format locked mid-take — the encode target is fixed once samples start arriving. */}
+          <button
+            type="button"
+            onClick={() => setRecFormat((f) => (f === "wav" ? "mp3" : "wav"))}
+            disabled={recording || recEncoding}
+            title={`Recording format: ${recFormat.toUpperCase()} — click to switch`}
+            className="rounded-r border-l border-background/40 bg-muted/80 px-2 py-1.5 text-xs font-bold uppercase tracking-wide text-foreground/40 transition hover:text-foreground hover:bg-muted disabled:opacity-30"
+          >
+            {recFormat}
+          </button>
+        </div>
+        {pendingTake && (
+          <form
+            className="flex shrink-0 items-center gap-1.5 rounded bg-red-500/10 px-2 py-1 ring-1 ring-red-500/30"
+            onSubmit={(e) => { e.preventDefault(); saveTake(); }}
+          >
+            <span className="text-xs font-bold uppercase tracking-wide text-red-400">
+              Take {formatDuration(pendingTake.seconds)}
+            </span>
+            <input
+              autoFocus
+              value={takeName}
+              onChange={(e) => setTakeName(e.target.value)}
+              placeholder="Filename…"
+              className="w-44 rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:border-accent/60"
+            />
+            <span className="text-xs text-foreground/40">.{pendingTake.ext}</span>
+            <button
+              type="submit"
+              className="rounded bg-accent/20 px-2 py-1 text-xs font-bold uppercase tracking-wide text-accent transition hover:bg-accent/30"
+            >
+              Save
+            </button>
+          </form>
+        )}
+        {recError && (
+          <span className="shrink-0 text-xs text-red-400" title={recError}>{recError}</span>
+        )}
         <button
           type="button"
           onClick={onRewindAll}

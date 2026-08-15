@@ -29,6 +29,12 @@ interface RuntimeSlot extends MultiSlot {
   throwTimer: ReturnType<typeof setTimeout> | null;
   // Independent playback tracking
   startedAt: number;
+  /** Tone time the current fade ends; volume writes before this would cancel the ramp. */
+  fadeUntil: number;
+  /** dB the in-flight fade is heading toward, so a redundant reschedule can be skipped. */
+  fadeTarget: number;
+  /** Bumped on each seek so stopped slots know to repaint their playhead. */
+  seekNonce: number;
   startOffset: number;
   playing: boolean;
 }
@@ -46,6 +52,48 @@ class MultiEngine {
   private _disposed = false;
 
   isRunning() { return this.running || Array.from(this.slots.values()).some((s) => s.playing); }
+
+  /** Seconds for a slot to ramp in on play and out on stop. */
+  private static readonly FADE_SEC = 10;
+  private static readonly FADE_STEPS = 60;
+
+  /**
+   * Ramp a slot's volume so the change is spread evenly across the full duration.
+   *
+   * Amplitude and loudness are not proportional — amplitude 0.5 is only about -6 dB, already
+   * subjectively most of the way up. A linear amplitude ramp therefore sounds finished early on
+   * the way in, while sounding correct on the way out. Raising progress to a power biases the
+   * curve so the audible change is spread evenly in both directions.
+   */
+  private static rampVolume(
+    slot: RuntimeSlot,
+    targetDb: number,
+    startTime: number,
+    seconds: number,
+    fromSilence = true,
+  ): void {
+    const param = slot.volume.volume;
+    param.cancelScheduledValues(startTime);
+    const targetAmp = Tone.dbToGain(targetDb);
+    const startAmp = fromSilence ? 0 : Tone.dbToGain(param.value);
+    const rising = targetAmp > startAmp;
+    param.setValueAtTime(fromSilence ? -60 : param.value, startTime);
+    for (let i = 1; i <= MultiEngine.FADE_STEPS; i++) {
+      const p = i / MultiEngine.FADE_STEPS;
+      // Rising: hold low early so the top of the range gets real time. Falling: linear already
+      // spends its length audibly, so leave it be.
+      const shaped = rising ? Math.pow(p, 3) : p;
+      const amp = startAmp + (targetAmp - startAmp) * shaped;
+      // Floor at -60 dB — dbToGain(0) is -Infinity, which poisons the automation curve.
+      const db = amp <= 0.001 ? -60 : Tone.gainToDb(amp);
+      param.linearRampToValueAtTime(db, startTime + seconds * p);
+    }
+    slot.fadeUntil = startTime + seconds;
+    slot.fadeTarget = targetDb;
+  }
+
+  /** Master output node — null until the first slot is added. Used by the recorder to tap output. */
+  getMasterNode(): Tone.Volume | null { return this.master; }
 
   getMasterLoopLength(): number | null {
     if (this.masterSettings.loopLengthOverride != null) {
@@ -136,6 +184,9 @@ class MultiEngine {
       throwActive: false,
       throwTimer: null,
       startedAt: 0,
+      fadeUntil: 0,
+      fadeTarget: 0,
+      seekNonce: 0,
       startOffset: safeLoopStart,
       playing: false,
     };
@@ -239,11 +290,17 @@ class MultiEngine {
     if (!slot) return;
     const clamped = Math.max(slot.loopStart, Math.min(slot.loopEnd - 0.01, time));
     slot.startOffset = clamped;
+    slot.seekNonce++;
     if (slot.playing) {
       const now = Tone.now();
       slot.player.seek(clamped, now);
       slot.startedAt = now;
     }
+  }
+
+  /** Increments on every seek. A stopped slot has no repaint loop, so the UI polls this to redraw. */
+  getSeekNonce(id: string): number {
+    return this.slots.get(id)?.seekNonce ?? 0;
   }
 
   isSlotPlaying(id: string): boolean {
@@ -313,9 +370,9 @@ class MultiEngine {
     const anySoloed = Array.from(this.slots.values()).some((s) => s.soloed);
     const effectiveMute = slot.muted || (anySoloed && !slot.soloed);
     if (!effectiveMute) {
-      slot.volume.volume.cancelScheduledValues(t);
-      slot.volume.volume.setValueAtTime(-60, t);
-      slot.volume.volume.linearRampToValueAtTime(slot.gain, t + 5);
+      // Ramp in amplitude, not dB. A linear dB ramp from -60 sits near-silent for most of its
+      // length then rushes the last stretch, which reads as an abrupt start rather than a fade.
+      MultiEngine.rampVolume(slot, slot.gain, t, MultiEngine.FADE_SEC);
     }
     slot.player.start(t, slot.startOffset);
     slot.startedAt = t;
@@ -327,10 +384,8 @@ class MultiEngine {
     if (!slot) return;
     slot.startOffset = this.getSlotPosition(id);
     const now = Tone.now();
-    slot.volume.volume.cancelScheduledValues(now);
-    slot.volume.volume.setValueAtTime(slot.volume.volume.value, now);
-    slot.volume.volume.linearRampToValueAtTime(-60, now + 5);
-    try { slot.player.stop(now + 5); } catch { /* ignore */ }
+    MultiEngine.rampVolume(slot, -60, now, MultiEngine.FADE_SEC, false);
+    try { slot.player.stop(now + MultiEngine.FADE_SEC); } catch { /* ignore */ }
     slot.playing = false;
   }
 
@@ -448,9 +503,7 @@ class MultiEngine {
       slot.player.loop = true;
       slot.startOffset = Math.max(slot.loopStart, Math.min(slot.loopEnd - 0.01, slot.startOffset));
       // Match playSlot's fade-in — recomputeAllVolumes has already jumped this to full gain.
-      slot.volume.volume.cancelScheduledValues(t);
-      slot.volume.volume.setValueAtTime(-60, t);
-      slot.volume.volume.linearRampToValueAtTime(slot.gain, t + 5);
+      MultiEngine.rampVolume(slot, slot.gain, t, MultiEngine.FADE_SEC);
       slot.player.start(t, slot.startOffset);
       slot.startedAt = t;
       slot.playing = true;
@@ -459,8 +512,19 @@ class MultiEngine {
 
   private recomputeAllVolumes(): void {
     const anySoloed = Array.from(this.slots.values()).some((s) => s.soloed);
+    const now = Tone.now();
     for (const slot of this.slots.values()) {
       const effectiveMute = slot.muted || (anySoloed && !slot.soloed);
+      const targetDb = effectiveMute ? -60 : slot.gain;
+      if (now < slot.fadeUntil) {
+        // A fade is in flight. Leave it alone unless its destination actually changed —
+        // rescheduling an identical ramp restarts it, which is audible as a second fade.
+        if (Math.abs(targetDb - slot.fadeTarget) < 0.01) continue;
+        const remaining = slot.fadeUntil - now;
+        MultiEngine.rampVolume(slot, targetDb, now, remaining, false);
+        continue;
+      }
+      // Writing .value cancels scheduled automation, so only do it once no fade is pending.
       slot.volume.volume.value = effectiveMute ? -Infinity : slot.gain;
     }
   }

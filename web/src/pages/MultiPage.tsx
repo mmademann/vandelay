@@ -987,7 +987,13 @@ export function MultiPage() {
           getSlotsAndBuffers={getSlotsAndBuffers.current}
           onPlayAll={handlePlayAll}
           onStopAll={handleStopAll}
-          onRewindAll={() => { for (const e of entries) multiEngine.seekSlot(e.slot.id, e.slot.loopStart); }}
+          onRewindAll={() => {
+            // Engine loopStart, not the state copy — addSlot clamps against buffer duration.
+            for (const e of entries) {
+              const live = multiEngine.getSlot(e.slot.id);
+              multiEngine.seekSlot(e.slot.id, live?.loopStart ?? e.slot.loopStart);
+            }
+          }}
           onThrowSettingsChange={handleThrowSettingsChange}
           throwPresets={throwPresets}
           onSaveThrowPreset={handleSaveThrowPreset}
