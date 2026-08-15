@@ -2,10 +2,11 @@ node_modules
 dist
 build
 
-# Server-generated audio cache and stem separations
+# Server-generated audio cache and stem separations (large, regenerable)
 cache
 stems
-history.json
+# history.json IS tracked — 6.5KB of track titles that nothing else stores, and
+# cleanupStems() deletes any stem dir whose id is missing from it.
 multi-state-history/
 
 .DS_Store
