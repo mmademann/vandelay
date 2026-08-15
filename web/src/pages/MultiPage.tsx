@@ -138,6 +138,8 @@ export function MultiPage() {
   const [throwPresets, setThrowPresets] = useState<ThrowPreset[]>(() => loadThrowPresets());
   const [exportStatus, setExportStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [importStatus, setImportStatus] = useState<"idle" | "importing" | "imported" | "none" | "error">("idle");
+  /** Name of the session that just saved — drives the transient ✓ on its row. "" = the new-session form. */
+  const [savedFlash, setSavedFlash] = useState<string | null>(null);
   const [isPlayingAll, setIsPlayingAll] = useState(false);
   const [library, setLibrary] = useState<{ id: string; title: string }[]>([]);
   const libraryRef = useRef<{ id: string; title: string }[]>([]);
@@ -671,6 +673,8 @@ export function MultiPage() {
     setNamedSessions(saveNamedSession(name, slots, masterSettings));
     setSessionName("");
     setActiveSessionName(name);
+    setSavedFlash(name);
+    setTimeout(() => setSavedFlash((n) => (n === name ? null : n)), 2000);
     saveExportToServer(buildExport(masterSettingsRef.current));
   }
 
@@ -896,11 +900,17 @@ export function MultiPage() {
                         matchedBasePitch: e.matchedBasePitch,
                       }));
                       setNamedSessions(saveNamedSession(s.name, slots, masterSettings));
+                      setSavedFlash(s.name);
+                      setTimeout(() => setSavedFlash((n) => (n === s.name ? null : n)), 2000);
                     }
                   }}
-                  className="text-base leading-none text-foreground/30 opacity-0 group-hover:opacity-100 transition hover:text-accent pl-3"
+                  className={`text-base leading-none transition pl-3 ${
+                    savedFlash === s.name
+                      ? "text-accent opacity-100"
+                      : "text-foreground/30 opacity-0 group-hover:opacity-100 hover:text-accent"
+                  }`}
                   aria-label="Resave session" title="Resave with current slots"
-                >💾</button>
+                >{savedFlash === s.name ? "✓" : "💾"}</button>
                 <span className="flex-1" />
                 <button
                   type="button"
@@ -922,12 +932,18 @@ export function MultiPage() {
                 placeholder="Save current session…"
                 className="min-w-0 flex-1 rounded border border-border bg-muted/30 px-2 py-1.5 text-xs outline-none focus:border-accent/60 placeholder:text-foreground/30"
               />
-              {sessionName.trim() && (
+              {/* Saving clears the input, so keep the button mounted through the flash to show ✓. */}
+              {(sessionName.trim() || savedFlash !== null) && (
                 <button
                   type="submit"
-                  className="rounded border border-border bg-muted/50 px-2 py-1.5 text-xs text-foreground/50 transition hover:text-foreground"
+                  disabled={savedFlash !== null}
+                  className={`rounded border px-2 py-1.5 text-xs transition ${
+                    savedFlash !== null
+                      ? "border-accent/50 bg-accent/10 text-accent"
+                      : "border-border bg-muted/50 text-foreground/50 hover:text-foreground"
+                  }`}
                 >
-                  Save
+                  {savedFlash !== null ? "Saved ✓" : "Save"}
                 </button>
               )}
             </form>

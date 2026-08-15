@@ -210,6 +210,11 @@ class MultiEngine {
     }
     if (patch.gain !== undefined || patch.muted !== undefined || patch.soloed !== undefined) {
       this.recomputeAllVolumes();
+      // play() skips silent slots, so a slot un-silenced mid-session has to start itself.
+      // Solo changes can un-silence any slot, not just this one, so sweep them all.
+      if (this.running && (patch.muted !== undefined || patch.soloed !== undefined)) {
+        this.startSilencedSlots();
+      }
     }
     if (patch.effects !== undefined) {
       applyMultiEffectsChain(slot.chain, slot.effects);
@@ -363,9 +368,12 @@ class MultiEngine {
     if (this.slots.size === 0) return;
 
     const t = Tone.now() + 0.05;
+    const anySoloed = Array.from(this.slots.values()).some((s) => s.soloed);
 
     for (const slot of this.slots.values()) {
       if (slot.playing) continue;
+      // Silent slots stay stopped — unmuting during playback starts them (see updateSlot).
+      if (slot.muted || (anySoloed && !slot.soloed)) continue;
       try { slot.player.stop(); } catch { /* ignore */ }
       slot.player.loopStart = slot.loopStart;
       slot.player.loopEnd = slot.loopEnd;
@@ -420,6 +428,33 @@ class MultiEngine {
     this.slots.clear();
     if (this.master) { this.master.disconnect(); this.master.dispose(); this.master = null; }
     this.running = false;
+  }
+
+  /**
+   * Start any slot that is now audible but still stopped. Each resumes from its own
+   * startOffset — where it was parked — rather than being seeked to match other slots.
+   * Loops are independent lengths, so there is no shared position to align to.
+   */
+  private startSilencedSlots(): void {
+    const anySoloed = Array.from(this.slots.values()).some((s) => s.soloed);
+    const t = Tone.now() + 0.05;
+    for (const slot of this.slots.values()) {
+      if (slot.playing) continue;
+      if (slot.muted || (anySoloed && !slot.soloed)) continue;
+      if (slot.loopEnd - slot.loopStart <= 0) continue;
+      try { slot.player.stop(); } catch { /* ignore */ }
+      slot.player.loopStart = slot.loopStart;
+      slot.player.loopEnd = slot.loopEnd;
+      slot.player.loop = true;
+      slot.startOffset = Math.max(slot.loopStart, Math.min(slot.loopEnd - 0.01, slot.startOffset));
+      // Match playSlot's fade-in — recomputeAllVolumes has already jumped this to full gain.
+      slot.volume.volume.cancelScheduledValues(t);
+      slot.volume.volume.setValueAtTime(-60, t);
+      slot.volume.volume.linearRampToValueAtTime(slot.gain, t + 5);
+      slot.player.start(t, slot.startOffset);
+      slot.startedAt = t;
+      slot.playing = true;
+    }
   }
 
   private recomputeAllVolumes(): void {
