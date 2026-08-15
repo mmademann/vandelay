@@ -1,10 +1,10 @@
 {
-  "exportedAt": 1786797709747,
+  "exportedAt": 1786798143055,
   "version": 1,
   "namedSessions": [
     {
       "name": "FEEL",
-      "savedAt": 1786797708433,
+      "savedAt": 1786798141989,
       "slots": [
         {
           "id": "3923281d-31e1-48ef-9780-f9538f44b0e0",
@@ -123,7 +123,7 @@
           "speed": 0.45,
           "pitch": 0,
           "linkPitch": true,
-          "gain": 1,
+          "gain": 0,
           "muted": false,
           "soloed": false,
           "effects": {
@@ -5766,7 +5766,7 @@
       "speed": 0.45,
       "pitch": 0,
       "linkPitch": true,
-      "gain": 1,
+      "gain": 0,
       "muted": false,
       "effects": {
         "speed": 1,
