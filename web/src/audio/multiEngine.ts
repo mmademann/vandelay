@@ -55,6 +55,8 @@ class MultiEngine {
 
   /** Seconds for a slot to ramp in on play and out on stop. */
   private static readonly FADE_SEC = 10;
+  /** Bottom of the gain knob — at or below this a slot is silenced outright. */
+  static readonly GAIN_FLOOR_DB = -60;
   private static readonly FADE_STEPS = 60;
 
   /**
@@ -74,7 +76,8 @@ class MultiEngine {
   ): void {
     const param = slot.volume.volume;
     param.cancelScheduledValues(startTime);
-    const targetAmp = Tone.dbToGain(targetDb);
+    // A floored target means silence, so ramp amplitude to a true 0 rather than -60 dB's 0.1%.
+    const targetAmp = targetDb <= MultiEngine.GAIN_FLOOR_DB ? 0 : Tone.dbToGain(targetDb);
     const startAmp = fromSilence ? 0 : Tone.dbToGain(param.value);
     const rising = targetAmp > startAmp;
     param.setValueAtTime(fromSilence ? -60 : param.value, startTime);
@@ -514,6 +517,9 @@ class MultiEngine {
     const anySoloed = Array.from(this.slots.values()).some((s) => s.soloed);
     const now = Tone.now();
     for (const slot of this.slots.values()) {
+      // A slot fading out is on its way to a scheduled player.stop(). Retargeting its ramp would
+      // swell it back up while the player is still running, and it would never stop.
+      if (!slot.playing && now < slot.fadeUntil) continue;
       const effectiveMute = slot.muted || (anySoloed && !slot.soloed);
       const targetDb = effectiveMute ? -60 : slot.gain;
       if (now < slot.fadeUntil) {
@@ -525,7 +531,9 @@ class MultiEngine {
         continue;
       }
       // Writing .value cancels scheduled automation, so only do it once no fade is pending.
-      slot.volume.volume.value = effectiveMute ? -Infinity : slot.gain;
+      // At the bottom of the knob's range, go to true silence rather than -60 dB's 0.1%.
+      slot.volume.volume.value =
+        effectiveMute || slot.gain <= MultiEngine.GAIN_FLOOR_DB ? -Infinity : slot.gain;
     }
   }
 }

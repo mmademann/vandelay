@@ -35,11 +35,16 @@ export function buildExport(masterSettings: MultiMasterSettings): MultiExportFil
 }
 
 export async function saveExportToServer(data: MultiExportFile): Promise<void> {
-  await fetch("/api/multi-state", {
+  const res = await fetch("/api/multi-state", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
+  // Without this a 400 resolves silently and the UI reports success on a write that never happened.
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Backup failed (${res.status}) ${detail}`.trim());
+  }
 }
 
 export async function loadExportFromServer(): Promise<MultiExportFile | null> {

@@ -590,8 +590,9 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
 
       {/* Knobs */}
       <div className="flex flex-wrap gap-x-3 gap-y-2 border-t border-border/50 pt-2">
-        <Knob label="Gain" value={slot.gain} min={-24} max={6} step={0.5} defaultValue={0} size={40}
-          displayValue={`${slot.gain > 0 ? "+" : ""}${slot.gain.toFixed(1)}dB`} onChange={(v) => update({ gain: v })} />
+        <Knob label="Gain" value={slot.gain} min={-60} max={6} step={0.5} defaultValue={0} size={40}
+          displayValue={slot.gain <= -60 ? "−∞" : `${slot.gain > 0 ? "+" : ""}${slot.gain.toFixed(1)}dB`}
+          onChange={(v) => update({ gain: v })} />
         <Knob label="Speed" value={slot.speed} min={0.1} max={1} step={0.01} defaultValue={1} size={40}
           displayValue={`${slot.speed.toFixed(2)}×`} onChange={(v) => update({ speed: v })} />
         <div className="flex flex-col items-center gap-0.5">

@@ -9,7 +9,8 @@ const app = express();
 const PORT = 5174;
 
 app.use(cors());
-app.use(express.json());
+// Multi-state backups are a full localStorage snapshot and outgrew the 100kb default.
+app.use(express.json({ limit: "25mb" }));
 
 app.use("/api", audioRouter);
 app.use("/api", stemsRouter);
