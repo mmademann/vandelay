@@ -177,6 +177,8 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
   /** Encoded take held pending a filename — set on stop, cleared on save or discard. */
   const [pendingTake, setPendingTake] = useState<{ blob: Blob; ext: string; seconds: number } | null>(null);
   const [takeName, setTakeName] = useState("");
+  /** Filename of the last saved take — drives the transient "saved" confirmation. */
+  const [savedTake, setSavedTake] = useState<string | null>(null);
   const [format, setFormat] = useState<ExportFormat>("wav");
   const [quality, setQuality] = useState<ExportQuality>("full");
   const [exporting, setExporting] = useState(false);
@@ -192,6 +194,8 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
   const exportBtnRef = useRef<HTMLButtonElement>(null);
   const genrePanelRef = useRef<HTMLDivElement>(null);
   const genreBtnRef = useRef<HTMLButtonElement>(null);
+  /** Anchors the pending-take panel so it can't be pushed off-screen by the transport row. */
+  const recGroupRef = useRef<HTMLDivElement>(null);
   const masterLoopLength = multiEngine.getMasterLoopLength() ?? 0;
   const totalSec = masterLoopLength * loopCount;
   const estBytes = estimateExportBytes(totalSec, format, quality);
@@ -234,6 +238,13 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
   // Don't leave a live tap on the master if the transport unmounts mid-take.
   useEffect(() => () => multiRecorder.cancel(), []);
 
+  // The saved confirmation is transient — clear it so it can't be mistaken for a pending take.
+  useEffect(() => {
+    if (!savedTake) return;
+    const id = setTimeout(() => setSavedTake(null), 4000);
+    return () => clearTimeout(id);
+  }, [savedTake]);
+
   // An unsaved take lives only in memory — warn before a reload throws it away.
   useEffect(() => {
     if (!pendingTake && !recording) return;
@@ -248,6 +259,15 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
     downloadBlob(pendingTake.blob, `${base}.${pendingTake.ext}`);
     setPendingTake(null);
     setTakeName("");
+    // The "save the current take first" warning is stale the moment the take is saved.
+    setRecError(null);
+    setSavedTake(`${base}.${pendingTake.ext}`);
+  }
+
+  function discardTake() {
+    setPendingTake(null);
+    setTakeName("");
+    setRecError(null);
   }
 
   async function handleRecord() {
@@ -369,7 +389,7 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
             </button>
           </div>
         )}
-        <div className="flex shrink-0 items-center">
+        <div ref={recGroupRef} className="relative flex shrink-0 items-center">
           <button
             type="button"
             onClick={handleRecord}
@@ -403,31 +423,48 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
           >
             {recFormat}
           </button>
-        </div>
-        {pendingTake && (
-          <form
-            className="flex shrink-0 items-center gap-1.5 rounded bg-red-500/10 px-2 py-1 ring-1 ring-red-500/30"
-            onSubmit={(e) => { e.preventDefault(); saveTake(); }}
-          >
-            <span className="text-xs font-bold uppercase tracking-wide text-red-400">
-              Take {formatDuration(pendingTake.seconds)}
-            </span>
-            <input
-              autoFocus
-              value={takeName}
-              onChange={(e) => setTakeName(e.target.value)}
-              placeholder="Filename…"
-              className="w-44 rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:border-accent/60"
-            />
-            <span className="text-xs text-foreground/40">.{pendingTake.ext}</span>
-            <button
-              type="submit"
-              className="rounded bg-accent/20 px-2 py-1 text-xs font-bold uppercase tracking-wide text-accent transition hover:bg-accent/30"
+
+          {/* Anchored to the Rec button rather than inline in the transport row — the row
+              overflows once enough controls are present and the form scrolled out of view. */}
+          {pendingTake && (
+            <form
+              className="absolute left-0 top-full z-30 mt-2 flex w-max items-center gap-1.5 rounded-md border border-red-500/40 bg-background/95 px-2.5 py-2 shadow-xl backdrop-blur"
+              onSubmit={(e) => { e.preventDefault(); saveTake(); }}
             >
-              Save
-            </button>
-          </form>
-        )}
+              <span className="text-xs font-bold uppercase tracking-wide text-red-400">
+                Take {formatDuration(pendingTake.seconds)}
+              </span>
+              <input
+                autoFocus
+                value={takeName}
+                onChange={(e) => setTakeName(e.target.value)}
+                placeholder="Filename…"
+                className="w-44 rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:border-accent/60"
+              />
+              <span className="text-xs text-foreground/40">.{pendingTake.ext}</span>
+              <button
+                type="submit"
+                className="rounded bg-accent/20 px-2 py-1 text-xs font-bold uppercase tracking-wide text-accent transition hover:bg-accent/30"
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                onClick={discardTake}
+                title="Discard this take"
+                className="rounded px-1.5 py-1 text-xs font-bold uppercase tracking-wide text-foreground/30 transition hover:text-red-400"
+              >
+                ✕
+              </button>
+            </form>
+          )}
+
+          {savedTake && !pendingTake && (
+            <span className="absolute left-0 top-full z-30 mt-2 w-max rounded-md border border-accent/40 bg-background/95 px-2.5 py-1.5 text-xs font-bold uppercase tracking-wide text-accent shadow-xl backdrop-blur">
+              ✓ Saved {savedTake}
+            </span>
+          )}
+        </div>
         {recError && (
           <span className="shrink-0 text-xs text-red-400" title={recError}>{recError}</span>
         )}
