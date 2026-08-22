@@ -125,9 +125,15 @@ function renderFrame(
     ctx.fillRect(rx - HANDLE_TAB, h - HANDLE_W - 1, HANDLE_TAB, HANDLE_W + 1);
   }
 
-  // Playhead
+  // Playhead — clamped inside the loop region. A stopped slot keeps its startOffset
+  // when the loop handles move, so an unclamped line can sit outside the brackets.
+  const clamped =
+    loopEndRatio > loopStartRatio
+      ? Math.max(loopStartRatio, Math.min(loopEndRatio, playRatio))
+      : playRatio;
   ctx.fillStyle = "rgba(255,255,255,0.85)";
-  ctx.fillRect(Math.floor(playRatio * w), 0, 1, h);
+  // Keep the full 1px width visible at the right edge rather than half-clipped.
+  ctx.fillRect(Math.min(Math.floor(clamped * w), Math.floor(w) - 1), 0, 1, h);
 }
 
 function SlotWaveform({
@@ -279,16 +285,6 @@ function formatTime(secs: number): string {
 
 // --- SlotStrip ---
 
-function formatKeyBadge(key: string | null | undefined): string {
-  if (!key) return "?";
-  const parts = key.trim().split(/\s+/);
-  if (parts.length < 2) return key;
-  const scale = parts[1];
-  const uncertain = scale.endsWith("?");
-  const mode = scale.startsWith("maj") ? "maj" : "min";
-  return `${parts[0]} ${mode}${uncertain ? "?" : ""}`;
-}
-
 interface Props {
   slot: MultiSlot;
   title: string;
@@ -296,8 +292,6 @@ interface Props {
   presets: MultiPreset[];
   isReference: boolean;
   hasReference: boolean;
-  detectedKey?: string | null | undefined;
-  detectedBpm?: number;
   isMatched: boolean;
   matchedBasePitch: number;
   pitchInterval: 1 | 7 | 12;
@@ -311,7 +305,7 @@ interface Props {
   onApplyPreset: (preset: MultiPreset) => void;
 }
 
-export function SlotStrip({ slot, title, buffer, presets, isReference, hasReference, detectedKey, detectedBpm, isMatched, matchedBasePitch, pitchInterval, onPitchIntervalChange, onRemove, onChange, onSetReference, onMatch, onSavePreset, onDeletePreset, onApplyPreset }: Props) {
+export function SlotStrip({ slot, title, buffer, presets, isReference, hasReference, isMatched, matchedBasePitch, pitchInterval, onPitchIntervalChange, onRemove, onChange, onSetReference, onMatch, onSavePreset, onDeletePreset, onApplyPreset }: Props) {
   const [presetName, setPresetName] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
   const [throwActive, setThrowActive] = useState(false);
@@ -346,12 +340,12 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
     return () => document.removeEventListener("mousedown", handleClick);
   }, [presetsPanelOpen]);
 
-  async function handlePlayStop() {
+  async function handlePlayStop(instant = false) {
     if (isPlaying) {
-      multiEngine.stopSlot(slot.id);
+      multiEngine.stopSlot(slot.id, instant);
       setIsPlaying(false);
     } else {
-      await multiEngine.playSlot(slot.id);
+      await multiEngine.playSlot(slot.id, instant);
       setIsPlaying(true);
     }
   }
@@ -441,12 +435,43 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
         </div>
         {/* Row 2: playback controls + key/match badges — wraps on narrow slots */}
         <div className="flex items-center gap-1.5 flex-wrap">
-          <button type="button" onClick={handlePlayStop} disabled={!buffer}
-            className={cn("rounded px-2 py-1 text-xs font-bold uppercase tracking-wide transition",
-              isPlaying ? "bg-accent/25 text-accent ring-1 ring-accent/40" : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted",
-              !buffer && "opacity-30 cursor-not-allowed")}>
-            {isPlaying ? "⏸ Pause" : "▶ Play"}
-          </button>
+          {isPlaying ? (
+            /* Split control: left half stops at once, right half fades out over 10s. */
+            <div className={cn("flex items-stretch overflow-hidden rounded", !buffer && "opacity-30")}>
+              <button type="button" onClick={() => handlePlayStop(true)} disabled={!buffer}
+                title="Pause immediately"
+                className={cn("px-2 py-1 text-xs font-bold uppercase tracking-wide transition",
+                  "bg-accent/25 text-accent hover:bg-accent/35",
+                  !buffer && "cursor-not-allowed")}>
+                ⏸ Pause
+              </button>
+              <button type="button" onClick={() => handlePlayStop(false)} disabled={!buffer}
+                title="Pause with fade-out"
+                className={cn("border-l border-background/40 px-2 py-1 text-xs font-bold uppercase tracking-wide transition",
+                  "bg-accent/25 text-accent hover:bg-accent/35",
+                  !buffer && "cursor-not-allowed")}>
+                Fade
+              </button>
+            </div>
+          ) : (
+            /* Split control: left half starts at full gain, right half fades in over 10s. */
+            <div className={cn("flex items-stretch overflow-hidden rounded", !buffer && "opacity-30")}>
+              <button type="button" onClick={() => handlePlayStop(true)} disabled={!buffer}
+                title="Play immediately"
+                className={cn("px-2 py-1 text-xs font-bold uppercase tracking-wide transition",
+                  "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted",
+                  !buffer && "cursor-not-allowed")}>
+                ▶ Play
+              </button>
+              <button type="button" onClick={() => handlePlayStop(false)} disabled={!buffer}
+                title="Play with fade-in"
+                className={cn("border-l border-background/40 px-2 py-1 text-xs font-bold uppercase tracking-wide transition",
+                  "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted",
+                  !buffer && "cursor-not-allowed")}>
+                Fade
+              </button>
+            </div>
+          )}
           <button type="button" onClick={() => { multiEngine.seekSlot(slot.id, slot.loopStart); setSeekRevision(multiEngine.getSeekNonce(slot.id)); }} disabled={!buffer}
             className={cn("rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted",
               !buffer && "opacity-30 cursor-not-allowed")}
@@ -483,83 +508,79 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
             title="Screw — 75% speed (linked pitch) + reverb">
             ☾ Screw
           </button>
-          {/* Key badge */}
-          {detectedKey !== undefined && (
-            <span
-              title={detectedBpm ? `${detectedBpm} bpm` : undefined}
-              className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-muted/60 text-foreground/50 border border-border/60 cursor-default"
-            >
-              {detectedKey ? `Key: ${formatKeyBadge(detectedKey)}` : "Key: unknown"}
-            </span>
-          )}
-          {/* Matched tag + pitch shift controls */}
-          {isMatched && (
-            <span className="shrink-0 flex items-center gap-0 rounded border border-accent/30 bg-accent/15 overflow-hidden">
-              <span className="px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent/70">Matched</span>
-              {([1, 7, 12] as const).map((n) => (
-                <button
-                  key={n}
-                  type="button"
-                  onClick={() => { onPitchIntervalChange(n); persistSettings({}, n); }}
-                  className={cn(
-                    "px-1.5 py-0.5 text-[10px] font-semibold transition border-l border-accent/20",
-                    pitchInterval === n
-                      ? "bg-accent/20 text-accent"
-                      : "text-accent/40 hover:text-accent/70 hover:bg-accent/10",
-                  )}
-                >{n}</button>
-              ))}
-              <button
-                type="button"
-                title={`Shift down ${pitchInterval} semitone${pitchInterval > 1 ? "s" : ""}`}
-                onClick={() => {
-                  const diff = slot.pitch - matchedBasePitch;
-                  const step = Math.floor(diff / pitchInterval);
-                  const snapped = matchedBasePitch + step * pitchInterval;
-                  const next = Math.max(-24, Math.abs(snapped - slot.pitch) < 0.01 ? snapped - pitchInterval : snapped);
-                  update({ pitch: next, linkPitch: false });
-                }}
-                className="px-1.5 py-0.5 text-[11px] text-accent/60 hover:text-accent hover:bg-accent/10 transition border-l border-accent/20"
-              >▼</button>
-              <button
-                type="button"
-                title={`Shift up ${pitchInterval} semitone${pitchInterval > 1 ? "s" : ""}`}
-                onClick={() => {
-                  const diff = slot.pitch - matchedBasePitch;
-                  const step = Math.ceil(diff / pitchInterval);
-                  const snapped = matchedBasePitch + step * pitchInterval;
-                  const next = Math.min(24, Math.abs(snapped - slot.pitch) < 0.01 ? snapped + pitchInterval : snapped);
-                  update({ pitch: next, linkPitch: false });
-                }}
-                className="px-1.5 py-0.5 text-[11px] text-accent/60 hover:text-accent hover:bg-accent/10 transition border-l border-accent/20"
-              >▲</button>
-            </span>
-          )}
-          {/* Pin as reference */}
+          {/* One control for the whole anchor/match cycle. Label and action follow state:
+              no anchor anywhere -> pin this slot; anchor elsewhere -> match to it;
+              already matched -> re-match (it can drift when speed/pitch are nudged). */}
           <button
             type="button"
-            onClick={onSetReference}
-            title={isReference ? "Remove as key anchor" : "Set as key anchor — other slots will match to this key + speed"}
+            onClick={isReference || !hasReference ? onSetReference : onMatch}
+            title={
+              isReference
+                ? "This slot is the key anchor — click to unpin"
+                : !hasReference
+                  ? "Pin this slot as the key anchor for the session"
+                  : isMatched
+                    ? "Re-match speed + pitch to the key anchor"
+                    : "Match speed + pitch to the key anchor"
+            }
             className={cn(
               "shrink-0 rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition",
               isReference
-                ? "border-accent/40 bg-accent/15 text-accent"
-                : "border-border/60 bg-muted/60 text-foreground/40 hover:border-accent/40 hover:text-accent",
+                ? "border-accent/50 bg-accent/20 text-accent"
+                : isMatched
+                  ? "border-accent/30 bg-accent/10 text-accent/70 hover:bg-accent/20 hover:text-accent"
+                  : "border-border/60 bg-muted/60 text-foreground/40 hover:border-accent/40 hover:text-accent",
             )}
           >
-            {isReference ? "Key Anchor ✓" : "Set Key Anchor"}
+            {isReference ? "⚓ Anchor" : !hasReference ? "Set Anchor" : isMatched ? "Matched ↻" : "Match"}
           </button>
-          {/* Match this slot to reference */}
-          {hasReference && !isReference && !isMatched && (
+
+          {/* Semitone shift — always live, independent of match state. */}
+          <span className="shrink-0 flex items-center gap-0 overflow-hidden rounded border border-border/50 bg-muted/40">
+            {([1, 7, 12] as const).map((n) => (
+              <button
+                key={n}
+                type="button"
+                onClick={() => { onPitchIntervalChange(n); persistSettings({}, n); }}
+                title={`Step by ${n} semitone${n > 1 ? "s" : ""}`}
+                className={cn(
+                  "px-1.5 py-0.5 text-[10px] font-semibold transition",
+                  n !== 1 && "border-l border-border/40",
+                  pitchInterval === n
+                    ? "bg-accent/20 text-accent"
+                    : "text-foreground/30 hover:text-foreground/60 hover:bg-muted/60",
+                )}
+              >{n}</button>
+            ))}
             <button
               type="button"
-              onClick={onMatch}
-              title="Match speed + pitch to key anchor"
-              className="shrink-0 rounded border border-border/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-muted/60 text-foreground/40 transition hover:border-accent/40 hover:text-accent"
-            >
-              Match
-            </button>
-          )}
+              title={`Down ${pitchInterval} semitone${pitchInterval > 1 ? "s" : ""}`}
+              onClick={() => {
+                // Matched slots step on a grid anchored at their match pitch so repeated
+                // shifts stay musically related to the anchor; unmatched slots step freely.
+                const base = isMatched ? matchedBasePitch : slot.pitch;
+                const diff = slot.pitch - base;
+                const step = Math.floor(diff / pitchInterval);
+                const snapped = base + step * pitchInterval;
+                const next = Math.max(-24, Math.abs(snapped - slot.pitch) < 0.01 ? snapped - pitchInterval : snapped);
+                update({ pitch: next, linkPitch: false });
+              }}
+              className="border-l border-border/40 px-1.5 py-0.5 text-[11px] text-foreground/40 transition hover:bg-muted/60 hover:text-foreground"
+            >▼</button>
+            <button
+              type="button"
+              title={`Up ${pitchInterval} semitone${pitchInterval > 1 ? "s" : ""}`}
+              onClick={() => {
+                const base = isMatched ? matchedBasePitch : slot.pitch;
+                const diff = slot.pitch - base;
+                const step = Math.ceil(diff / pitchInterval);
+                const snapped = base + step * pitchInterval;
+                const next = Math.min(24, Math.abs(snapped - slot.pitch) < 0.01 ? snapped + pitchInterval : snapped);
+                update({ pitch: next, linkPitch: false });
+              }}
+              className="border-l border-border/40 px-1.5 py-0.5 text-[11px] text-foreground/40 transition hover:bg-muted/60 hover:text-foreground"
+            >▲</button>
+          </span>
         </div>
       </div>
 

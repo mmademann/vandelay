@@ -26,14 +26,16 @@ export default function App() {
         <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-1.5">
           <div id="multi-transport-portal" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5" />
           <nav className="flex shrink-0 items-center gap-4 text-xs uppercase tracking-widest ml-auto">
-            <NavLink
+            {/* Multi does everything Single/Mix/Stems do, including separation via
+                SlotPicker. Routes stay live so existing links keep working. */}
+            {/* <NavLink
               to="/single"
               className={({ isActive }) =>
                 isActive ? "text-accent" : "text-foreground/50 hover:text-foreground/80"
               }
             >
               Single Track
-            </NavLink>
+            </NavLink> */}
             {/* <NavLink
               to="/mix"
               className={({ isActive }) =>
@@ -42,14 +44,14 @@ export default function App() {
             >
               Multi Track
             </NavLink> */}
-            <NavLink
+            {/* <NavLink
               to="/stems"
               className={({ isActive }) =>
                 isActive ? "text-accent" : "text-foreground/50 hover:text-foreground/80"
               }
             >
               Track Stems
-            </NavLink>
+            </NavLink> */}
             <NavLink
               to="/"
               end
@@ -57,7 +59,7 @@ export default function App() {
                 isActive ? "text-accent" : "text-foreground/50 hover:text-foreground/80"
               }
             >
-              Multi Track Stems
+              Studio
             </NavLink>
           </nav>
         </header>

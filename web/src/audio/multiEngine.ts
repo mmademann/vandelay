@@ -359,7 +359,7 @@ class MultiEngine {
     }, 300);
   }
 
-  async playSlot(id: string): Promise<void> {
+  async playSlot(id: string, instant = false): Promise<void> {
     const slot = this.slots.get(id);
     if (!slot) return;
     await Tone.start();
@@ -373,22 +373,42 @@ class MultiEngine {
     const anySoloed = Array.from(this.slots.values()).some((s) => s.soloed);
     const effectiveMute = slot.muted || (anySoloed && !slot.soloed);
     if (!effectiveMute) {
-      // Ramp in amplitude, not dB. A linear dB ramp from -60 sits near-silent for most of its
-      // length then rushes the last stretch, which reads as an abrupt start rather than a fade.
-      MultiEngine.rampVolume(slot, slot.gain, t, MultiEngine.FADE_SEC);
+      if (instant) {
+        // Cancel any in-flight fade before jumping, or the ramp keeps writing over this.
+        slot.volume.volume.cancelScheduledValues(t);
+        slot.volume.volume.setValueAtTime(
+          slot.gain <= MultiEngine.GAIN_FLOOR_DB ? -Infinity : slot.gain,
+          t,
+        );
+        slot.fadeUntil = 0;
+        slot.fadeTarget = slot.gain;
+      } else {
+        // Ramp in amplitude, not dB. A linear dB ramp from -60 sits near-silent for most of its
+        // length then rushes the last stretch, which reads as an abrupt start rather than a fade.
+        MultiEngine.rampVolume(slot, slot.gain, t, MultiEngine.FADE_SEC);
+      }
     }
     slot.player.start(t, slot.startOffset);
     slot.startedAt = t;
     slot.playing = true;
   }
 
-  stopSlot(id: string): void {
+  stopSlot(id: string, instant = false): void {
     const slot = this.slots.get(id);
     if (!slot) return;
     slot.startOffset = this.getSlotPosition(id);
     const now = Tone.now();
-    MultiEngine.rampVolume(slot, -60, now, MultiEngine.FADE_SEC, false);
-    try { slot.player.stop(now + MultiEngine.FADE_SEC); } catch { /* ignore */ }
+    if (instant) {
+      // Cancel the ramp before stopping, or a pending fade keeps writing to the param
+      // after the player is gone.
+      slot.volume.volume.cancelScheduledValues(now);
+      slot.fadeUntil = 0;
+      slot.fadeTarget = slot.gain;
+      try { slot.player.stop(now); } catch { /* ignore */ }
+    } else {
+      MultiEngine.rampVolume(slot, -60, now, MultiEngine.FADE_SEC, false);
+      try { slot.player.stop(now + MultiEngine.FADE_SEC); } catch { /* ignore */ }
+    }
     slot.playing = false;
   }
 
@@ -418,7 +438,7 @@ class MultiEngine {
     }
   }
 
-  async play(): Promise<void> {
+  async play(instant = false): Promise<void> {
     await Tone.start();
     await Tone.getContext().resume();
     this.running = true;
@@ -437,17 +457,34 @@ class MultiEngine {
       slot.player.loopEnd = slot.loopEnd;
       slot.player.loop = true;
       slot.startOffset = Math.max(slot.loopStart, Math.min(slot.loopEnd - 0.01, slot.startOffset));
+      if (instant) {
+        slot.volume.volume.cancelScheduledValues(t);
+        slot.volume.volume.setValueAtTime(
+          slot.gain <= MultiEngine.GAIN_FLOOR_DB ? -Infinity : slot.gain,
+          t,
+        );
+        slot.fadeUntil = 0;
+        slot.fadeTarget = slot.gain;
+      } else {
+        MultiEngine.rampVolume(slot, slot.gain, t, MultiEngine.FADE_SEC);
+      }
       slot.player.start(t, slot.startOffset);
       slot.startedAt = t;
       slot.playing = true;
     }
   }
 
-  stop(): void {
+  stop(fade = false): void {
+    const now = Tone.now();
     for (const slot of this.slots.values()) {
       if (!slot.playing) continue;
       slot.startOffset = this.getSlotPosition(slot.id);
-      try { slot.player.stop(); } catch { /* ignore */ }
+      if (fade) {
+        MultiEngine.rampVolume(slot, -60, now, MultiEngine.FADE_SEC, false);
+        try { slot.player.stop(now + MultiEngine.FADE_SEC); } catch { /* ignore */ }
+      } else {
+        try { slot.player.stop(); } catch { /* ignore */ }
+      }
       slot.playing = false;
     }
     this.running = false;

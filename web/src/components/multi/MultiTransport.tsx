@@ -141,8 +141,8 @@ interface Props {
   activeSessionName: string | null;
   slotTitles: string[];
   getSlotsAndBuffers: () => { slots: MultiSlot[]; buffers: Map<string, AudioBuffer> };
-  onStopAll: () => void;
-  onPlayAll: () => void;
+  onStopAll: (fade?: boolean) => void;
+  onPlayAll: (instant?: boolean) => void;
   onRewindAll: () => void;
   onThrowSettingsChange: (settings: ThrowSettings) => void;
   throwPresets: ThrowPreset[];
@@ -324,17 +324,51 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
     <div className="relative">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
         {/* Play All / Pause All + Rewind All */}
-        <button
-          type="button"
-          onClick={isPlaying && slotCount > 0 ? onStopAll : onPlayAll}
-          disabled={slotCount === 0}
-          className={isPlaying && slotCount > 0
-            ? "shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-accent/20 text-accent ring-1 ring-accent/40 transition hover:bg-accent/30 disabled:opacity-30"
-            : "shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-muted/80 text-foreground/50 transition hover:text-foreground hover:bg-muted disabled:opacity-30"
-          }
-        >
-          {isPlaying && slotCount > 0 ? "⏸ Pause All" : "▶ Play All"}
-        </button>
+        {isPlaying && slotCount > 0 ? (
+          /* Split control: left half stops at once, right half fades all slots out over 10s. */
+          <div className="flex shrink-0 items-stretch overflow-hidden rounded">
+            <button
+              type="button"
+              onClick={() => onStopAll(false)}
+              disabled={slotCount === 0}
+              title="Pause all immediately"
+              className="px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-accent/20 text-accent transition hover:bg-accent/30 disabled:opacity-30"
+            >
+              ⏸ Pause All
+            </button>
+            <button
+              type="button"
+              onClick={() => onStopAll(true)}
+              disabled={slotCount === 0}
+              title="Pause all with fade-out"
+              className="border-l border-background/40 px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-accent/20 text-accent transition hover:bg-accent/30 disabled:opacity-30"
+            >
+              Fade
+            </button>
+          </div>
+        ) : (
+          /* Split control: left half starts at full gain, right half fades all slots in over 10s. */
+          <div className={cn("flex shrink-0 items-stretch overflow-hidden rounded", slotCount === 0 && "opacity-30")}>
+            <button
+              type="button"
+              onClick={() => onPlayAll(true)}
+              disabled={slotCount === 0}
+              title="Play all immediately"
+              className="px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-muted/80 text-foreground/50 transition hover:text-foreground hover:bg-muted disabled:cursor-not-allowed"
+            >
+              ▶ Play All
+            </button>
+            <button
+              type="button"
+              onClick={() => onPlayAll(false)}
+              disabled={slotCount === 0}
+              title="Play all with fade-in"
+              className="border-l border-background/40 px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-muted/80 text-foreground/50 transition hover:text-foreground hover:bg-muted disabled:cursor-not-allowed"
+            >
+              Fade
+            </button>
+          </div>
+        )}
         <div className="flex shrink-0 items-center">
           <button
             type="button"

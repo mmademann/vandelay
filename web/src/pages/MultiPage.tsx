@@ -815,12 +815,12 @@ export function MultiPage() {
     }
   }
 
-  async function handlePlayAll() {
-    await multiEngine.play();
+  async function handlePlayAll(instant = false) {
+    await multiEngine.play(instant);
   }
 
-  function handleStopAll() {
-    multiEngine.stop();
+  function handleStopAll(fade = false) {
+    multiEngine.stop(fade);
   }
 
   function handleClear() {
@@ -1077,8 +1077,6 @@ export function MultiPage() {
               presets={presets}
               isReference={isReference}
               hasReference={hasReference}
-              detectedKey={entry.detectedKey}
-              detectedBpm={entry.detectedBpm}
               isMatched={!isReference && entry.isMatched}
               matchedBasePitch={entry.matchedBasePitch}
               pitchInterval={entry.pitchInterval}
