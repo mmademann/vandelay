@@ -200,3 +200,98 @@ export function estimateBpm(
 
   return Math.round(bpm);
 }
+
+/**
+ * Round a loop to a whole number of bars at an externally supplied tempo.
+ *
+ * Distinct from snapLoop, which derives the grid from the slot's own audio. Here the grid
+ * comes from the tempo anchor, so every slot lands on the *same* grid — that is what makes
+ * a shared downbeat meaningful. Without this, two slots can both be "snapped" and still
+ * drift apart, because each rounded to its own detected tempo.
+ *
+ * Returns null when the region cannot be placed on the grid at all, so the caller can
+ * report which slots were left alone rather than silently mangling them.
+ */
+export function quantizeToGrid(
+  buffer: AudioBuffer,
+  loopStart: number,
+  loopEnd: number,
+  bpm: number,
+  opts: { beatsPerBar?: number } = {},
+): { loopStart: number; loopEnd: number; bars: number } | null {
+  if (!bpm || !Number.isFinite(bpm) || bpm <= 0) return null;
+
+  const beatsPerBar = opts.beatsPerBar ?? 4;
+  const barSec = (60 / bpm) * beatsPerBar;
+  const dur = buffer.duration;
+  const start = nearestZeroCrossing(buffer, Math.max(0, loopStart));
+  const span = loopEnd - start;
+  if (span <= 0) return null;
+
+  // Round to the nearest whole bar, with a one-bar floor: a sub-bar region has no shorter
+  // grid unit to land on here, since the whole point is agreeing with the other slots.
+  let bars = Math.max(1, Math.round(span / barSec));
+  while (bars > 1 && start + bars * barSec > dur) bars -= 1;
+  if (start + bars * barSec > dur) return null;
+
+  const gridEnd = start + bars * barSec;
+  const zeroEnd = nearestZeroCrossing(buffer, gridEnd);
+  // Keep the end on the grid unless a crossing sits very close by; wandering further would
+  // reintroduce exactly the drift this is removing.
+  const end = Math.abs(zeroEnd - gridEnd) <= ZERO_SEARCH_MS / 1000 ? zeroEnd : gridEnd;
+
+  return { loopStart: start, loopEnd: end, bars };
+}
+
+/**
+ * Musical delay divisions, as a multiple of a beat.
+ *
+ * A delay set in raw seconds smears against the pulse: the repeats land between beats and
+ * the echo fights the groove instead of reinforcing it. Snapping to these makes the echo
+ * land on the grid every time.
+ */
+export const DELAY_DIVISIONS: { label: string; beats: number }[] = [
+  { label: "1/32", beats: 0.125 },
+  { label: "1/16", beats: 0.25 },
+  { label: "1/8T", beats: 1 / 3 },
+  { label: "1/16.", beats: 0.375 },
+  { label: "1/8", beats: 0.5 },
+  { label: "1/4T", beats: 2 / 3 },
+  { label: "1/8.", beats: 0.75 },
+  { label: "1/4", beats: 1 },
+  { label: "1/2T", beats: 4 / 3 },
+  { label: "1/4.", beats: 1.5 },
+  { label: "1/2", beats: 2 },
+  { label: "1/2.", beats: 3 },
+  { label: "1 bar", beats: 4 },
+  { label: "2 bars", beats: 8 },
+];
+
+/**
+ * Nearest musical division to a delay time in seconds.
+ *
+ * Returns the snapped seconds alongside its label so the UI can show what it landed on —
+ * "1/8 · 250ms" tells you far more than "0.25s". Null when there is no tempo to snap to,
+ * or when the nearest division falls outside the delay's own range.
+ */
+export function snapDelayToTempo(
+  seconds: number,
+  bpm: number | undefined,
+  maxSeconds: number,
+): { seconds: number; label: string; beats: number } | null {
+  if (!bpm || !Number.isFinite(bpm) || bpm <= 0) return null;
+  const beatSec = 60 / bpm;
+
+  let best: { seconds: number; label: string; beats: number } | null = null;
+  let bestErr = Infinity;
+  for (const d of DELAY_DIVISIONS) {
+    const secs = d.beats * beatSec;
+    if (secs > maxSeconds) continue;
+    const err = Math.abs(secs - seconds);
+    if (err < bestErr) {
+      bestErr = err;
+      best = { seconds: secs, label: d.label, beats: d.beats };
+    }
+  }
+  return best;
+}

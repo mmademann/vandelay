@@ -7,10 +7,17 @@ const SWEEP = 270;
 const toRad = (deg: number) => (deg * Math.PI) / 180;
 
 export function Knob({
-  label, value, min, max, step, defaultValue, displayValue, disabled, onChange, size = 48,
+  label, value, min, max, step, defaultValue, displayValue, disabled, onChange, onCommit, size = 48,
 }: {
   label: string; value: number; min: number; max: number; step: number;
   defaultValue: number; displayValue: string; disabled?: boolean; onChange: (v: number) => void;
+  /**
+   * Fired once the value settles — pointer release, key press, or double-click reset —
+   * rather than on every drag frame. For knobs whose work is too expensive to run per
+   * frame (time stretch rebuilds the whole buffer), onChange drives the visual and this
+   * drives the audio.
+   */
+  onCommit?: (v: number) => void;
   size?: number;
 }) {
   const R = (size - STROKE) / 2 - 1;
@@ -26,9 +33,12 @@ export function Knob({
 
   const ratio = Math.max(0, Math.min(1, (value - min) / (max - min)));
   const angle = START_ANGLE + ratio * SWEEP;
-  const dragRef = useRef<{ startY: number; startVal: number } | null>(null);
+  const dragRef = useRef<{ startY: number; startVal: number; last: number } | null>(null);
   const [dragging, setDragging] = useState(false);
   const [hovered, setHovered] = useState(false);
+
+  // Drag always repaints via onChange; onCommit is what gates the expensive work.
+  function setLive(v: number) { onChange(v); }
 
   function clampStep(v: number) {
     const snapped = Math.round((v - min) / step) * step + min;
@@ -45,11 +55,13 @@ export function Knob({
       else if (e.key === "ArrowDown" || e.key === "ArrowLeft") dir = -1;
       else return;
       e.preventDefault(); // stop the page from scrolling
-      onChange(clampStep(value + dir * step * (e.shiftKey ? 10 : 1)));
+      const next = clampStep(value + dir * step * (e.shiftKey ? 10 : 1));
+      onChange(next);
+      onCommit?.(next);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [hovered, disabled, value, step, min, max, onChange]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [hovered, disabled, value, step, min, max, onChange, onCommit]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const indicatorLen = R - 4;
   const indX2 = cx + indicatorLen * Math.cos(toRad(angle));
@@ -63,10 +75,10 @@ export function Knob({
         onPointerEnter={() => setHovered(true)}
         onPointerLeave={() => setHovered(false)}>
         <svg width={size} height={size}
-          onPointerDown={(e) => { if (disabled) return; e.currentTarget.setPointerCapture(e.pointerId); dragRef.current = { startY: e.clientY, startVal: value }; setDragging(true); }}
-          onPointerMove={(e) => { if (!dragRef.current || disabled) return; const delta = (dragRef.current.startY - e.clientY) / 100; onChange(clampStep(dragRef.current.startVal + delta * (max - min))); }}
-          onPointerUp={() => { dragRef.current = null; setDragging(false); }}
-          onDoubleClick={() => { if (!disabled) onChange(defaultValue); }}
+          onPointerDown={(e) => { if (disabled) return; e.currentTarget.setPointerCapture(e.pointerId); dragRef.current = { startY: e.clientY, startVal: value, last: value }; setDragging(true); }}
+          onPointerMove={(e) => { if (!dragRef.current || disabled) return; const delta = (dragRef.current.startY - e.clientY) / 100; const next = clampStep(dragRef.current.startVal + delta * (max - min)); dragRef.current.last = next; setLive(next); }}
+          onPointerUp={() => { const d = dragRef.current; if (!d) return; dragRef.current = null; setDragging(false); if (d.last !== d.startVal) onCommit?.(d.last); }}
+          onDoubleClick={() => { if (disabled) return; onChange(defaultValue); onCommit?.(defaultValue); }}
           className="cursor-ns-resize touch-none" style={{ display: "block" }}>
           <path d={arcPath(START_ANGLE, START_ANGLE + SWEEP)} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth={STROKE} strokeLinecap="round" />
           {ratio > 0.001 && <path d={arcPath(START_ANGLE, Math.max(START_ANGLE + 0.5, angle))} fill="none" stroke="rgba(45,212,191,0.75)" strokeWidth={STROKE} strokeLinecap="round" />}

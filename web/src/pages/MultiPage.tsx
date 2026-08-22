@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { multiEngine } from "../audio/multiEngine";
@@ -28,9 +28,16 @@ import {
   loadAnchorKey,
   saveAnchorKey,
   clearAnchorKey,
+  loadActiveSessionName,
+  saveActiveSessionName,
+  loadTempoAnchorKey,
+  saveTempoAnchorKey,
+  clearTempoAnchorKey,
 } from "../lib/multiSettings";
 import { getAllTrackMeta, getTrackMeta, putTrackMeta } from "../lib/trackMetaCache";
 import { analyzeAudio, rootSemitone, preloadEssentia } from "../lib/audioAnalysis";
+import { stretchBuffer } from "../audio/stretchBuffer";
+import { estimateBpm, quantizeToGrid } from "../lib/loopSnap";
 import { computeAutoGain, computeStemViability } from "../lib/autoGain";
 import { buildRandomSlots } from "../lib/randomCombinator";
 import { SlotStrip } from "../components/multi/SlotStrip";
@@ -52,6 +59,12 @@ interface SlotEntry {
   isMatched: boolean;
   matchedBasePitch: number;
   pitchInterval: 1 | 7 | 12;
+  /** The untouched decode. Stretching always works from this so repeats don't compound. */
+  sourceBuffer: AudioBuffer | null;
+  /** Length multiple currently applied to sourceBuffer; 1 = playing the original. */
+  stretch: number;
+  /** True while a stretch is being computed, so the UI can show progress. */
+  stretching: boolean;
 }
 
 function parseSlotsParam(raw: string): {
@@ -122,6 +135,59 @@ export function MultiPage() {
   const [entries, setEntries] = useState<SlotEntry[]>([]);
   const [showPicker, setShowPicker] = useState(false);
   const [referenceSlotId, setReferenceSlotId] = useState<string | null>(null);
+  /** Slot whose tempo the others stretch to match. Independent of the key anchor. */
+  const [tempoAnchorId, setTempoAnchorId] = useState<string | null>(null);
+  /** Result of the last quantize pass, shown in the transport so a skipped slot is visible. */
+  const [gridNote, setGridNote] = useState<string | null>(null);
+
+  /**
+   * Per-buffer BPM cache. estimateBpm costs ~30ms on a 3-minute stem, and stale detection
+   * would otherwise re-measure every slot on every render — a quarter-second stall per
+   * frame with a full rack. Keyed on buffer identity, which is stable for a given decode.
+   */
+  const bpmCacheRef = useRef(new WeakMap<AudioBuffer, number | undefined>());
+  const sourceBpm = useCallback((buf: AudioBuffer | null): number | undefined => {
+    if (!buf) return undefined;
+    const cache = bpmCacheRef.current;
+    if (cache.has(buf)) return cache.get(buf);
+    const bpm = estimateBpm(buf);
+    cache.set(buf, bpm);
+    return bpm;
+  }, []);
+
+  // estimateBpm autocorrelates the whole buffer, so this must not run per render. Keyed on
+  // the anchor's buffer identity rather than `entries` — playback and stretch flags churn
+  // that array constantly, and none of them change the anchor's tempo.
+  const anchorEntryForBpm = entries.find((e) => e.slot.id === tempoAnchorId);
+  const anchorBpmSource = anchorEntryForBpm?.sourceBuffer ?? anchorEntryForBpm?.buffer ?? null;
+  const anchorDetectedBpm = anchorEntryForBpm?.detectedBpm;
+  const anchorBpm = useMemo(() => {
+    if (!tempoAnchorId) return undefined;
+    return anchorDetectedBpm ?? sourceBpm(anchorBpmSource);
+  }, [tempoAnchorId, anchorDetectedBpm, anchorBpmSource, sourceBpm]);
+
+  /**
+   * Slots whose stretch no longer agrees with the anchor's current tempo.
+   *
+   * The case this catches: you match everything, then re-snap or swap the anchor. Every
+   * other slot is now stretched to a tempo that no longer exists, and nothing else in the
+   * UI would say so. Only already-matched slots qualify — an untouched slot is unmatched,
+   * which is a different thing and shouldn't nag.
+   */
+  const staleTempoIds = useMemo(() => {
+    const out = new Set<string>();
+    if (!tempoAnchorId || !anchorBpm) return out;
+    for (const e of entries) {
+      if (e.slot.id === tempoAnchorId || e.loading) continue;
+      if (Math.abs(e.stretch - 1) <= 0.005) continue;
+      const bpm = e.detectedBpm ?? sourceBpm(e.sourceBuffer);
+      if (!bpm) continue;
+      const want = tempoStretchRatio(bpm, anchorBpm);
+      if (Math.abs(want - e.stretch) > 0.01) out.add(e.slot.id);
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tempoAnchorId, anchorBpm, entries]);
   const [masterSettings, setMasterSettings] = useState<MultiMasterSettings>(() => ({
     gain: 0,
     loopLengthOverride: null,
@@ -130,7 +196,9 @@ export function MultiPage() {
   }));
   const [namedSessions, setNamedSessions] = useState<MultiSession[]>(() => loadNamedSessions());
   const [sessionName, setSessionName] = useState("");
-  const [activeSessionName, setActiveSessionName] = useState<string | null>(null);
+  // Lazy initialiser so the header shows the right name on the very first paint after a
+  // reload, rather than flashing "Sessions" and correcting itself.
+  const [activeSessionName, setActiveSessionName] = useState<string | null>(loadActiveSessionName);
   const [renamingSession, setRenamingSession] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [sessionsPanelOpen, setSessionsPanelOpen] = useState(false);
@@ -154,9 +222,24 @@ export function MultiPage() {
   masterSettingsRef.current = masterSettings;
   const referenceSlotIdRef = useRef<string | null>(null);
   referenceSlotIdRef.current = referenceSlotId;
+  const tempoAnchorIdRef = useRef<string | null>(null);
+  tempoAnchorIdRef.current = tempoAnchorId;
   const pendingSessionSlotsRef = useRef<Map<string, MultiSlot>>(new Map());
   const pendingReferenceIdRef = useRef<string | null>(null);
+  const pendingTempoAnchorIdRef = useRef<string | null>(null);
   const viabilityMapRef = useRef<Map<string, boolean>>(new Map());
+
+  // Mirror the active session name to localStorage. Done as an effect rather than at each
+  // setter so every path that changes it — save, resave, load, rename, clear — persists.
+  useEffect(() => { saveActiveSessionName(activeSessionName); }, [activeSessionName]);
+
+  // Drop the restored name if it no longer refers to a real session — a session deleted in
+  // another tab, or a stale value left behind. Better to show "Sessions" than to name a
+  // session that does not exist.
+  useEffect(() => {
+    if (!activeSessionName) return;
+    if (!namedSessions.some((s) => s.name === activeSessionName)) setActiveSessionName(null);
+  }, [activeSessionName, namedSessions]);
 
   // Sync initial throw settings to engine on mount; preload Essentia WASM; seed viability cache
   useEffect(() => {
@@ -258,6 +341,13 @@ export function MultiPage() {
       referenceSlotIdRef.current = pendingReferenceIdRef.current;
       pendingReferenceIdRef.current = null;
     }
+    // Same staging for the tempo anchor: the session's slot UUIDs are minted fresh on load,
+    // so the localStorage anchor (keyed by trackId+stem) must not win over the session's.
+    if (pendingTempoAnchorIdRef.current !== null) {
+      setTempoAnchorId(pendingTempoAnchorIdRef.current);
+      tempoAnchorIdRef.current = pendingTempoAnchorIdRef.current;
+      pendingTempoAnchorIdRef.current = null;
+    }
 
     // 2. Parse + redirect check — BEFORE anchor restore
     const { tokens: pairs, redirect } = parseSlotsParam(slotsParam);
@@ -274,6 +364,19 @@ export function MultiPage() {
         if (anchorToken) {
           setReferenceSlotId(anchorToken.uuid);
           referenceSlotIdRef.current = anchorToken.uuid;
+        }
+      }
+    }
+
+    // Same restore for the tempo anchor. Must also be synchronous (before any await) so the
+    // decode loop below sees it when it re-applies each slot's saved stretch.
+    if (tempoAnchorIdRef.current === null) {
+      const savedTempo = loadTempoAnchorKey();
+      if (savedTempo) {
+        const token = pairs.find(t => t.trackId === savedTempo.trackId && t.stemName === savedTempo.stemName);
+        if (token) {
+          setTempoAnchorId(token.uuid);
+          tempoAnchorIdRef.current = token.uuid;
         }
       }
     }
@@ -301,7 +404,7 @@ export function MultiPage() {
         loopStart: 0,
         loopEnd: 0,
       };
-      return { slot, title: pair.trackId, error: null, loading: true, buffer: null, detectedKey: undefined, detectedBpm: undefined, isMatched: false, matchedBasePitch: 0, pitchInterval: 12 };
+      return { slot, title: pair.trackId, error: null, loading: true, buffer: null, detectedKey: undefined, detectedBpm: undefined, isMatched: false, matchedBasePitch: 0, pitchInterval: 12, sourceBuffer: null, stretch: 1, stretching: false };
     });
 
     // Remove engine slots no longer in URL
@@ -398,6 +501,9 @@ export function MultiPage() {
           viabilityMapRef.current.set(viabilityKey, cachedViability);
         }
 
+        // Peek at the staged session slot; the pendingSlot lookup further down is what
+        // actually consumes it from the map.
+        const sessionSlot = pendingSessionSlotsRef.current.get(pendingKey(slot.trackId, slot.stemName));
         let detectedKey: string | null | undefined;
         let detectedBpm: number | undefined;
         const stemAnalysis = cachedMeta?.stemAnalysis?.[stemRole];
@@ -410,6 +516,13 @@ export function MultiPage() {
           detectedKey = cachedMeta.detectedKey;
           detectedBpm = cachedMeta.detectedBpm;
           console.log(`[multi] ${label} key cache: HIT legacy (${detectedKey ?? "null"})`);
+        } else if (sessionSlot?.detectedKey !== undefined || sessionSlot?.detectedBpm !== undefined) {
+          // Session snapshot as a fallback: the IndexedDB analysis cache usually covers this,
+          // but it is a separate store, so a session restored on a machine (or profile) that
+          // never analysed these stems would otherwise show ? until Essentia caught up.
+          detectedKey = sessionSlot.detectedKey;
+          detectedBpm = sessionSlot.detectedBpm;
+          console.log(`[multi] ${label} key cache: from session snapshot`);
         } else {
           console.log(`[multi] ${label} key cache: MISS — Essentia will run in background`);
         }
@@ -424,11 +537,23 @@ export function MultiPage() {
         let finalSlot: MultiSlot;
         if (pendingSlot) {
           pendingSessionSlotsRef.current.delete(pk);
+          // Session loop bounds are absolute seconds in whatever timebase the slot was in
+          // when saved — so a stretched slot saved them against its stretched length. The
+          // buffer here is the unstretched decode, and reapplyStretch below will rescale
+          // these by the same ratio, so divide it out first. Clamping the stretched values
+          // against the shorter source duration was truncating the loop, and the error
+          // compounded on every save/load cycle.
+          const savedRatio =
+            pendingSlot.stretch && Number.isFinite(pendingSlot.stretch) && pendingSlot.stretch > 0
+              ? pendingSlot.stretch
+              : 1;
+          const srcStart = pendingSlot.loopStart / savedRatio;
+          const srcEnd = pendingSlot.loopEnd / savedRatio;
           finalSlot = {
             ...pendingSlot,
             id: slot.id,
-            loopStart: Math.max(0, Math.min(pendingSlot.loopStart, dur - 0.01)),
-            loopEnd: Math.min(dur, pendingSlot.loopEnd > 0 ? pendingSlot.loopEnd : dur),
+            loopStart: Math.max(0, Math.min(srcStart, dur - 0.01)),
+            loopEnd: Math.min(dur, srcEnd > 0 ? srcEnd : dur),
           };
         } else {
           finalSlot = {
@@ -445,9 +570,27 @@ export function MultiPage() {
           };
         }
 
-        const isMatched = saved?.isMatched ?? false;
-        const matchedBasePitch = saved?.matchedBasePitch ?? 0;
-        const pitchInterval: 1 | 7 | 12 = saved?.pitchInterval ?? 12;
+        // A session load supplies pendingSlot and leaves `saved` null. Reading only `saved`
+        // silently reset every match flag to false, which is why a restored session looked
+        // unmatched even though the numbers underneath were correct.
+        const isMatched = (pendingSlot ? pendingSlot.isMatched : saved?.isMatched) ?? false;
+        const matchedBasePitch =
+          (pendingSlot ? pendingSlot.matchedBasePitch : saved?.matchedBasePitch) ?? 0;
+        const pitchInterval: 1 | 7 | 12 =
+          (pendingSlot ? pendingSlot.pitchInterval : saved?.pitchInterval) ?? 12;
+        // Re-applied after the slot is live, so the buffer matches the tempo anchor the
+        // restored UI claims it is synced to. Guarded against absurd saved values.
+        // Session load supplies pendingSlot and leaves `saved` null, so the stretch has to
+        // be read from whichever of the two actually provided this slot.
+        const savedStretch = pendingSlot ? pendingSlot.stretch : saved?.stretch;
+        const restoreStretch =
+          savedStretch !== undefined &&
+          Number.isFinite(savedStretch) &&
+          savedStretch > 0.25 &&
+          savedStretch < 4 &&
+          Math.abs(savedStretch - 1) > 0.005
+            ? savedStretch
+            : null;
 
         // Wait for the in-flight library fetch, then refetch once if this id is still unknown
         // (separated in another tab after we mounted). Only falls back to the raw id if the
@@ -466,16 +609,22 @@ export function MultiPage() {
         setEntries((prev) =>
           prev.map((en) =>
             en.slot.id === slot.id
-              ? { ...en, slot: finalSlot, title, loading: false, error: null, buffer, detectedKey, detectedBpm, isMatched, matchedBasePitch, pitchInterval }
+              ? { ...en, slot: finalSlot, title, loading: false, error: null, buffer, sourceBuffer: buffer, stretch: 1, stretching: false, detectedKey, detectedBpm, isMatched, matchedBasePitch, pitchInterval }
               : en,
           ),
         );
+
+        // Engine holds the freshly decoded (unstretched) buffer here, so the base is 1.
+        if (restoreStretch !== null) void reapplyStretch(slot.id, buffer, restoreStretch, 1);
 
         saveSlotSettings(finalSlot.id, {
           speed: finalSlot.speed, pitch: finalSlot.pitch, linkPitch: finalSlot.linkPitch,
           gain: finalSlot.gain, muted: finalSlot.muted, effects: finalSlot.effects,
           loopStartFrac: finalSlot.loopStart / dur, loopEndFrac: finalSlot.loopEnd / dur,
           isMatched: pendingSlot?.isMatched, matchedBasePitch: pendingSlot?.matchedBasePitch,
+          // Keep the ratio we are about to re-apply, so a refresh before any further edit
+          // does not lose it.
+          stretch: restoreStretch ?? undefined,
         });
 
         // Background analysis — only if this stem has no cached result at all. Keyed on the
@@ -542,6 +691,9 @@ export function MultiPage() {
             gain: s.gain, muted: s.muted, effects: s.effects,
             loopStartFrac: s.loopStart / dur, loopEndFrac: s.loopEnd / dur,
             isMatched: false, matchedBasePitch: 0,
+            // saveSlotSettings replaces the whole record, so omitting this dropped the
+            // stretch and the slot came back unstretched on the next refresh.
+            stretch: e.stretch,
           });
         }
         return updated;
@@ -553,6 +705,11 @@ export function MultiPage() {
     if (referenceSlotId === id) {
       setReferenceSlotId(null);
       clearAnchorKey();
+    }
+    if (tempoAnchorId === id) {
+      setTempoAnchorId(null);
+      tempoAnchorIdRef.current = null;
+      clearTempoAnchorKey();
     }
     const remaining = entriesRef.current.filter((e) => e.slot.id !== id);
     const param = encodeSlotsParam(remaining);
@@ -596,6 +753,7 @@ export function MultiPage() {
       loopEndFrac: s.loopEnd / dur,
       isMatched,
       matchedBasePitch,
+      stretch: entry.stretch,
     });
   }
 
@@ -629,6 +787,253 @@ export function MultiPage() {
     persistMatchedState({ ...targetEntry, slot: { ...targetEntry.slot, speed, pitch, linkPitch } }, true, pitch);
   }
 
+  /**
+   * Re-apply a stretch ratio saved from a previous session.
+   *
+   * Distinct from stretchSlotToTempoAnchor: the ratio is already known, so no BPM detection
+   * runs and no settings are re-persisted — this only rebuilds the audio the saved state
+   * already describes. Also used with stretch = 1 to return a slot to its source tempo.
+   */
+  /**
+   * Apply a known stretch ratio to a slot.
+   *
+   * `baseStretch` is what the engine currently holds for this slot (1 on the decode path,
+   * the live ratio when re-stretching). It is passed in rather than read from entriesRef
+   * because this runs immediately after setEntries on the load path, before React has
+   * re-rendered — the ref still holds the previous array and the slot would not be found.
+   */
+  async function reapplyStretch(
+    slotId: string,
+    source: AudioBuffer,
+    stretch: number,
+    baseStretch: number,
+  ) {
+    setEntries((prev) => prev.map((e) => (e.slot.id === slotId ? { ...e, stretching: true } : e)));
+    // Yield so the spinner paints before the synchronous stretch blocks the thread.
+    await new Promise((r) => setTimeout(r, 0));
+    try {
+      const stretched = stretchBuffer(source, stretch);
+      multiEngine.swapBuffer(slotId, stretched, stretch / baseStretch);
+      const loopStart = multiEngine.getLoopStart(slotId);
+      const loopEnd = multiEngine.getLoopEnd(slotId);
+
+      // Derive from the updater's own `prev`, which is always current, and persist from
+      // there too — reading entriesRef here had the same staleness problem.
+      let persisted: SlotEntry | null = null;
+      setEntries((prev) =>
+        prev.map((e) => {
+          if (e.slot.id !== slotId) return e;
+          const next = {
+            ...e,
+            buffer: stretched,
+            stretch,
+            stretching: false,
+            slot: { ...e.slot, loopStart, loopEnd },
+          };
+          persisted = next;
+          return next;
+        }),
+      );
+      // Without this a reset back to source tempo would be undone on reload, because the
+      // stale saved ratio would simply be re-applied.
+      if (persisted) {
+        const p: SlotEntry = persisted;
+        persistMatchedState(p, p.isMatched ?? false, p.matchedBasePitch ?? 0);
+      }
+    } catch {
+      setEntries((prev) => prev.map((e) => (e.slot.id === slotId ? { ...e, stretching: false } : e)));
+    }
+  }
+
+  /** Manual stretch from the slot's Stretch knob. Always works from the untouched source,
+   *  so repeated adjustments cannot compound rounding error. */
+  async function handleStretchChange(slotId: string, ratio: number) {
+    const entry = entriesRef.current.find((e) => e.slot.id === slotId);
+    if (!entry?.sourceBuffer) return;
+    if (Math.abs(ratio - entry.stretch) < 0.005) return;
+    await reapplyStretch(slotId, entry.sourceBuffer, ratio, entry.stretch);
+    // Persist the new ratio against the slot's own record too. reapplyStretch writes via
+    // persistMatchedState, which is UUID-keyed and therefore orphaned once a session load
+    // mints fresh IDs — this makes a manual reset survive a plain page reload as well.
+    const after = entriesRef.current.find((e) => e.slot.id === slotId);
+    if (after) {
+      const dur = after.buffer?.duration ?? 1;
+      const sl = after.slot;
+      saveSlotSettings(sl.id, {
+        speed: sl.speed, pitch: sl.pitch, linkPitch: sl.linkPitch,
+        gain: sl.gain, muted: sl.muted, effects: sl.effects,
+        loopStartFrac: sl.loopStart / dur, loopEndFrac: sl.loopEnd / dur,
+        isMatched: after.isMatched, matchedBasePitch: after.matchedBasePitch,
+        pitchInterval: after.pitchInterval,
+        bypassMasterSpeed: sl.bypassMasterSpeed,
+        stretch: ratio,
+      });
+    }
+  }
+
+  /**
+   * Stretch ratio that would bring `targetBpm` onto `anchorBpm`.
+   *
+   * Extracted so stale detection and the stretch itself use identical math — if they
+   * diverged, a slot could be flagged stale immediately after being matched, or stay
+   * silent when it genuinely drifted.
+   */
+  function tempoStretchRatio(targetBpm: number, anchorBpm: number): number {
+    let stretch = targetBpm / anchorBpm;
+    // Fold octave errors: a half-time detection would otherwise demand a 2x stretch,
+    // which sounds far worse than the musically equivalent 1x.
+    while (stretch > 1.45) stretch /= 2;
+    while (stretch < 0.7) stretch *= 2;
+    return stretch;
+  }
+
+  /**
+   * Stretch one slot so its tempo matches the tempo anchor's.
+   *
+   * Only touches the audio buffer and loop bounds — never speed/pitch/linkPitch — so a
+   * slot can be tempo-matched and key-matched at the same time. That separation is the
+   * whole point of stretching rather than resampling.
+   */
+  async function stretchSlotToTempoAnchor(targetSlotId: string) {
+    const anchorId = tempoAnchorIdRef.current;
+    if (!anchorId || anchorId === targetSlotId) return;
+
+    const anchorEntry = entriesRef.current.find((e) => e.slot.id === anchorId);
+    const target = entriesRef.current.find((e) => e.slot.id === targetSlotId);
+    if (!anchorEntry || !target || !target.sourceBuffer) return;
+
+    const anchorSrc = anchorEntry.sourceBuffer ?? anchorEntry.buffer;
+    const anchorBpm = anchorEntry.detectedBpm ?? (anchorSrc ? estimateBpm(anchorSrc) : undefined);
+    const targetBpm = target.detectedBpm ?? estimateBpm(target.sourceBuffer);
+    if (!anchorBpm || !targetBpm) return;
+
+    // Slower target tempo => must play faster => shorter buffer, hence the inversion.
+    const stretch = tempoStretchRatio(targetBpm, anchorBpm);
+
+    if (Math.abs(stretch - target.stretch) < 0.005) return;
+
+    setEntries((prev) => prev.map((e) => (e.slot.id === targetSlotId ? { ...e, stretching: true } : e)));
+
+    // Yield first: stretchBuffer is synchronous and long, so without this the spinner
+    // never paints and the UI just appears frozen.
+    await new Promise((r) => setTimeout(r, 0));
+
+    try {
+      const stretched = stretchBuffer(target.sourceBuffer, stretch);
+      // Ratio is relative to what the engine currently holds, not to the source.
+      multiEngine.swapBuffer(targetSlotId, stretched, stretch / target.stretch);
+      const stretchedSlot = {
+        ...target.slot,
+        loopStart: multiEngine.getLoopStart(targetSlotId),
+        loopEnd: multiEngine.getLoopEnd(targetSlotId),
+      };
+      setEntries((prev) =>
+        prev.map((e) =>
+          e.slot.id === targetSlotId
+            ? { ...e, buffer: stretched, stretch, stretching: false, slot: stretchedSlot }
+            : e,
+        ),
+      );
+      // Persist so the stretch can be re-applied on reload — the buffer itself is memory-only.
+      persistMatchedState(
+        { ...target, buffer: stretched, stretch, slot: stretchedSlot },
+        target.isMatched ?? false,
+        target.matchedBasePitch ?? 0,
+      );
+    } catch {
+      setEntries((prev) => prev.map((e) => (e.slot.id === targetSlotId ? { ...e, stretching: false } : e)));
+    }
+  }
+
+  // Persisted like the key anchor. Stretched buffers are memory-only, so the saved stretch
+  // ratio on each slot is re-applied after decode — otherwise the restored anchor would
+  // claim slots are synced to a tempo they had silently reverted from.
+  function handleSetTempoAnchor(slotId: string) {
+    const next = tempoAnchorIdRef.current === slotId ? null : slotId;
+    setTempoAnchorId(next);
+    tempoAnchorIdRef.current = next;
+    const entry = next ? entriesRef.current.find((e) => e.slot.id === next) : null;
+    if (entry) saveTempoAnchorKey(entry.slot.trackId, entry.slot.stemName);
+    else clearTempoAnchorKey();
+    // The anchor defines the tempo, so it plays at its own. A slot that was previously
+    // matched to some other anchor would otherwise stay stretched and every other slot
+    // would be matched to a tempo that is not actually this slot's.
+    if (entry && entry.sourceBuffer && Math.abs(entry.stretch - 1) > 0.005) {
+      void reapplyStretch(entry.slot.id, entry.sourceBuffer, 1, entry.stretch);
+    }
+  }
+
+  async function handleTempoMatchAll() {
+    const anchorId = tempoAnchorIdRef.current;
+    if (!anchorId) return;
+    for (const entry of entriesRef.current) {
+      if (entry.slot.id !== anchorId && !entry.loading) {
+        await stretchSlotToTempoAnchor(entry.slot.id);
+      }
+    }
+    // Matching rate alone still drifts: a 3.8-bar loop and a 4-bar loop pull apart every
+    // pass however well their tempos agree. Quantizing every slot — the anchor included —
+    // to the anchor's bar grid is what makes a shared downbeat hold.
+    quantizeAllToAnchorGrid();
+  }
+
+  /**
+   * Round every loop to a whole number of the anchor's bars.
+   *
+   * Reads entriesRef rather than the stretched entries returned above because the stretch
+   * pass has already rewritten loop bounds; this must see those, not the pre-stretch values.
+   */
+  function quantizeAllToAnchorGrid() {
+    const anchorId = tempoAnchorIdRef.current;
+    if (!anchorId) return;
+    const anchor = entriesRef.current.find((e) => e.slot.id === anchorId);
+    // sourceBuffer is the untouched decode and never changes, so it is safe to read here
+    // even though the rest of the entry may be a render behind.
+    const anchorSrc = anchor?.sourceBuffer ?? anchor?.buffer;
+    const anchorBpm = anchor?.detectedBpm ?? (anchorSrc ? sourceBpm(anchorSrc) : undefined);
+    if (!anchorBpm) return;
+
+    const skipped: string[] = [];
+    for (const entry of entriesRef.current) {
+      if (entry.loading || !entry.buffer) continue;
+      // Loop bounds from the engine, not from entry.slot: this runs immediately after the
+      // stretch pass, and React has not re-rendered yet, so entriesRef still holds the
+      // pre-stretch bounds. Quantizing those onto an already-stretched buffer put the loop
+      // ends in the wrong place. The engine's copy is rescaled by swapBuffer, so it is live.
+      const liveSlot = multiEngine.getSlot(entry.slot.id);
+      const loopStart = liveSlot?.loopStart ?? entry.slot.loopStart;
+      const loopEnd = liveSlot?.loopEnd ?? entry.slot.loopEnd;
+      // The engine also holds the stretched buffer; entry.buffer may still be the old one.
+      const liveBuffer = multiEngine.getBuffer(entry.slot.id) ?? entry.buffer;
+      // Every slot is already at the anchor's tempo, so the anchor's BPM is the right grid
+      // for all of them — including slots whose own detected tempo differs.
+      const q = quantizeToGrid(liveBuffer, loopStart, loopEnd, anchorBpm);
+      if (!q) { skipped.push(entry.title); continue; }
+      multiEngine.updateSlot(entry.slot.id, { loopStart: q.loopStart, loopEnd: q.loopEnd });
+      // Persist from the updater's own `prev`, not from the captured `entry`: the latter is
+      // pre-stretch, and persistMatchedState divides by buffer.duration to store loop
+      // fractions — using the old duration would save bounds that are wrong on reload.
+      let updated: SlotEntry | null = null;
+      setEntries((prev) =>
+        prev.map((e) => {
+          if (e.slot.id !== entry.slot.id) return e;
+          const next = { ...e, slot: { ...e.slot, loopStart: q.loopStart, loopEnd: q.loopEnd } };
+          updated = next;
+          return next;
+        }),
+      );
+      if (updated) {
+        const u: SlotEntry = updated;
+        persistMatchedState(u, u.isMatched ?? false, u.matchedBasePitch ?? 0);
+      }
+    }
+    setGridNote(
+      skipped.length
+        ? `Loops quantized to ${Math.round(anchorBpm)} bpm bars. Too short to fit a bar: ${skipped.join(", ")}.`
+        : `All loops quantized to whole bars at ${Math.round(anchorBpm)} bpm.`,
+    );
+  }
+
   function handleMatchAll() {
     const refId = referenceSlotIdRef.current;
     if (!refId) return;
@@ -642,6 +1047,8 @@ export function MultiPage() {
   function handleRandomSession() {
     const slots = buildRandomSlots(stemsLibrary, viabilityMapRef.current);
     if (!slots) return;
+    // A random rack is not the previously loaded session, so drop the label.
+    setActiveSessionName(null);
     const uuids = slots.map(() => crypto.randomUUID());
     const param = slots.map((s, i) => `${uuids[i]}:${s.trackId}:${s.stemName}`).join(",");
     // Prefer pitched stems as anchor — drums have no key so avoid them
@@ -654,16 +1061,30 @@ export function MultiPage() {
     navigate(`/?slots=${param}`);
   }
 
+  /**
+   * Slot list for a session write.
+   *
+   * Both save paths (named save and the resave button) go through this — when they each
+   * built the list inline, adding a field to one silently stripped it from the other.
+   */
+  function buildSessionSlots(): MultiSlot[] {
+    return entriesRef.current.map((e) => ({
+      ...e.slot,
+      isReference: e.slot.id === referenceSlotIdRef.current,
+      isTempoAnchor: e.slot.id === tempoAnchorIdRef.current,
+      stretch: e.stretch,
+      isMatched: e.isMatched,
+      matchedBasePitch: e.matchedBasePitch,
+      pitchInterval: e.pitchInterval,
+      detectedKey: e.detectedKey,
+      detectedBpm: e.detectedBpm,
+    }));
+  }
+
   function handleSaveSession() {
     const name = sessionName.trim();
     if (!name || entries.length === 0) return;
-    const slots = entries.map((e) => ({
-      ...e.slot,
-      isReference: e.slot.id === referenceSlotId,
-      isMatched: e.isMatched,
-      matchedBasePitch: e.matchedBasePitch,
-    }));
-    setNamedSessions(saveNamedSession(name, slots, masterSettings));
+    setNamedSessions(saveNamedSession(name, buildSessionSlots(), masterSettings));
     setSessionName("");
     setActiveSessionName(name);
     setSavedFlash(name);
@@ -690,6 +1111,18 @@ export function MultiPage() {
 
     const refSlot = slotsWithIds.find((s) => s.isReference);
     pendingReferenceIdRef.current = refSlot ? refSlot.id : null;
+    const tempoSlot = slotsWithIds.find((s) => s.isTempoAnchor);
+    pendingTempoAnchorIdRef.current = tempoSlot ? tempoSlot.id : null;
+    // Only clear when this session actually records anchor state. Sessions saved before
+    // isTempoAnchor existed have the field on no slot, which is indistinguishable from
+    // "deliberately no anchor" — clearing on those wiped the live anchor (and its
+    // localStorage key) every time an older session was loaded.
+    const sessionKnowsTempoAnchor = slotsWithIds.some((s) => s.isTempoAnchor !== undefined);
+    if (!tempoSlot && sessionKnowsTempoAnchor) {
+      setTempoAnchorId(null);
+      tempoAnchorIdRef.current = null;
+      clearTempoAnchorKey();
+    }
 
     const param = slotsWithIds
       .map((s) => s.stemName ? `${s.id}:${s.trackId}:${s.stemName}` : `${s.id}:${s.trackId}`)
@@ -739,6 +1172,8 @@ export function MultiPage() {
           gain: s.gain, muted: s.muted, effects: s.effects,
           loopStartFrac: s.loopStart / dur, loopEndFrac: s.loopEnd / dur,
           isMatched: false, matchedBasePitch: 0,
+          // A preset changes tone, not tempo — preserve the stretch through the overwrite.
+          stretch: e.stretch,
         });
         return { ...e, slot: s, isMatched: false, matchedBasePitch: 0 };
       }),
@@ -824,7 +1259,10 @@ export function MultiPage() {
   }
 
   async function handlePlayAll(instant = false) {
-    await multiEngine.play(instant);
+    // With a tempo anchor set the loops share a grid, so starting them all from loop start
+    // lands them on one downbeat. Without an anchor there is no shared grid to align to and
+    // slots keep resuming from wherever they were parked.
+    await multiEngine.play(instant, tempoAnchorIdRef.current !== null);
   }
 
   function handleStopAll(fade = false) {
@@ -832,6 +1270,9 @@ export function MultiPage() {
   }
 
   function handleClear() {
+    // Clearing the rack leaves no loaded session; keeping the label would name a session
+    // whose slots are gone.
+    setActiveSessionName(null);
     navigate("/");
   }
 
@@ -845,7 +1286,16 @@ export function MultiPage() {
           onClick={() => setSessionsPanelOpen((o) => !o)}
           className={`shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition ${sessionsPanelOpen ? "bg-accent/20 text-accent ring-1 ring-accent/40" : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted"}`}
         >
-          Sessions{namedSessions.length > 0 ? ` (${namedSessions.length})` : ""}
+          {/* Name the loaded session rather than just counting saved ones — with a dozen
+              similarly-named sessions, knowing which is live matters more than the total. */}
+          {activeSessionName ? (
+            <span className="flex items-center gap-1.5">
+              <span className="text-foreground/40">Session</span>
+              <span className="text-accent normal-case tracking-normal">{activeSessionName}</span>
+            </span>
+          ) : (
+            `Sessions${namedSessions.length > 0 ? ` (${namedSessions.length})` : ""}`
+          )}
         </button>
 
         {/* Sessions panel */}
@@ -901,13 +1351,10 @@ export function MultiPage() {
                   type="button"
                   onClick={() => {
                     if (entriesRef.current.length > 0) {
-                      const slots = entriesRef.current.map((e) => ({
-                        ...e.slot,
-                        isReference: e.slot.id === referenceSlotIdRef.current,
-                        isMatched: e.isMatched,
-                        matchedBasePitch: e.matchedBasePitch,
-                      }));
-                      setNamedSessions(saveNamedSession(s.name, slots, masterSettings));
+                      setNamedSessions(saveNamedSession(s.name, buildSessionSlots(), masterSettings));
+                      // Resaving makes this the session the rack belongs to; without this the
+                      // header button kept naming whichever session was loaded before.
+                      setActiveSessionName(s.name);
                       setSavedFlash(s.name);
                       setTimeout(() => setSavedFlash((n) => (n === s.name ? null : n)), 2000);
                     }
@@ -996,13 +1443,10 @@ export function MultiPage() {
           getSlotsAndBuffers={getSlotsAndBuffers.current}
           onPlayAll={handlePlayAll}
           onStopAll={handleStopAll}
-          onRewindAll={() => {
-            // Engine loopStart, not the state copy — addSlot clamps against buffer duration.
-            for (const e of entries) {
-              const live = multiEngine.getSlot(e.slot.id);
-              multiEngine.seekSlot(e.slot.id, live?.loopStart ?? e.slot.loopStart);
-            }
-          }}
+          // One engine call, not a loop of seeks: the engine rewinds every slot on a single
+          // timestamp, which is what keeps the downbeats aligned. It also reads each slot's
+          // own loopStart, already clamped against buffer duration by addSlot.
+          onRewindAll={() => multiEngine.rewindAll()}
           onThrowSettingsChange={handleThrowSettingsChange}
           throwPresets={throwPresets}
           onSaveThrowPreset={handleSaveThrowPreset}
@@ -1010,6 +1454,10 @@ export function MultiPage() {
           onApplyThrowPreset={handleApplyThrowPreset}
           isPlaying={isPlayingAll}
           onMatchAll={handleMatchAll}
+          onTempoMatchAll={() => { void handleTempoMatchAll(); }}
+          gridNote={gridNote}
+          onDismissGridNote={() => setGridNote(null)}
+          tempoAnchorId={tempoAnchorId}
           onRandomSession={handleRandomSession}
           randomDisabled={stemsLibrary.length < 2}
         />
@@ -1075,6 +1523,9 @@ export function MultiPage() {
           }
           const isReference = entry.slot.id === referenceSlotId;
           const hasReference = referenceSlotId !== null;
+          const isTempoAnchor = entry.slot.id === tempoAnchorId;
+          // The anchor itself snaps to its own tempo, so it gets no override.
+          const slotAnchorBpm = isTempoAnchor ? undefined : anchorBpm;
           return (
             <SlotStrip
               key={entry.slot.id}
@@ -1084,6 +1535,15 @@ export function MultiPage() {
               presets={presets}
               isReference={isReference}
               hasReference={hasReference}
+              anchorBpm={slotAnchorBpm}
+              tempoStale={staleTempoIds.has(entry.slot.id)}
+              isTempoAnchor={isTempoAnchor}
+              hasTempoAnchor={tempoAnchorId !== null}
+              onSetTempoAnchor={() => handleSetTempoAnchor(entry.slot.id)}
+              onTempoMatch={() => { void stretchSlotToTempoAnchor(entry.slot.id); }}
+              onStretchChange={(ratio) => { void handleStretchChange(entry.slot.id, ratio); }}
+              stretch={entry.stretch}
+              stretching={entry.stretching}
               isMatched={!isReference && entry.isMatched}
               matchedBasePitch={entry.matchedBasePitch}
               pitchInterval={entry.pitchInterval}

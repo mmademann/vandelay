@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { cn } from "../../lib/cn";
-import { snapLoop, estimateBpm } from "../../lib/loopSnap";
+import { snapLoop, estimateBpm, snapDelayToTempo } from "../../lib/loopSnap";
 import { multiEngine } from "../../audio/multiEngine";
 import type { MultiSlot } from "../../lib/multiSettings";
 import { Knob } from "./Knob";
@@ -300,15 +300,32 @@ interface Props {
   onChange: (patch: Partial<MultiSlot>) => void;
   onSetReference: () => void;
   onMatch: () => void;
+  /** Tempo anchor — separate from the key anchor; drives stretch, not speed/pitch. */
+  isTempoAnchor: boolean;
+  hasTempoAnchor: boolean;
+  onSetTempoAnchor: () => void;
+  onTempoMatch: () => void;
+  /** Apply an explicit stretch ratio (1 = original length). Rebuilds the buffer, so it is
+   *  driven from the knob's commit rather than its drag. */
+  onStretchChange: (ratio: number) => void;
+  /** Length multiple currently applied; 1 = original audio. */
+  stretch: number;
+  stretching: boolean;
   onSavePreset: (name: string, preset: Omit<MultiPreset, "name">) => void;
   masterSpeed: number;
   /** Detected tempo for this stem, if analysis produced one. Drives Snap Loop. */
   detectedBpm: number | undefined;
+  /** Tempo anchor's BPM, when one is set. Snapping to this rather than the slot's own tempo
+   *  is what lands every slot on one shared grid. */
+  anchorBpm: number | undefined;
+  /** True when this slot's stretch no longer agrees with the anchor's current tempo —
+   *  usually because the anchor itself changed after this slot was matched. */
+  tempoStale: boolean;
   onDeletePreset: (name: string) => void;
   onApplyPreset: (preset: MultiPreset) => void;
 }
 
-export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedBpm, isReference, hasReference, isMatched, matchedBasePitch, pitchInterval, onPitchIntervalChange, onRemove, onChange, onSetReference, onMatch, onSavePreset, onDeletePreset, onApplyPreset }: Props) {
+export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedBpm, anchorBpm, tempoStale, isReference, hasReference, isMatched, matchedBasePitch, pitchInterval, onPitchIntervalChange, onRemove, onChange, onSetReference, onMatch, isTempoAnchor, hasTempoAnchor, onSetTempoAnchor, onTempoMatch, onStretchChange, stretch, stretching, onSavePreset, onDeletePreset, onApplyPreset }: Props) {
   const [presetName, setPresetName] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
   const [throwActive, setThrowActive] = useState(false);
@@ -369,6 +386,9 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
       matchedBasePitch,
       pitchInterval: overridePitchInterval ?? pitchInterval,
       bypassMasterSpeed: merged.bypassMasterSpeed,
+      // saveSlotSettings replaces the whole record; without this every knob turn would
+      // wipe the slot's stretch and it would load unstretched after a refresh.
+      stretch,
     });
   }
 
@@ -404,6 +424,28 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
 
   // A bypassed slot is unaffected by master, so its readout stays plain.
   const effectiveMasterSpeed = slot.bypassMasterSpeed ? 1 : masterSpeed;
+  // Stretched away from its source length means this slot is holding a tempo match.
+  const isTempoMatched = !isTempoAnchor && Math.abs(stretch - 1) > 0.005;
+
+  /**
+   * Knob position while dragging. The applied stretch only changes on release — rebuilding
+   * the buffer per frame would be both far too slow and audibly destructive — so the knob
+   * needs its own value to follow the pointer in the meantime.
+   */
+  // Delay syncs to the anchor's grid when one exists, so every slot's echoes agree; without
+  // an anchor it falls back to this slot's own tempo rather than going unsynced.
+  const delayBpm = anchorBpm ?? detectedBpm;
+  /** Division the current delay time sits on, when synced. Null at zero — a delay of 0 is
+   *  "off", not a musical value, and snapping it would make it impossible to turn off. */
+  const delaySync = slot.effects.delayTime > 0.001
+    ? snapDelayToTempo(slot.effects.delayTime, delayBpm, EFFECTS_LIMITS.delayTime.max)
+    : null;
+
+  const [pendingStretch, setPendingStretch] = useState<number | null>(null);
+  // Drop the pending value once the prop catches up, so external changes (Match Tempos,
+  // session load) are not masked by a stale drag position.
+  useEffect(() => { setPendingStretch(null); }, [stretch]);
+  const shownStretch = pendingStretch ?? stretch;
   /** What the last snap did. Persists so the loop's bar count stays readable, and is
       cleared when the loop moves — a stale "2 bars" over a dragged region would lie.
       `detail` is the full explanation, surfaced on hover so the inline note stays short. */
@@ -426,7 +468,9 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
     // Fall back to measuring the buffer directly. Essentia's cached BPM is often missing
     // — unpitched stems used to fail key detection and lose their tempo with it — and the
     // snap is useless without one, so don't depend on the cache being populated.
-    const bpm = detectedBpm ?? estimateBpm(buffer);
+    // Anchor's grid wins: two slots each snapped to their own detected tempo are both
+    // "snapped" and still drift apart. Falls back to this slot's own tempo with no anchor.
+    const bpm = anchorBpm ?? detectedBpm ?? estimateBpm(buffer);
     const r = snapLoop(buffer, slot.loopStart, slot.loopEnd, bpm);
     update({ loopStart: r.loopStart, loopEnd: r.loopEnd });
     // Remember what the note describes; the effect above clears it if the loop moves off this.
@@ -577,8 +621,10 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
             className={cn("rounded px-2 py-1 text-xs font-bold uppercase tracking-wide transition",
               "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted",
               !buffer && "opacity-30 cursor-not-allowed")}
-            title={detectedBpm
-              ? `Snap loop to whole bars at ${Math.round(detectedBpm)} BPM, then to zero crossings`
+            title={anchorBpm
+              ? `Snap loop to whole bars at ${Math.round(anchorBpm)} BPM — the tempo anchor's grid — then to zero crossings`
+              : detectedBpm
+              ? `Snap loop to whole bars at ${Math.round(detectedBpm)} BPM (this slot's own tempo), then to zero crossings`
               : "Snap loop to whole bars (tempo measured from the audio), then to zero crossings"}>
             ⇥ Snap
           </button>
@@ -593,6 +639,49 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
               {snapNote.text}
             </span>
           )}
+          {/* Tempo anchor — same state-driven shape as the key anchor, but drives
+              time stretch instead of speed/pitch, so both can be active on one slot. */}
+          <button
+            type="button"
+            onClick={isTempoAnchor || !hasTempoAnchor ? onSetTempoAnchor : onTempoMatch}
+            disabled={stretching || !buffer}
+            title={
+              isTempoAnchor
+                ? "This slot is the tempo anchor — click to unpin"
+                : !hasTempoAnchor
+                  ? "Set as the tempo anchor"
+                  : tempoStale
+                    ? "Out of sync with the tempo anchor — the anchor's tempo changed after this slot was matched. Click to re-match."
+                    : isTempoMatched
+                      ? `Tempo matched at ${Math.round(stretch * 100)}% — click to re-match`
+                      : "Match to the tempo anchor (pitch unchanged)"
+            }
+            className={cn(
+              "shrink-0 rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition",
+              stretching && "opacity-60",
+              !buffer && "opacity-30 cursor-not-allowed",
+              isTempoAnchor
+                ? "border-orange-400/50 bg-orange-500/20 text-orange-300"
+                : tempoStale
+                  ? "border-amber-400/60 bg-amber-500/20 text-amber-300 animate-pulse"
+                  : isTempoMatched
+                    ? "border-orange-400/30 bg-orange-500/10 text-orange-300/70 hover:bg-orange-500/20 hover:text-orange-300"
+                    : "border-border/60 bg-muted/60 text-foreground/40 hover:border-orange-400/40 hover:text-orange-300",
+            )}
+          >
+            {stretching
+              ? "Stretching…"
+              : isTempoAnchor
+                ? "⚓ Tempo Anchor"
+                : !hasTempoAnchor
+                  ? "Set Tempo Anchor"
+                  : tempoStale
+                    ? "↻ Re-lock Tempo"
+                    : isTempoMatched
+                      ? `Tempo Matched ${Math.round(stretch * 100)}% ↻`
+                      : "Match Tempo"}
+          </button>
+
           {/* One control for the whole anchor/match cycle. Label and action follow state:
               no anchor anywhere -> pin this slot; anchor elsewhere -> match to it;
               already matched -> re-match (it can drift when speed/pitch are nudged). */}
@@ -603,10 +692,10 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
               isReference
                 ? "This slot is the key anchor — click to unpin"
                 : !hasReference
-                  ? "Pin this slot as the key anchor for the session"
+                  ? "Set as the key anchor"
                   : isMatched
-                    ? "Re-match speed + pitch to the key anchor"
-                    : "Match speed + pitch to the key anchor"
+                    ? "Already key matched — click to re-match"
+                    : "Match to the key anchor"
             }
             className={cn(
               "shrink-0 rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition",
@@ -617,8 +706,16 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
                   : "border-border/60 bg-muted/60 text-foreground/40 hover:border-accent/40 hover:text-accent",
             )}
           >
-            {isReference ? "⚓ Anchor" : !hasReference ? "Set Anchor" : isMatched ? "Matched ↻" : "Match"}
+            {isReference
+              ? "⚓ Key Anchor"
+              : !hasReference
+                ? "Set Key Anchor"
+                : isMatched
+                  ? "Key Matched ↻"
+                  : "Match Key"}
           </button>
+
+
 
           {/* Semitone shift — always live, independent of match state. */}
           <span className="shrink-0 flex items-center gap-0 overflow-hidden rounded border border-border/50 bg-muted/40">
@@ -666,6 +763,8 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
               className="border-l border-border/40 px-1.5 py-0.5 text-[11px] text-foreground/40 transition hover:bg-muted/60 hover:text-foreground"
             >▲</button>
           </span>
+
+
         </div>
       </div>
 
@@ -714,17 +813,44 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
               base {slot.speed.toFixed(2)}
             </span>
           )}
+          {/* Speed resamples, so it moves tempo and pitch together and breaks both matches
+              at once. Warn rather than disable — deliberately detuning a slot is a valid move. */}
+          {isTempoMatched && (
+            <span
+              className="text-[8px] uppercase tracking-wide text-amber-400/70 cursor-help"
+              title="This slot is tempo matched. The Speed knob resamples, so it changes tempo and pitch together and will break the match. Use Stretch to change tempo without touching pitch."
+            >
+              ⚠ breaks match
+            </span>
+          )}
           <button type="button"
             onClick={() => update({ bypassMasterSpeed: !slot.bypassMasterSpeed })}
             title={slot.bypassMasterSpeed
-              ? "Ignoring master speed — click to follow it"
-              : "Following master speed — click to hold this slot at its own tempo"}
-            className={cn("rounded px-2 py-0.5 text-[9px] uppercase tracking-wide font-semibold transition",
+              ? "This slot ignores the master speed dial — click to follow it again"
+              : "This slot follows the master speed dial — click to hold it at its own speed"}
+            className={cn("rounded px-2 py-0.5 text-[8px] uppercase tracking-wide font-semibold transition whitespace-nowrap",
               slot.bypassMasterSpeed
                 ? "bg-amber-500/25 text-amber-400"
                 : "bg-muted text-foreground/30 hover:text-foreground/60")}>
-            {slot.bypassMasterSpeed ? "Free" : "Master"}
+            {slot.bypassMasterSpeed ? "master: off" : "master: on"}
           </button>
+        </div>
+
+        {/* Time stretch — the pitch-safe counterpart to Speed. Committed on release because
+            each change rebuilds the whole buffer; the knob tracks the pointer meanwhile. */}
+        <div className="flex flex-col items-center gap-0.5">
+          <Knob label="Stretch" value={shownStretch} min={0.5} max={2} step={0.01} defaultValue={1} size={40}
+            disabled={!buffer || stretching}
+            displayValue={`${Math.round(shownStretch * 100)}%`}
+            onChange={(v) => setPendingStretch(v)}
+            onCommit={(v) => { setPendingStretch(null); onStretchChange(v); }} />
+          {stretching ? (
+            <span className="text-[8px] uppercase tracking-wide text-orange-300/70">working…</span>
+          ) : pendingStretch !== null ? (
+            <span className="text-[8px] uppercase tracking-wide text-foreground/30">release to apply</span>
+          ) : Math.abs(stretch - 1) > 0.005 ? (
+            <span className="text-[8px] uppercase tracking-wide text-foreground/25">2× click resets</span>
+          ) : null}
         </div>
         <div className="flex flex-col items-center gap-0.5">
           <Knob label="Pitch" value={slot.pitch} min={-24} max={24} step={1} defaultValue={0} size={40}
@@ -743,17 +869,28 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
         <Knob label="Delay" value={slot.effects.delayWet} min={EFFECTS_LIMITS.delayWet.min} max={EFFECTS_LIMITS.delayWet.max} step={0.01} defaultValue={0} size={40}
           displayValue={`${Math.round(slot.effects.delayWet * 100)}%`} onChange={(v) => updateEffect({ delayWet: v })} />
         <Knob label="D.Time" value={slot.effects.delayTime} min={EFFECTS_LIMITS.delayTime.min} max={EFFECTS_LIMITS.delayTime.max} step={0.01} defaultValue={0} size={40}
-          displayValue={`${slot.effects.delayTime.toFixed(2)}s`} onChange={(v) => updateEffect({ delayTime: v })} />
+          displayValue={delaySync ? `${delaySync.label} · ${Math.round(slot.effects.delayTime * 1000)}ms` : `${slot.effects.delayTime.toFixed(2)}s`}
+          onChange={(v) => {
+            // Snap while dragging so the knob lands on divisions rather than sliding past
+            // them — a delay one frame off the grid is exactly what this is preventing.
+            // Below the smallest division, let it fall to a true zero so the delay can be
+            // switched off rather than sticking at 1/32.
+            const snapped = v < 0.02 ? null : snapDelayToTempo(v, delayBpm, EFFECTS_LIMITS.delayTime.max);
+            updateEffect({ delayTime: v < 0.02 ? 0 : snapped ? snapped.seconds : v });
+          }} />
         <Knob label="D.Feedbk" value={slot.effects.delayFeedback} min={EFFECTS_LIMITS.delayFeedback.min} max={EFFECTS_LIMITS.delayFeedback.max} step={0.01} defaultValue={0} size={40}
           displayValue={`${Math.round(slot.effects.delayFeedback * 100)}%`} onChange={(v) => updateEffect({ delayFeedback: v })} />
         <Knob label="Bass" value={slot.effects.bassBoost} min={EFFECTS_LIMITS.bassBoost.min} max={EFFECTS_LIMITS.bassBoost.max} step={1} defaultValue={0} size={40}
           displayValue={`${slot.effects.bassBoost > 0 ? "+" : ""}${Math.round(slot.effects.bassBoost)}dB`} onChange={(v) => updateEffect({ bassBoost: v })} />
         <Knob label="Grit" value={slot.effects.grit ?? 0} min={0} max={1} step={0.01} defaultValue={0} size={40}
           displayValue={`${Math.round((slot.effects.grit ?? 0) * 100)}%`} onChange={(v) => updateEffect({ grit: v })} />
+        {/* Hidden from the rack, but the effects and their saved values are untouched —
+            uncomment to bring the knobs back.
         <Knob label="S.Echo" value={slot.effects.spaceEchoWow ?? 0} min={0} max={1} step={0.01} defaultValue={0} size={40}
           displayValue={`${Math.round((slot.effects.spaceEchoWow ?? 0) * 100)}%`} onChange={(v) => updateEffect({ spaceEchoWow: v })} />
         <Knob label="B.Knob" value={slot.effects.bigKnobWet ?? 0} min={0} max={1} step={0.01} defaultValue={0} size={40}
           displayValue={`${Math.round((slot.effects.bigKnobWet ?? 0) * 100)}%`} onChange={(v) => updateEffect({ bigKnobWet: v })} />
+        */}
         <Knob label="EQ Lo" value={slot.effects.eqLow ?? 0} min={-12} max={12} step={0.5} defaultValue={0} size={40}
           displayValue={`${(slot.effects.eqLow ?? 0) > 0 ? "+" : ""}${(slot.effects.eqLow ?? 0).toFixed(1)}dB`} onChange={(v) => updateEffect({ eqLow: v })} />
         <Knob label="EQ Mid" value={slot.effects.eqMid ?? 0} min={-12} max={12} step={0.5} defaultValue={0} size={40}

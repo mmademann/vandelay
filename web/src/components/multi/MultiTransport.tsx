@@ -158,6 +158,10 @@ interface Props {
   onApplyThrowPreset: (preset: ThrowPreset) => void;
   isPlaying: boolean;
   onMatchAll: () => void;
+  onTempoMatchAll: () => void;
+  gridNote: string | null;
+  onDismissGridNote: () => void;
+  tempoAnchorId: string | null;
   onRandomSession: () => void;
   randomDisabled: boolean;
 }
@@ -170,7 +174,7 @@ function buildExportFilename(activeSessionName: string | null, slotTitles: strin
   return `${unique.slice(0, 2).join(" × ")} +${unique.length - 2}`;
 }
 
-export function MultiTransport({ masterSettings, slotCount, referenceSlotId, activeSessionName, slotTitles, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, onMasterSpeedChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll, onRandomSession, randomDisabled }: Props) {
+export function MultiTransport({ masterSettings, slotCount, referenceSlotId, activeSessionName, slotTitles, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, onMasterSpeedChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll, onTempoMatchAll, gridNote, onDismissGridNote, tempoAnchorId, onRandomSession, randomDisabled }: Props) {
   const [loopCount, setLoopCount] = useState(1);
   const [recording, setRecording] = useState(false);
   const [recElapsed, setRecElapsed] = useState(0);
@@ -192,6 +196,12 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
   const [exportPanelOpen, setExportPanelOpen] = useState(false);
   // Blank = use the auto-generated name (shown as the input's placeholder).
   const [filenameDraft, setFilenameDraft] = useState("");
+  /**
+   * Tracks the auto-filled name so a session change can replace it, while anything the user
+   * typed is left alone. Without this the field either never updates or silently discards
+   * an edit whenever the active session changes.
+   */
+  const autoFilledRef = useRef("");
   const throwPanelRef = useRef<HTMLDivElement>(null);
   const throwBtnRef = useRef<HTMLButtonElement>(null);
   const exportPanelRef = useRef<HTMLDivElement>(null);
@@ -223,6 +233,20 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, [throwPanelOpen, exportPanelOpen]);
+
+  // Pre-fill the export filename from the session so it is editable text rather than a
+  // grey placeholder — the common case is exporting under the session's own name.
+  // Keyed on the joined titles, not the array: slotTitles is rebuilt every render, so the
+  // array identity would re-run this constantly.
+  const slotTitlesKey = slotTitles.join("|");
+  useEffect(() => {
+    const auto = buildExportFilename(activeSessionName, slotTitlesKey.split("|").filter(Boolean));
+    setFilenameDraft((cur) => {
+      if (cur && cur !== autoFilledRef.current) return cur; // user typed something — keep it
+      autoFilledRef.current = auto;
+      return auto;
+    });
+  }, [activeSessionName, slotTitlesKey]);
 
   // Tick the elapsed readout while recording.
   useEffect(() => {
@@ -275,10 +299,14 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
       setRecording(false);
       setRecEncoding(true);
       try {
+        // Yield a frame before encoding. stop() stitches chunks and runs encodeExport
+        // synchronously, blocking the main thread — without this the "Encoding…" state is
+        // set but never painted, so stopping a take looks like nothing happened.
+        await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
         const blob = await multiRecorder.stop({ format: recFormat, quality });
         if (!blob) throw new Error("Recording was empty.");
         // Hold the take so it can be named before saving.
-        setTakeName(`${buildExportFilename(activeSessionName, slotTitles)}-live`);
+        setTakeName(buildExportFilename(activeSessionName, slotTitles));
         setPendingTake({ blob, ext: exportExtension(recFormat), seconds });
       } catch (e) {
         setRecError(e instanceof Error ? e.message : "Recording failed");
@@ -519,33 +547,46 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
           </div>
         )}
 
-        {/* Throw character panel toggle */}
-        {slotCount > 0 && (
+        {/* Stretch all slots onto the tempo anchor's grid. Independent of key matching:
+            stretching changes duration only, so both can be applied to the same slot. */}
+        {slotCount >= 2 && (
           <button
-            ref={throwBtnRef}
             type="button"
-            onClick={() => setThrowPanelOpen((o) => !o)}
-            className={cn(
-              "shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
-              throwPanelOpen
-                ? "bg-teal-500/20 text-teal-400 ring-1 ring-teal-400/40"
-                : "bg-muted/80 text-foreground/50 hover:text-teal-400 hover:bg-muted",
-            )}
-            title="Configure Throw character — delay time, feedback, spring reverb"
+            onClick={onTempoMatchAll}
+            disabled={!tempoAnchorId}
+            className="shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-muted/80 text-foreground/50 transition hover:text-orange-300 hover:bg-muted disabled:opacity-30 disabled:hover:text-foreground/50"
+            title={tempoAnchorId
+              ? "Time-stretch every other slot to the tempo anchor's tempo. Pitch is unchanged, so key matching still holds."
+              : "Set a tempo anchor on a slot first — then every other slot stretches to its tempo"}
           >
-            ↯ Throw
+            Match Tempos
           </button>
         )}
 
-        {/* Match all to reference */}
-        {referenceSlotId && slotCount >= 2 && (
+        {/* Persists until dismissed: a slot skipped for being too short is easy to miss,
+            and it is the one case where the grid is not actually shared. */}
+        {gridNote && (
+          <button
+            type="button"
+            onClick={onDismissGridNote}
+            className="shrink-0 rounded px-2 py-1 text-[10px] font-medium text-orange-300/90 bg-orange-400/10 ring-1 ring-orange-400/25 hover:bg-orange-400/20"
+            title="Dismiss"
+          >
+            {gridNote}
+          </button>
+        )}
+
+        {slotCount >= 2 && (
           <button
             type="button"
             onClick={onMatchAll}
-            className="shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-muted/80 text-foreground/50 transition hover:text-accent hover:bg-muted"
-            title="Match all slots to the key anchor"
+            disabled={!referenceSlotId}
+            className="shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-muted/80 text-foreground/50 transition hover:text-accent hover:bg-muted disabled:opacity-30 disabled:hover:text-foreground/50"
+            title={referenceSlotId
+              ? "Pitch-shift every other slot into key with the key anchor."
+              : "Set a key anchor on a slot first — then every other slot shifts into its key"}
           >
-            Match to Anchor
+            Match Keys
           </button>
         )}
 
@@ -576,6 +617,24 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
         >
           ⚄ Random
         </button>
+
+        {/* Throw character panel toggle */}
+        {slotCount > 0 && (
+          <button
+            ref={throwBtnRef}
+            type="button"
+            onClick={() => setThrowPanelOpen((o) => !o)}
+            className={cn(
+              "shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
+              throwPanelOpen
+                ? "bg-teal-500/20 text-teal-400 ring-1 ring-teal-400/40"
+                : "bg-muted/80 text-foreground/50 hover:text-teal-400 hover:bg-muted",
+            )}
+            title="Configure Throw character — delay time, feedback, spring reverb"
+          >
+            ↯ Throw
+          </button>
+        )}
 
       </div>
 

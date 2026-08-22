@@ -6,6 +6,12 @@ export interface MultiSlot {
   trackId: string;
   stemName: StemName | null;
   isReference?: boolean;
+  /** Tempo anchor flag. Stored on the session like isReference, not in per-slot settings —
+   *  session load mints fresh UUIDs, so anything keyed by UUID is orphaned. */
+  isTempoAnchor?: boolean;
+  /** Time-stretch ratio to re-apply on load. Memory-only buffers make this the only record
+   *  that a slot was tempo matched. */
+  stretch?: number;
   speed: number;
   pitch: number;
   linkPitch: boolean;
@@ -17,6 +23,13 @@ export interface MultiSlot {
   loopEnd: number;
   isMatched?: boolean;
   matchedBasePitch?: number;
+  /** Semitone step size for the octave/interval buttons. Part of the slot's visible state,
+   *  so a restored session should not silently revert it to the default. */
+  pitchInterval?: 1 | 7 | 12;
+  /** Analysis results, snapshotted so a restored session shows its key/BPM badges
+   *  immediately instead of blanking until re-analysis finishes. */
+  detectedKey?: string | null;
+  detectedBpm?: number;
   /** Slot ignores the master speed dial — for drums held at original tempo under a slowed bed. */
   bypassMasterSpeed?: boolean;
 }
@@ -35,6 +48,11 @@ export interface MultiSlotSavedSettings {
   matchedBasePitch?: number;
   pitchInterval?: 1 | 7 | 12;
   bypassMasterSpeed?: boolean;
+  /**
+   * Time-stretch ratio applied to reach the tempo anchor. Stretched buffers are memory-only,
+   * so this is what lets the stretch be re-applied on reload instead of silently reverting.
+   */
+  stretch?: number;
 }
 
 const SLOT_SETTINGS_KEY = "vandelay:multi:slot-settings:v1";
@@ -180,6 +198,27 @@ export function deleteThrowPreset(name: string): ThrowPreset[] {
   return updated;
 }
 
+/**
+ * Name of the session the rack currently represents. Persisted because it is displayed in
+ * the header, and a reload would otherwise show "Sessions" even though the loaded slots
+ * came straight from a named session.
+ */
+const ACTIVE_SESSION_KEY = "vandelay:multi:active-session:v1";
+
+export function loadActiveSessionName(): string | null {
+  try {
+    const raw = localStorage.getItem(ACTIVE_SESSION_KEY);
+    return raw ? (JSON.parse(raw) as string) : null;
+  } catch { return null; }
+}
+
+export function saveActiveSessionName(name: string | null): void {
+  try {
+    if (name === null) localStorage.removeItem(ACTIVE_SESSION_KEY);
+    else localStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(name));
+  } catch {}
+}
+
 const ANCHOR_KEY = "vandelay:multi:anchor:v1";
 
 export function loadAnchorKey(): { trackId: string; stemName: StemName | null } | null {
@@ -195,6 +234,27 @@ export function saveAnchorKey(trackId: string, stemName: StemName | null): void 
 
 export function clearAnchorKey(): void {
   try { localStorage.removeItem(ANCHOR_KEY); } catch {}
+}
+
+/**
+ * Tempo anchor, persisted the same way as the key anchor. Both are stored by
+ * trackId+stemName rather than slot UUID because UUIDs are regenerated per session.
+ */
+const TEMPO_ANCHOR_KEY = "vandelay:multi:tempo-anchor:v1";
+
+export function loadTempoAnchorKey(): { trackId: string; stemName: StemName | null } | null {
+  try {
+    const raw = localStorage.getItem(TEMPO_ANCHOR_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+export function saveTempoAnchorKey(trackId: string, stemName: StemName | null): void {
+  try { localStorage.setItem(TEMPO_ANCHOR_KEY, JSON.stringify({ trackId, stemName })); } catch {}
+}
+
+export function clearTempoAnchorKey(): void {
+  try { localStorage.removeItem(TEMPO_ANCHOR_KEY); } catch {}
 }
 
 export interface MultiMasterSettings {
@@ -269,3 +329,4 @@ export function deleteNamedSession(name: string): MultiSession[] {
   try { localStorage.setItem(NAMED_KEY, JSON.stringify(updated)); } catch {}
   return updated;
 }
+

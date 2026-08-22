@@ -209,6 +209,69 @@ class MultiEngine {
     }
   }
 
+  /**
+   * Replace a slot's audio with a time-stretched copy.
+   *
+   * Stretching changes the buffer's timebase, so every value expressed in buffer seconds
+   * has to move with it. Loop bounds are scaled by the same factor, and a playing slot is
+   * re-anchored at its equivalent position — without that, getSlotPosition keeps deriving
+   * position from a startedAt that belongs to the old timebase and the playhead drifts
+   * outside the loop brackets.
+   *
+   * `ratio` is the new buffer's length relative to the one currently loaded.
+   */
+  swapBuffer(id: string, buffer: AudioBuffer, ratio: number): void {
+    const slot = this.slots.get(id);
+    if (!slot) return;
+
+    // Where the slot is right now, in the OLD timebase, before anything changes.
+    const wasPlaying = slot.playing;
+    const oldPos = wasPlaying ? this.getSlotPosition(id) : slot.startOffset;
+
+    const channels: Float32Array[] = [];
+    for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
+    const toneBuffer = new Tone.ToneAudioBuffer().fromArray(channels);
+
+    const dur = buffer.duration;
+    const newStart = Math.max(0, Math.min(slot.loopStart * ratio, dur - 0.01));
+    const newEnd = Math.min(dur, Math.max(newStart + 0.01, slot.loopEnd * ratio));
+    const newPos = Math.max(newStart, Math.min(newEnd, oldPos * ratio));
+
+    // Stop before swapping: a running player holding the old buffer will keep emitting.
+    if (wasPlaying) slot.player.stop();
+
+    slot.player.buffer = toneBuffer;
+    slot.player.loopStart = newStart;
+    slot.player.loopEnd = newEnd;
+    slot.loopStart = newStart;
+    slot.loopEnd = newEnd;
+    slot.startOffset = newPos;
+    slot.seekNonce++;
+
+    if (wasPlaying) {
+      const t = Tone.now() + 0.05;
+      slot.player.start(t, newPos);
+      slot.startedAt = t;
+      slot.playing = true;
+    } else {
+      slot.startedAt = 0;
+    }
+  }
+
+  /** Loop bounds after a swap rescaled them, so React state can follow the engine. */
+  getLoopStart(id: string): number { return this.slots.get(id)?.loopStart ?? 0; }
+  getLoopEnd(id: string): number { return this.slots.get(id)?.loopEnd ?? 0; }
+
+  /**
+   * The buffer the slot is actually playing, which after a stretch is not the one React
+   * state holds until the next render. Callers that need to measure the live audio — loop
+   * quantizing right after a stretch — must use this rather than the entry's copy.
+   */
+  getBuffer(id: string): AudioBuffer | null {
+    const b = this.slots.get(id)?.player.buffer;
+    return b?.get() ?? null;
+  }
+
   removeSlot(id: string): void {
     const slot = this.slots.get(id);
     if (!slot) return;
@@ -290,6 +353,27 @@ class MultiEngine {
     const clampedOffset = Math.max(slot.loopStart, Math.min(slot.loopEnd, slot.startOffset));
     const offsetInLoop = clampedOffset - slot.loopStart;
     return slot.loopStart + ((offsetInLoop + elapsed) % loopDur + loopDur) % loopDur;
+  }
+
+  /**
+   * Return every slot to its loop start on one shared timestamp.
+   *
+   * Distinct from calling seekSlot per slot, which is what this replaced: each of those
+   * calls reads Tone.now() separately, so the slots restart microseconds apart and the
+   * downbeats smear. Re-syncing is the whole reason to press rewind, so it has to be one
+   * instant for all of them.
+   */
+  rewindAll(): void {
+    const now = Tone.now();
+    for (const slot of this.slots.values()) {
+      const target = slot.loopStart;
+      slot.startOffset = target;
+      slot.seekNonce++;
+      if (slot.playing) {
+        slot.player.seek(target, now);
+        slot.startedAt = now;
+      }
+    }
   }
 
   seekSlot(id: string, time: number): void {
@@ -476,7 +560,17 @@ class MultiEngine {
     }
   }
 
-  async play(instant = false): Promise<void> {
+  /**
+   * Start playback.
+   *
+   * `fromLoopStart` re-anchors every audible slot to its loop start at one shared instant,
+   * which is what puts them on a common downbeat. It only makes musical sense once the
+   * loops are whole bars at a single tempo — otherwise it just resets phase on loops that
+   * will drift apart again anyway — so callers gate it on a tempo anchor being set.
+   * Without it, each slot resumes from where it was parked and already-playing slots are
+   * left alone.
+   */
+  async play(instant = false, fromLoopStart = false): Promise<void> {
     await Tone.start();
     await Tone.getContext().resume();
     this.running = true;
@@ -487,15 +581,26 @@ class MultiEngine {
     const anySoloed = Array.from(this.slots.values()).some((s) => s.soloed);
 
     for (const slot of this.slots.values()) {
-      if (slot.playing) continue;
-      // Silent slots stay stopped — unmuting during playback starts them (see updateSlot).
-      if (slot.muted || (anySoloed && !slot.soloed)) continue;
+      if (slot.playing && !fromLoopStart) continue;
+      if (fromLoopStart) slot.startOffset = slot.loopStart;
+      // Muted and non-soloed slots still start, just silently. Running them keeps them on
+      // the same grid as everything else, so unmuting or soloing drops them straight in on
+      // the beat instead of starting wherever they happened to be parked. Costs a voice and
+      // an effects chain per hidden slot, which is the deliberate trade.
+      const effectiveMute = slot.muted || (anySoloed && !slot.soloed);
       try { slot.player.stop(); } catch { /* ignore */ }
       slot.player.loopStart = slot.loopStart;
       slot.player.loopEnd = slot.loopEnd;
       slot.player.loop = true;
       slot.startOffset = Math.max(slot.loopStart, Math.min(slot.loopEnd - 0.01, slot.startOffset));
-      if (instant) {
+      if (effectiveMute) {
+        // Hard to silence, never ramped — a fade-in here would be audible, which is exactly
+        // what mute is meant to prevent.
+        slot.volume.volume.cancelScheduledValues(t);
+        slot.volume.volume.setValueAtTime(-Infinity, t);
+        slot.fadeUntil = 0;
+        slot.fadeTarget = -Infinity;
+      } else if (instant) {
         slot.volume.volume.cancelScheduledValues(t);
         slot.volume.volume.setValueAtTime(
           slot.gain <= MultiEngine.GAIN_FLOOR_DB ? -Infinity : slot.gain,
@@ -568,6 +673,28 @@ class MultiEngine {
    * startOffset — where it was parked — rather than being seeked to match other slots.
    * Loops are independent lengths, so there is no shared position to align to.
    */
+  /**
+   * Where `slot` should start to be in phase with the rest of the rack.
+   *
+   * Uses another playing slot's progress through its own loop, scaled into this slot's loop
+   * length. Exact when the loops are the same musical length — which is what Match Tempos
+   * guarantees — and a reasonable approximation otherwise. Null when nothing else is
+   * playing, in which case there is no phase to join.
+   */
+  private matchingLoopPosition(slot: RuntimeSlot): number | null {
+    const loopDur = slot.loopEnd - slot.loopStart;
+    if (loopDur <= 0) return null;
+    for (const [id, other] of this.slots) {
+      if (other === slot || !other.playing) continue;
+      const otherDur = other.loopEnd - other.loopStart;
+      if (otherDur <= 0) continue;
+      const pos = this.getSlotPosition(id);
+      const frac = ((pos - other.loopStart) / otherDur) % 1;
+      return slot.loopStart + ((frac % 1) + 1) % 1 * loopDur;
+    }
+    return null;
+  }
+
   private startSilencedSlots(): void {
     const anySoloed = Array.from(this.slots.values()).some((s) => s.soloed);
     const t = Tone.now() + 0.05;
@@ -579,7 +706,11 @@ class MultiEngine {
       slot.player.loopStart = slot.loopStart;
       slot.player.loopEnd = slot.loopEnd;
       slot.player.loop = true;
-      slot.startOffset = Math.max(slot.loopStart, Math.min(slot.loopEnd - 0.01, slot.startOffset));
+      // Land on a peer's current loop position rather than this slot's parked offset, so a
+      // slot that missed the group start still joins in phase. Falls back to its own offset
+      // when nothing else is running.
+      const peer = this.matchingLoopPosition(slot);
+      slot.startOffset = peer ?? Math.max(slot.loopStart, Math.min(slot.loopEnd - 0.01, slot.startOffset));
       // Match playSlot's fade-in — recomputeAllVolumes has already jumped this to full gain.
       MultiEngine.rampVolume(slot, slot.gain, t, MultiEngine.FADE_SEC);
       slot.player.start(t, slot.startOffset);
