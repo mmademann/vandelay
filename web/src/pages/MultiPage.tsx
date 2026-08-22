@@ -18,6 +18,8 @@ import {
   deleteMultiPreset,
   loadThrowSettings,
   saveThrowSettings,
+  loadMasterSpeed,
+  saveMasterSpeed,
   loadThrowPresets,
   saveThrowPreset,
   deleteThrowPreset,
@@ -30,7 +32,7 @@ import {
 import { getAllTrackMeta, getTrackMeta, putTrackMeta } from "../lib/trackMetaCache";
 import { analyzeAudio, rootSemitone, preloadEssentia } from "../lib/audioAnalysis";
 import { computeAutoGain, computeStemViability } from "../lib/autoGain";
-import { STEM_AUTO_PRESETS, GENRE_PRESETS, randomizeEffects, type StemRole, type GenreName } from "../lib/vibePresets";
+import { type StemRole } from "../lib/vibePresets";
 import { buildRandomSlots } from "../lib/randomCombinator";
 import { SlotStrip } from "../components/multi/SlotStrip";
 import { SlotPicker } from "../components/multi/SlotPicker";
@@ -124,6 +126,7 @@ export function MultiPage() {
   const [masterSettings, setMasterSettings] = useState<MultiMasterSettings>(() => ({
     gain: 0,
     loopLengthOverride: null,
+    masterSpeed: loadMasterSpeed(),
     throwSettings: loadThrowSettings(),
   }));
   const [namedSessions, setNamedSessions] = useState<MultiSession[]>(() => loadNamedSessions());
@@ -164,6 +167,9 @@ export function MultiPage() {
       }).catch(() => {});
     }
     multiEngine.setThrowSettings(masterSettings.throwSettings);
+    // The engine defaults masterSpeed to 1; without this a persisted value would show in
+    // the dial while every slot still played at full rate.
+    multiEngine.setMasterSettings(masterSettingsRef.current);
     preloadEssentia().catch(() => {});
     getAllTrackMeta().then((entries) => {
       for (const entry of entries) {
@@ -286,6 +292,9 @@ export function MultiPage() {
         speed: 1,
         pitch: 0,
         linkPitch: true,
+        // Drums are unpitched, so holding them at tempo under a slowed bed costs no key
+        // relationship. Default the bypass on; the strip's Master/Free toggle overrides it.
+        bypassMasterSpeed: pair.stemName === "drums",
         gain: 0,
         muted: false,
         soloed: false,
@@ -428,6 +437,7 @@ export function MultiPage() {
             gain: saved?.gain ?? computeAutoGain(buffer),
             muted: saved?.muted ?? slot.muted,
             effects: saved?.effects ?? sanitizeEffects({ ...DRY_EFFECTS }),
+            bypassMasterSpeed: saved?.bypassMasterSpeed ?? slot.bypassMasterSpeed,
           };
         }
 
@@ -611,41 +621,6 @@ export function MultiPage() {
     }
   }
 
-  function handleApplyGenre(genre: GenreName) {
-    setEntries((prev) => prev.map((e) => {
-      if (e.loading || e.error) return e;
-      const role: StemRole = e.slot.stemName ?? "full";
-      const overrides = GENRE_PRESETS[genre][role];
-      const newEffects = sanitizeEffects({ ...e.slot.effects, ...overrides });
-      const newSlot = { ...e.slot, effects: newEffects };
-      multiEngine.updateSlot(newSlot.id, { effects: newEffects });
-      const dur = e.buffer?.duration ?? 1;
-      saveSlotSettings(newSlot.id, {
-        speed: newSlot.speed, pitch: newSlot.pitch, linkPitch: newSlot.linkPitch,
-        gain: newSlot.gain, muted: newSlot.muted, effects: newEffects,
-        loopStartFrac: newSlot.loopStart / dur, loopEndFrac: newSlot.loopEnd / dur,
-      });
-      return { ...e, slot: newSlot };
-    }));
-  }
-
-  function handleRandomizeAll() {
-    setEntries((prev) => prev.map((e) => {
-      if (e.loading || e.error) return e;
-      const role: StemRole = e.slot.stemName ?? "full";
-      const newEffects = randomizeEffects(e.slot.effects, role);
-      const newSlot = { ...e.slot, effects: newEffects };
-      multiEngine.updateSlot(newSlot.id, { effects: newEffects });
-      const dur = e.buffer?.duration ?? 1;
-      saveSlotSettings(newSlot.id, {
-        speed: newSlot.speed, pitch: newSlot.pitch, linkPitch: newSlot.linkPitch,
-        gain: newSlot.gain, muted: newSlot.muted, effects: newEffects,
-        loopStartFrac: newSlot.loopStart / dur, loopEndFrac: newSlot.loopEnd / dur,
-      });
-      return { ...e, slot: newSlot };
-    }));
-  }
-
   function handleRandomSession() {
     const slots = buildRandomSlots(stemsLibrary, viabilityMapRef.current);
     if (!slots) return;
@@ -680,10 +655,11 @@ export function MultiPage() {
 
   function handleLoadSession(session: MultiSession) {
     setActiveSessionName(session.name);
-    const ms = session.masterSettings;
+    const ms = { ...session.masterSettings, masterSpeed: session.masterSettings.masterSpeed ?? 1 };
     setMasterSettings(ms);
     multiEngine.setMasterSettings(ms);
     multiEngine.setThrowSettings(ms.throwSettings);
+    saveMasterSpeed(ms.masterSpeed);
 
     const slotsWithIds = session.slots.map((s) => ({
       ...s,
@@ -761,6 +737,13 @@ export function MultiPage() {
     saveThrowSettings(throwSettings);
   }
 
+  function handleMasterSpeedChange(masterSpeed: number) {
+    const next = { ...masterSettingsRef.current, masterSpeed };
+    setMasterSettings(next);
+    multiEngine.setMasterSettings(next);
+    saveMasterSpeed(masterSpeed);
+  }
+
   function handleSaveThrowPreset(name: string) {
     setThrowPresets(saveThrowPreset(name, masterSettings.throwSettings));
   }
@@ -804,9 +787,16 @@ export function MultiPage() {
       setNamedSessions(data.namedSessions);
       setPresets(data.presets);
       setThrowPresets(data.throwPresets);
-      setMasterSettings(data.masterSettings);
-      multiEngine.setMasterSettings(data.masterSettings);
-      multiEngine.setThrowSettings(data.masterSettings.throwSettings);
+      // Backups written before master speed existed have no masterSpeed; without this
+      // default every rate becomes NaN and all slots go silent.
+      const importedMaster = {
+        ...data.masterSettings,
+        masterSpeed: data.masterSettings.masterSpeed ?? 1,
+      };
+      setMasterSettings(importedMaster);
+      multiEngine.setMasterSettings(importedMaster);
+      multiEngine.setThrowSettings(importedMaster.throwSettings);
+      saveMasterSpeed(importedMaster.masterSpeed);
       setImportStatus("imported");
       setTimeout(() => setImportStatus("idle"), 2000);
     } catch {
@@ -980,6 +970,7 @@ export function MultiPage() {
 
         <MultiTransport
           masterSettings={masterSettings}
+          onMasterSpeedChange={handleMasterSpeedChange}
           slotCount={entries.length}
           referenceSlotId={referenceSlotId}
           activeSessionName={activeSessionName}
@@ -1001,8 +992,6 @@ export function MultiPage() {
           onApplyThrowPreset={handleApplyThrowPreset}
           isPlaying={isPlayingAll}
           onMatchAll={handleMatchAll}
-          onApplyGenre={handleApplyGenre}
-          onRandomizeAll={handleRandomizeAll}
           onRandomSession={handleRandomSession}
           randomDisabled={stemsLibrary.length < 2}
         />
@@ -1086,6 +1075,7 @@ export function MultiPage() {
               onChange={(patch) => handleSlotChange(entry.slot.id, patch)}
               onSetReference={() => handleSetReference(entry.slot.id)}
               onMatch={() => matchSlotToReference(entry.slot.id)}
+              masterSpeed={masterSettings.masterSpeed}
               onSavePreset={handleSavePreset}
               onDeletePreset={handleDeletePreset}
               onApplyPreset={(preset) => handleApplyPreset(entry.slot.id, preset)}

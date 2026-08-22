@@ -5,8 +5,9 @@ import { reverbExportTailSec } from "./reverbSlot";
 import { createOfflineMultiEqChain } from "./multiChain";
 import type { ExportEncodeOptions } from "./exportOptions";
 
-function slotPlaybackRate(slot: MultiSlot): number {
-  return slot.linkPitch ? slot.speed : slot.speed * Math.pow(2, slot.pitch / 12);
+function slotPlaybackRate(slot: MultiSlot, masterSpeed = 1): number {
+  const base = slot.linkPitch ? slot.speed : slot.speed * Math.pow(2, slot.pitch / 12);
+  return slot.bypassMasterSpeed ? base : base * masterSpeed;
 }
 
 export interface RenderMultiOptions {
@@ -63,7 +64,7 @@ export async function renderMulti(opts: RenderMultiOptions): Promise<Blob> {
 
     for (const slot of activeSlots) {
       const src = buffers.get(slot.id)!;
-      const rate = slotPlaybackRate(slot);
+      const rate = slotPlaybackRate(slot, masterSettings.masterSpeed ?? 1);
 
       const volume = new Tone.Volume(slot.gain).connect(master);
       const eq = await createOfflineMultiEqChain(slot.effects, volume);

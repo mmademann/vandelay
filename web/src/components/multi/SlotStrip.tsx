@@ -9,7 +9,6 @@ import {
 } from "../../lib/multiSettings";
 import { DRY_EFFECTS, type StemName } from "../../audio/dubEngine";
 import { EFFECTS_LIMITS } from "../../store";
-import { randomizeEffects, type StemRole } from "../../lib/vibePresets";
 
 const STEM_LABELS: Record<StemName, string> = {
   drums: "Drums",
@@ -301,11 +300,12 @@ interface Props {
   onSetReference: () => void;
   onMatch: () => void;
   onSavePreset: (name: string, preset: Omit<MultiPreset, "name">) => void;
+  masterSpeed: number;
   onDeletePreset: (name: string) => void;
   onApplyPreset: (preset: MultiPreset) => void;
 }
 
-export function SlotStrip({ slot, title, buffer, presets, isReference, hasReference, isMatched, matchedBasePitch, pitchInterval, onPitchIntervalChange, onRemove, onChange, onSetReference, onMatch, onSavePreset, onDeletePreset, onApplyPreset }: Props) {
+export function SlotStrip({ slot, title, buffer, presets, masterSpeed, isReference, hasReference, isMatched, matchedBasePitch, pitchInterval, onPitchIntervalChange, onRemove, onChange, onSetReference, onMatch, onSavePreset, onDeletePreset, onApplyPreset }: Props) {
   const [presetName, setPresetName] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
   const [throwActive, setThrowActive] = useState(false);
@@ -365,6 +365,7 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
       isMatched,
       matchedBasePitch,
       pitchInterval: overridePitchInterval ?? pitchInterval,
+      bypassMasterSpeed: merged.bypassMasterSpeed,
     });
   }
 
@@ -397,6 +398,9 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
     onApplyPreset(preset);
     setActivePreset(preset.name);
   }
+
+  // A bypassed slot is unaffected by master, so its readout stays plain.
+  const effectiveMasterSpeed = slot.bypassMasterSpeed ? 1 : masterSpeed;
 
   function handleSavePreset(e: React.FormEvent) {
     e.preventDefault();
@@ -614,8 +618,33 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
         <Knob label="Gain" value={slot.gain} min={-60} max={6} step={0.5} defaultValue={0} size={40}
           displayValue={slot.gain <= -60 ? "−∞" : `${slot.gain > 0 ? "+" : ""}${slot.gain.toFixed(1)}dB`}
           onChange={(v) => update({ gain: v })} />
-        <Knob label="Speed" value={slot.speed} min={0.1} max={1} step={0.01} defaultValue={1} size={40}
-          displayValue={`${slot.speed.toFixed(2)}×`} onChange={(v) => update({ speed: v })} />
+        <div className="flex flex-col items-center gap-0.5">
+          {/* The knob sets this slot's own speed; master multiplies it. When master is
+              engaged the readout shows the rate actually playing, with the base beneath. */}
+          <Knob label="Speed" value={slot.speed} min={0.1} max={2} step={0.01} defaultValue={1} size={40}
+            displayValue={
+              effectiveMasterSpeed === 1
+                ? `${slot.speed.toFixed(2)}×`
+                : `${(slot.speed * effectiveMasterSpeed).toFixed(2)}×`
+            }
+            onChange={(v) => update({ speed: v })} />
+          {effectiveMasterSpeed !== 1 && (
+            <span className="text-[8px] uppercase tracking-wide text-foreground/25">
+              base {slot.speed.toFixed(2)}
+            </span>
+          )}
+          <button type="button"
+            onClick={() => update({ bypassMasterSpeed: !slot.bypassMasterSpeed })}
+            title={slot.bypassMasterSpeed
+              ? "Ignoring master speed — click to follow it"
+              : "Following master speed — click to hold this slot at its own tempo"}
+            className={cn("rounded px-2 py-0.5 text-[9px] uppercase tracking-wide font-semibold transition",
+              slot.bypassMasterSpeed
+                ? "bg-amber-500/25 text-amber-400"
+                : "bg-muted text-foreground/30 hover:text-foreground/60")}>
+            {slot.bypassMasterSpeed ? "Free" : "Master"}
+          </button>
+        </div>
         <div className="flex flex-col items-center gap-0.5">
           <Knob label="Pitch" value={slot.pitch} min={-24} max={24} step={1} defaultValue={0} size={40}
             displayValue={`${slot.pitch > 0 ? "+" : ""}${slot.pitch}st`} disabled={slot.linkPitch}
@@ -670,11 +699,6 @@ export function SlotStrip({ slot, title, buffer, presets, isReference, hasRefere
         <button type="button" onClick={handleReset}
           className="rounded px-2 py-0.5 text-[9px] uppercase tracking-wide font-semibold text-foreground/25 hover:text-foreground/60 hover:bg-muted transition">
           ↺ Reset
-        </button>
-        <button type="button"
-          onClick={() => { const role: StemRole = slot.stemName ?? "full"; update({ effects: randomizeEffects(slot.effects, role) }); }}
-          className="rounded px-2 py-0.5 text-[9px] uppercase tracking-wide font-semibold text-foreground/25 hover:text-foreground/60 hover:bg-muted transition">
-          ⚄ Rand
         </button>
         {presetsPanelOpen && (
           <div

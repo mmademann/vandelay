@@ -13,13 +13,19 @@ import {
 import type { MultiMasterSettings, MultiSlot, ThrowSettings, ThrowPreset } from "../../lib/multiSettings";
 import { cn } from "../../lib/cn";
 import { Knob } from "./Knob";
-import type { GenreName } from "../../lib/vibePresets";
 
 function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url; a.download = filename; a.click();
   URL.revokeObjectURL(url);
+}
+
+/** Resampling by a ratio shifts pitch by 12*log2(ratio) semitones. */
+function formatSemitoneShift(rate: number): string {
+  const semis = 12 * Math.log2(rate);
+  if (Math.abs(semis) < 0.05) return "";
+  return `${semis > 0 ? "+" : ""}${semis.toFixed(1)}st`;
 }
 
 function formatDuration(sec: number): string {
@@ -145,14 +151,13 @@ interface Props {
   onPlayAll: (instant?: boolean) => void;
   onRewindAll: () => void;
   onThrowSettingsChange: (settings: ThrowSettings) => void;
+  onMasterSpeedChange: (speed: number) => void;
   throwPresets: ThrowPreset[];
   onSaveThrowPreset: (name: string) => void;
   onDeleteThrowPreset: (name: string) => void;
   onApplyThrowPreset: (preset: ThrowPreset) => void;
   isPlaying: boolean;
   onMatchAll: () => void;
-  onApplyGenre: (genre: GenreName) => void;
-  onRandomizeAll: () => void;
   onRandomSession: () => void;
   randomDisabled: boolean;
 }
@@ -165,7 +170,7 @@ function buildExportFilename(activeSessionName: string | null, slotTitles: strin
   return `${unique.slice(0, 2).join(" × ")} +${unique.length - 2}`;
 }
 
-export function MultiTransport({ masterSettings, slotCount, referenceSlotId, activeSessionName, slotTitles, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll, onApplyGenre, onRandomizeAll, onRandomSession, randomDisabled }: Props) {
+export function MultiTransport({ masterSettings, slotCount, referenceSlotId, activeSessionName, slotTitles, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, onMasterSpeedChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll, onRandomSession, randomDisabled }: Props) {
   const [loopCount, setLoopCount] = useState(1);
   const [recording, setRecording] = useState(false);
   const [recElapsed, setRecElapsed] = useState(0);
@@ -187,13 +192,10 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
   const [exportPanelOpen, setExportPanelOpen] = useState(false);
   // Blank = use the auto-generated name (shown as the input's placeholder).
   const [filenameDraft, setFilenameDraft] = useState("");
-  const [genrePanelOpen, setGenrePanelOpen] = useState(false);
   const throwPanelRef = useRef<HTMLDivElement>(null);
   const throwBtnRef = useRef<HTMLButtonElement>(null);
   const exportPanelRef = useRef<HTMLDivElement>(null);
   const exportBtnRef = useRef<HTMLButtonElement>(null);
-  const genrePanelRef = useRef<HTMLDivElement>(null);
-  const genreBtnRef = useRef<HTMLButtonElement>(null);
   /** Anchors the pending-take panel so it can't be pushed off-screen by the transport row. */
   const recGroupRef = useRef<HTMLDivElement>(null);
   const masterLoopLength = multiEngine.getMasterLoopLength() ?? 0;
@@ -203,7 +205,7 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
 
   // Close panels on outside click
   useEffect(() => {
-    if (!throwPanelOpen && !exportPanelOpen && !genrePanelOpen) return;
+    if (!throwPanelOpen && !exportPanelOpen) return;
     function handleClick(e: MouseEvent) {
       if (
         throwPanelRef.current && !throwPanelRef.current.contains(e.target as Node) &&
@@ -217,16 +219,10 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
       ) {
         setExportPanelOpen(false);
       }
-      if (
-        genrePanelRef.current && !genrePanelRef.current.contains(e.target as Node) &&
-        genreBtnRef.current && !genreBtnRef.current.contains(e.target as Node)
-      ) {
-        setGenrePanelOpen(false);
-      }
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
-  }, [throwPanelOpen, exportPanelOpen, genrePanelOpen]);
+  }, [throwPanelOpen, exportPanelOpen]);
 
   // Tick the elapsed readout while recording.
   useEffect(() => {
@@ -396,14 +392,21 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
             disabled={slotCount === 0 || recEncoding}
             title={recording ? "Stop and save recording" : "Record master output live"}
             className={cn(
-              "rounded-l px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition disabled:opacity-30",
-              recording
-                ? "bg-red-500/20 text-red-400 ring-1 ring-red-500/40 hover:bg-red-500/30"
-                : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted",
+              "rounded-l px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
+              // Encoding is a real wait on long takes; keep it fully opaque and clearly
+              // active rather than letting disabled:opacity-30 fade the only feedback out.
+              recEncoding
+                ? "bg-amber-500/20 text-amber-400 ring-1 ring-amber-500/40 opacity-100"
+                : recording
+                  ? "bg-red-500/20 text-red-400 ring-1 ring-red-500/40 hover:bg-red-500/30 disabled:opacity-30"
+                  : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted disabled:opacity-30",
             )}
           >
             {recEncoding ? (
-              "Saving…"
+              <span className="flex items-center gap-1.5">
+                <span className="h-3 w-3 animate-spin rounded-full border-2 border-amber-400/30 border-t-amber-400" />
+                Encoding…
+              </span>
             ) : recording ? (
               <span className="flex items-center gap-1.5">
                 <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
@@ -478,6 +481,44 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
           ⏮
         </button>
 
+        {/* Master speed — a relative multiplier over every slot's own speed. Scaling all
+            slots by the same ratio preserves the intervals between them, so key matching
+            survives; the whole set just transposes together. */}
+        {slotCount > 0 && (
+          <div className="flex shrink-0 items-center gap-2 rounded bg-muted/50 px-2.5 py-1">
+            <span className="text-[9px] font-bold uppercase tracking-widest text-foreground/30">
+              Master
+            </span>
+            <input
+              type="range"
+              min={0.5}
+              max={1.5}
+              step={0.01}
+              value={masterSettings.masterSpeed}
+              onChange={(e) => onMasterSpeedChange(Number(e.target.value))}
+              onDoubleClick={() => onMasterSpeedChange(1)}
+              title="Master speed — scales all slots together, preserving key relationships. Double-click to reset."
+              className="h-1 w-28 cursor-pointer appearance-none rounded-full bg-border accent-accent"
+            />
+            <span className="w-24 shrink-0 tabular-nums text-xs font-bold text-foreground/70">
+              {masterSettings.masterSpeed.toFixed(2)}×
+              <span className="ml-1 font-normal text-foreground/35">
+                {formatSemitoneShift(masterSettings.masterSpeed)}
+              </span>
+            </span>
+            {masterSettings.masterSpeed !== 1 && (
+              <button
+                type="button"
+                onClick={() => onMasterSpeedChange(1)}
+                title="Reset master speed to 1.00×"
+                className="rounded px-1 text-xs font-bold text-foreground/30 transition hover:text-accent"
+              >
+                ↺
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Throw character panel toggle */}
         {slotCount > 0 && (
           <button
@@ -493,24 +534,6 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
             title="Configure Throw character — delay time, feedback, spring reverb"
           >
             ↯ Throw
-          </button>
-        )}
-
-        {/* Genre panel toggle */}
-        {slotCount > 0 && (
-          <button
-            ref={genreBtnRef}
-            type="button"
-            onClick={() => setGenrePanelOpen((o) => !o)}
-            className={cn(
-              "shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
-              genrePanelOpen
-                ? "bg-purple-500/20 text-purple-400 ring-1 ring-purple-400/40"
-                : "bg-muted/80 text-foreground/50 hover:text-purple-400 hover:bg-muted",
-            )}
-            title="Apply genre preset or randomize effects"
-          >
-            ✦ Genre
           </button>
         )}
 
@@ -575,41 +598,6 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
             onDeletePreset={onDeleteThrowPreset}
             onApplyPreset={onApplyThrowPreset}
           />
-        </div>
-      )}
-
-      {/* Genre floating panel */}
-      {genrePanelOpen && (
-        <div
-          ref={genrePanelRef}
-          className="absolute left-0 top-full mt-1 z-50 w-64 rounded-md border border-purple-500/20 bg-zinc-900/95 shadow-xl backdrop-blur-sm ring-1 ring-border/30 p-4 flex flex-col gap-3"
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-semibold uppercase tracking-widest text-purple-400">Genre</span>
-            <button type="button" onClick={() => setGenrePanelOpen(false)}
-              className="text-foreground/30 hover:text-foreground/70 text-sm leading-none px-1">✕</button>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            {(["Dub", "Lo-fi", "Ambient", "Dry"] as const).map((genre) => (
-              <button
-                key={genre}
-                type="button"
-                onClick={() => { onApplyGenre(genre); setGenrePanelOpen(false); }}
-                className="rounded border border-border bg-muted/50 px-3 py-2 text-xs font-semibold text-foreground/60 transition hover:border-purple-400/40 hover:text-purple-300 hover:bg-purple-500/10"
-              >
-                {genre}
-              </button>
-            ))}
-          </div>
-          <div className="border-t border-border/30 pt-2">
-            <button
-              type="button"
-              onClick={() => { onRandomizeAll(); setGenrePanelOpen(false); }}
-              className="w-full rounded border border-border bg-muted/50 px-3 py-2 text-xs font-semibold text-foreground/60 transition hover:border-purple-400/40 hover:text-purple-300 hover:bg-purple-500/10"
-            >
-              ⚄ Randomize All
-            </button>
-          </div>
         </div>
       )}
 

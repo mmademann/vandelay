@@ -9,8 +9,11 @@ import { createMultiEffectsChain, applyMultiEffectsChain, type MultiEffectsChain
 import type { MultiSlot, MultiMasterSettings, ThrowSettings } from "../lib/multiSettings";
 import { DEFAULT_THROW_SETTINGS } from "../lib/multiSettings";
 
-function slotPlaybackRate(slot: MultiSlot): number {
-  return slot.linkPitch ? slot.speed : slot.speed * Math.pow(2, slot.pitch / 12);
+function slotPlaybackRate(slot: MultiSlot, masterSpeed = 1): number {
+  const base = slot.linkPitch ? slot.speed : slot.speed * Math.pow(2, slot.pitch / 12);
+  // Scaling every slot by the same factor shifts them all by the same interval, so the
+  // intervals between slots — the key matching — survive a master speed change untouched.
+  return slot.bypassMasterSpeed ? base : base * masterSpeed;
 }
 
 interface RuntimeSlot extends MultiSlot {
@@ -45,6 +48,7 @@ class MultiEngine {
   private masterSettings: MultiMasterSettings = {
     gain: 0,
     loopLengthOverride: null,
+    masterSpeed: 1,
     throwSettings: { ...DEFAULT_THROW_SETTINGS },
   };
   private running = false;
@@ -104,7 +108,7 @@ class MultiEngine {
     }
     let max: number | null = null;
     for (const slot of this.slots.values()) {
-      const len = (slot.loopEnd - slot.loopStart) / slotPlaybackRate(slot);
+      const len = (slot.loopEnd - slot.loopStart) / slotPlaybackRate(slot, this.masterSettings.masterSpeed);
       if (max === null || len > max) max = len;
     }
     return max;
@@ -167,7 +171,7 @@ class MultiEngine {
     player.loop = true;
     player.loopStart = safeLoopStart;
     player.loopEnd = safeLoopEnd;
-    player.playbackRate = slotPlaybackRate(slot);
+    player.playbackRate = slotPlaybackRate(slot, this.masterSettings.masterSpeed);
 
     applyMultiEffectsChain(chain, slot.effects);
     springWet.gain.value = slot.effects.bigKnobWet ?? 0;
@@ -246,11 +250,11 @@ class MultiEngine {
     if (patch.pitch !== undefined || patch.speed !== undefined || patch.linkPitch !== undefined) {
       if (slot.playing) {
         const pos = this.getSlotPosition(id);
-        slot.player.playbackRate = slotPlaybackRate(slot);
+        slot.player.playbackRate = slotPlaybackRate(slot, this.masterSettings.masterSpeed);
         slot.startOffset = pos;
         slot.startedAt = Tone.now();
       } else {
-        slot.player.playbackRate = slotPlaybackRate(slot);
+        slot.player.playbackRate = slotPlaybackRate(slot, this.masterSettings.masterSpeed);
       }
     }
     if (patch.loopStart !== undefined || patch.loopEnd !== undefined) {
@@ -280,7 +284,7 @@ class MultiEngine {
     const slot = this.slots.get(id);
     if (!slot) return 0;
     if (!slot.playing) return slot.startOffset;
-    const elapsed = Math.max(0, Tone.now() - slot.startedAt) * slotPlaybackRate(slot);
+    const elapsed = Math.max(0, Tone.now() - slot.startedAt) * slotPlaybackRate(slot, this.masterSettings.masterSpeed);
     const loopDur = slot.loopEnd - slot.loopStart;
     if (loopDur <= 0) return slot.startOffset;
     const clampedOffset = Math.max(slot.loopStart, Math.min(slot.loopEnd, slot.startOffset));
@@ -432,9 +436,43 @@ class MultiEngine {
   }
 
   setMasterSettings(s: MultiMasterSettings): void {
+    const prevSpeed = this.masterSettings.masterSpeed;
+    const speedChanged = s.masterSpeed !== prevSpeed;
+    // Positions must be read at the OLD rate — getSlotPosition scales elapsed time by the
+    // current rate, so sampling after the swap reinterprets past time and the playhead jumps.
+    const frozen = speedChanged
+      ? new Map(
+          Array.from(this.slots.values())
+            .filter((slot) => slot.playing && !slot.bypassMasterSpeed)
+            .map((slot) => [slot.id, this.getSlotPosition(slot.id)]),
+        )
+      : null;
+
     this.masterSettings = s;
     if (this.master) {
       this.master.volume.value = s.gain;
+    }
+    if (speedChanged) this.applyMasterSpeed(frozen!);
+  }
+
+  /**
+   * Re-rate every non-bypassed slot. Position must be re-anchored first: getSlotPosition
+   * derives position from (now - startedAt) * rate, so changing rate without resetting the
+   * anchor reinterprets all previously-elapsed time at the new rate and the playhead jumps.
+   */
+  private applyMasterSpeed(frozen: Map<string, number>): void {
+    const now = Tone.now();
+    for (const slot of this.slots.values()) {
+      if (slot.bypassMasterSpeed) continue;
+      const pos = frozen.get(slot.id);
+      if (slot.playing && pos !== undefined) {
+        // Resume from where it actually was, with the clock restarted at the new rate.
+        slot.startOffset = pos;
+        slot.startedAt = now;
+      }
+      // Player.playbackRate is a plain setter, not a ramping Param, so this is a step
+      // change. Fine for dial drags; the re-anchor above is what keeps it from glitching.
+      slot.player.playbackRate = slotPlaybackRate(slot, this.masterSettings.masterSpeed);
     }
   }
 

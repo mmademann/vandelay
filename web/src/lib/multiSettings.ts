@@ -17,6 +17,8 @@ export interface MultiSlot {
   loopEnd: number;
   isMatched?: boolean;
   matchedBasePitch?: number;
+  /** Slot ignores the master speed dial — for drums held at original tempo under a slowed bed. */
+  bypassMasterSpeed?: boolean;
 }
 
 // Per-slot saved settings (keyed by slot UUID)
@@ -32,6 +34,7 @@ export interface MultiSlotSavedSettings {
   isMatched?: boolean;
   matchedBasePitch?: number;
   pitchInterval?: 1 | 7 | 12;
+  bypassMasterSpeed?: boolean;
 }
 
 const SLOT_SETTINGS_KEY = "vandelay:multi:slot-settings:v1";
@@ -129,6 +132,23 @@ export function saveThrowSettings(s: ThrowSettings): void {
   try { localStorage.setItem(THROW_SETTINGS_KEY, JSON.stringify(s)); } catch {}
 }
 
+// Master speed — persisted like throw settings so it survives outside a named session
+const MASTER_SPEED_KEY = "vandelay:multi:master-speed:v1";
+
+export function loadMasterSpeed(): number {
+  try {
+    const raw = localStorage.getItem(MASTER_SPEED_KEY);
+    if (!raw) return 1;
+    const n = Number(JSON.parse(raw));
+    // A NaN or absurd rate would silence every slot, so fall back to unity.
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  } catch { return 1; }
+}
+
+export function saveMasterSpeed(v: number): void {
+  try { localStorage.setItem(MASTER_SPEED_KEY, JSON.stringify(v)); } catch {}
+}
+
 // Throw presets
 export interface ThrowPreset {
   name: string;
@@ -181,6 +201,12 @@ export interface MultiMasterSettings {
   gain: number;
   loopLengthOverride: number | null;
   throwSettings: ThrowSettings;
+  /**
+   * Relative multiplier over every slot's own speed. Because it scales all slots by the
+   * same ratio, the intervals between them are preserved — the whole set transposes
+   * together and stays in key sync. Slots with bypassMasterSpeed opt out.
+   */
+  masterSpeed: number;
 }
 
 export interface MultiSession {
@@ -204,6 +230,7 @@ export function loadNamedSessions(): MultiSession[] {
         ...s,
         masterSettings: {
           ...s.masterSettings,
+          masterSpeed: s.masterSettings?.masterSpeed ?? 1,
           throwSettings: { ...DEFAULT_THROW_SETTINGS, ...s.masterSettings?.throwSettings },
         },
       }));
