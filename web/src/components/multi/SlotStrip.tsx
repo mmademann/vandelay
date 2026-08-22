@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { cn } from "../../lib/cn";
+import { snapLoop, estimateBpm } from "../../lib/loopSnap";
 import { multiEngine } from "../../audio/multiEngine";
 import type { MultiSlot } from "../../lib/multiSettings";
 import { Knob } from "./Knob";
@@ -301,11 +302,13 @@ interface Props {
   onMatch: () => void;
   onSavePreset: (name: string, preset: Omit<MultiPreset, "name">) => void;
   masterSpeed: number;
+  /** Detected tempo for this stem, if analysis produced one. Drives Snap Loop. */
+  detectedBpm: number | undefined;
   onDeletePreset: (name: string) => void;
   onApplyPreset: (preset: MultiPreset) => void;
 }
 
-export function SlotStrip({ slot, title, buffer, presets, masterSpeed, isReference, hasReference, isMatched, matchedBasePitch, pitchInterval, onPitchIntervalChange, onRemove, onChange, onSetReference, onMatch, onSavePreset, onDeletePreset, onApplyPreset }: Props) {
+export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedBpm, isReference, hasReference, isMatched, matchedBasePitch, pitchInterval, onPitchIntervalChange, onRemove, onChange, onSetReference, onMatch, onSavePreset, onDeletePreset, onApplyPreset }: Props) {
   const [presetName, setPresetName] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
   const [throwActive, setThrowActive] = useState(false);
@@ -401,6 +404,64 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, isReferen
 
   // A bypassed slot is unaffected by master, so its readout stays plain.
   const effectiveMasterSpeed = slot.bypassMasterSpeed ? 1 : masterSpeed;
+  /** What the last snap did. Persists so the loop's bar count stays readable, and is
+      cleared when the loop moves — a stale "2 bars" over a dragged region would lie.
+      `detail` is the full explanation, surfaced on hover so the inline note stays short. */
+  const [snapNote, setSnapNote] = useState<{ text: string; detail: string; ok: boolean } | null>(null);
+  /** Loop bounds the note was computed for, so an unrelated re-render doesn't clear it. */
+  const snapBoundsRef = useRef<{ start: number; end: number } | null>(null);
+
+  useEffect(() => {
+    const b = snapBoundsRef.current;
+    if (!b) return;
+    // Sub-ms tolerance: the note is only invalidated by a real edit, not float noise.
+    if (Math.abs(slot.loopStart - b.start) > 1e-4 || Math.abs(slot.loopEnd - b.end) > 1e-4) {
+      snapBoundsRef.current = null;
+      setSnapNote(null);
+    }
+  }, [slot.loopStart, slot.loopEnd]);
+
+  function handleSnapLoop() {
+    if (!buffer) return;
+    // Fall back to measuring the buffer directly. Essentia's cached BPM is often missing
+    // — unpitched stems used to fail key detection and lose their tempo with it — and the
+    // snap is useless without one, so don't depend on the cache being populated.
+    const bpm = detectedBpm ?? estimateBpm(buffer);
+    const r = snapLoop(buffer, slot.loopStart, slot.loopEnd, bpm);
+    update({ loopStart: r.loopStart, loopEnd: r.loopEnd });
+    // Remember what the note describes; the effect above clears it if the loop moves off this.
+    snapBoundsRef.current = { start: r.loopStart, end: r.loopEnd };
+
+    if (r.mode === "grid") {
+      // Sub-bar regions round to beats; reporting those as a fraction of a bar
+      // ("0.25 bars") reads as a bug rather than as one beat.
+      const n = r.bars ?? r.beats!;
+      const unit = r.bars !== undefined ? "bar" : "beat";
+      const plural = `${n} ${unit}${n === 1 ? "" : "s"}`;
+      setSnapNote({
+        text: `${plural} · ${Math.round(bpm!)} bpm`,
+        detail: `Loop is now exactly ${plural} at ${Math.round(bpm!)} bpm, with both ends on zero crossings.`,
+        ok: true,
+      });
+      return;
+    }
+
+    // Every fallback still de-clicked the loop; say what was skipped and why.
+    const detail = {
+      "no-tempo":
+        "No steady tempo found in this audio, so the loop length was left as you set it. Ends were aligned to zero crossings to remove clicks — the loop may still drift against the beat.",
+      "no-room":
+        "Not enough audio after the loop start to fit a whole bar. Move the start earlier, then snap again. Ends were aligned to zero crossings.",
+      "too-short":
+        "Loop region is shorter than half a beat, so there is no bar or beat to round to. Ends were aligned to zero crossings.",
+    }[r.reason ?? "no-tempo"];
+
+    const label = { "no-tempo": "no tempo", "no-room": "no room", "too-short": "too short" }[
+      r.reason ?? "no-tempo"
+    ];
+
+    setSnapNote({ text: `${label} · de-clicked`, detail, ok: false });
+  }
 
   function handleSavePreset(e: React.FormEvent) {
     e.preventDefault();
@@ -512,6 +573,26 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, isReferen
             title="Screw — 75% speed (linked pitch) + reverb">
             ☾ Screw
           </button>
+          <button type="button" onClick={handleSnapLoop} disabled={!buffer}
+            className={cn("rounded px-2 py-1 text-xs font-bold uppercase tracking-wide transition",
+              "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted",
+              !buffer && "opacity-30 cursor-not-allowed")}
+            title={detectedBpm
+              ? `Snap loop to whole bars at ${Math.round(detectedBpm)} BPM, then to zero crossings`
+              : "Snap loop to whole bars (tempo measured from the audio), then to zero crossings"}>
+            ⇥ Snap
+          </button>
+          {snapNote && (
+            <span
+              title={snapNote.detail}
+              className={cn(
+                "cursor-help self-center text-[9px] uppercase tracking-wide",
+                snapNote.ok ? "text-accent/70" : "text-amber-400/80",
+              )}
+            >
+              {snapNote.text}
+            </span>
+          )}
           {/* One control for the whole anchor/match cycle. Label and action follow state:
               no anchor anywhere -> pin this slot; anchor elsewhere -> match to it;
               already matched -> re-match (it can drift when speed/pitch are nudged). */}

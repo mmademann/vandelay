@@ -32,7 +32,6 @@ import {
 import { getAllTrackMeta, getTrackMeta, putTrackMeta } from "../lib/trackMetaCache";
 import { analyzeAudio, rootSemitone, preloadEssentia } from "../lib/audioAnalysis";
 import { computeAutoGain, computeStemViability } from "../lib/autoGain";
-import { type StemRole } from "../lib/vibePresets";
 import { buildRandomSlots } from "../lib/randomCombinator";
 import { SlotStrip } from "../components/multi/SlotStrip";
 import { SlotPicker } from "../components/multi/SlotPicker";
@@ -401,10 +400,16 @@ export function MultiPage() {
 
         let detectedKey: string | null | undefined;
         let detectedBpm: number | undefined;
-        if (cachedMeta && cachedMeta.detectedKey !== undefined) {
+        const stemAnalysis = cachedMeta?.stemAnalysis?.[stemRole];
+        if (stemAnalysis) {
+          detectedKey = stemAnalysis.key;
+          detectedBpm = stemAnalysis.bpm;
+          console.log(`[multi] ${label} key cache: HIT (${detectedKey ?? "null"})`);
+        } else if (stemRole === "full" && cachedMeta && cachedMeta.detectedKey !== undefined) {
+          // Legacy records predate per-stem storage; only trustworthy for the full track.
           detectedKey = cachedMeta.detectedKey;
           detectedBpm = cachedMeta.detectedBpm;
-          console.log(`[multi] ${label} key cache: HIT (${detectedKey ?? "null"})`);
+          console.log(`[multi] ${label} key cache: HIT legacy (${detectedKey ?? "null"})`);
         } else {
           console.log(`[multi] ${label} key cache: MISS — Essentia will run in background`);
         }
@@ -426,7 +431,6 @@ export function MultiPage() {
             loopEnd: Math.min(dur, pendingSlot.loopEnd > 0 ? pendingSlot.loopEnd : dur),
           };
         } else {
-          const stemRole: StemRole = slot.stemName ?? "full";
           finalSlot = {
             ...slot,
             loopStart: saved ? Math.max(0, saved.loopStartFrac * dur) : 0,
@@ -474,8 +478,17 @@ export function MultiPage() {
           isMatched: pendingSlot?.isMatched, matchedBasePitch: pendingSlot?.matchedBasePitch,
         });
 
-        // Background key detection — only if not already cached
-        if (cachedMeta?.detectedKey === undefined) {
+        // Background analysis — only if this stem has no cached result at all. Keyed on the
+        // record's presence, not on detectedKey: unpitched stems cache a null key with a
+        // valid BPM, and gating on the key alone would re-analyse them on every load.
+        // A record written before key/tempo were decoupled can hold a key with no BPM (or
+        // neither). Treat a missing BPM as incomplete so those heal on load instead of
+        // staying stale forever behind a cache HIT.
+        const analysisCached = stemAnalysis !== undefined
+          ? stemAnalysis.bpm !== undefined
+          : stemRole === "full" && cachedMeta?.detectedKey !== undefined
+            && cachedMeta?.detectedBpm !== undefined;
+        if (!analysisCached) {
           (async () => {
             try {
               console.time(`[multi] ${label} essentia`);
@@ -486,10 +499,15 @@ export function MultiPage() {
               const key = result?.key ?? null;
               const bpm = result?.bpm;
               const metaTitle = libraryRef.current.find((e) => e.id === slot.trackId)?.title ?? slot.trackId;
+              // Re-read: several stems of one track analyse concurrently and each would
+              // otherwise write a stale copy of the record, dropping the others' results.
+              const fresh = (await getTrackMeta(slot.trackId)) ?? cachedMeta;
               await putTrackMeta({
-                ...(cachedMeta ?? { id: slot.trackId, title: metaTitle, duration: dur, addedAt: Date.now() }),
-                detectedKey: key,
-                detectedBpm: bpm,
+                ...(fresh ?? { id: slot.trackId, title: metaTitle, duration: dur, addedAt: Date.now() }),
+                stemAnalysis: {
+                  ...(fresh?.stemAnalysis ?? {}),
+                  [stemRole]: { key, bpm },
+                },
               });
               if (cancelled) return;
 
@@ -1076,6 +1094,7 @@ export function MultiPage() {
               onSetReference={() => handleSetReference(entry.slot.id)}
               onMatch={() => matchSlotToReference(entry.slot.id)}
               masterSpeed={masterSettings.masterSpeed}
+              detectedBpm={entry.detectedBpm}
               onSavePreset={handleSavePreset}
               onDeletePreset={handleDeletePreset}
               onApplyPreset={(preset) => handleApplyPreset(entry.slot.id, preset)}

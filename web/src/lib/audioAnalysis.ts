@@ -37,7 +37,7 @@ export async function preloadEssentia(): Promise<void> {
   getWorker();
 }
 
-export async function analyzeAudio(buffer: AudioBuffer): Promise<{ key: string; bpm: number } | null> {
+export async function analyzeAudio(buffer: AudioBuffer): Promise<{ key: string | null; bpm: number | undefined } | null> {
   const id = crypto.randomUUID();
   const w = getWorker();
 
@@ -50,12 +50,14 @@ export async function analyzeAudio(buffer: AudioBuffer): Promise<{ key: string; 
     transferList.push(ch.buffer);
   }
 
-  return new Promise<{ key: string; bpm: number } | null>((resolve) => {
+  return new Promise<{ key: string | null; bpm: number | undefined } | null>((resolve) => {
     pending.set(id, (result) => {
-      if (!result.key) {
+      // A null key no longer discards the result: unpitched material (drums) legitimately
+      // has no key but still has a tempo, which the loop snapper needs.
+      if (!result.key && result.bpm === undefined) {
         resolve(null);
       } else {
-        resolve({ key: result.key, bpm: result.bpm ?? 0 });
+        resolve({ key: result.key, bpm: result.bpm });
       }
     });
     w.postMessage({ id, channelData, sampleRate: buffer.sampleRate }, transferList);

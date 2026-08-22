@@ -8,6 +8,12 @@ export interface CachedTrackMeta {
   detectedKey?: string | null;  // undefined = not run; null = ran, failed/low-confidence; string = success
   detectedBpm?: number;
   stemViability?: Record<string, boolean>; // key = stemName | "full"; undefined = not yet checked
+  /**
+   * Per-stem analysis, keyed like stemViability (stemName | "full"). The flat detectedKey/
+   * detectedBpm above are whole-track only: every stem of a track shares one record, so
+   * writing them per stem let drums overwrite vocals. Those two are kept for older records.
+   */
+  stemAnalysis?: Record<string, { key: string | null; bpm?: number }>;
 }
 
 export async function putTrackMeta(meta: CachedTrackMeta): Promise<void> {

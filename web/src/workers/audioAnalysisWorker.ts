@@ -63,15 +63,27 @@ self.onmessage = async (e: MessageEvent<AnalysisRequest>) => {
         true, 4096, 4096, 12, 3500, 60, 25, 0.2, 'bgate',
         sampleRate,
       );
-      if (keyResult.strength < 0.2) {
-        self.postMessage({ id, key: null, bpm: undefined } satisfies AnalysisResponse);
-        return;
+
+      // Key and tempo are independent. Drums are unpitched, so key detection is expected
+      // to fail on them — bailing out here also threw away the BPM, which is the one
+      // thing rhythm extraction gets right on a drum stem.
+      let key: string | null = null;
+      if (keyResult.strength >= 0.2) {
+        const keySuffix = keyResult.strength < 0.5 ? '?' : '';
+        key = `${keyResult.key} ${keyResult.scale}${keySuffix}`;
       }
 
-      const keySuffix = keyResult.strength < 0.5 ? '?' : '';
-      const key = `${keyResult.key} ${keyResult.scale}${keySuffix}`;
-      const bpmResult = essentia.RhythmExtractor2013(vector);
-      self.postMessage({ id, key, bpm: Math.round(bpmResult.bpm) } satisfies AnalysisResponse);
+      let bpm: number | undefined;
+      try {
+        const bpmResult = essentia.RhythmExtractor2013(vector);
+        // Guard the range: Essentia returns 0 when it finds no pulse at all.
+        const v = Math.round(bpmResult.bpm);
+        if (Number.isFinite(v) && v >= 40 && v <= 250) bpm = v;
+      } catch {
+        /* rhythm extraction failed — key may still be usable */
+      }
+
+      self.postMessage({ id, key, bpm } satisfies AnalysisResponse);
     } finally {
       vector.delete();
     }
