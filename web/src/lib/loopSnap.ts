@@ -251,18 +251,21 @@ export function quantizeToGrid(
  * land on the grid every time.
  */
 export const DELAY_DIVISIONS: { label: string; beats: number }[] = [
+  // Suffixes are spelled out rather than using the usual "." for dotted and "T" for
+  // triplet: at this size a trailing dot is invisible, so "1/16" and "1/16." looked like
+  // the same value listed twice.
   { label: "1/32", beats: 0.125 },
   { label: "1/16", beats: 0.25 },
-  { label: "1/8T", beats: 1 / 3 },
-  { label: "1/16.", beats: 0.375 },
+  { label: "1/8 trip", beats: 1 / 3 },
+  { label: "1/16 dot", beats: 0.375 },
   { label: "1/8", beats: 0.5 },
-  { label: "1/4T", beats: 2 / 3 },
-  { label: "1/8.", beats: 0.75 },
+  { label: "1/4 trip", beats: 2 / 3 },
+  { label: "1/8 dot", beats: 0.75 },
   { label: "1/4", beats: 1 },
-  { label: "1/2T", beats: 4 / 3 },
-  { label: "1/4.", beats: 1.5 },
+  { label: "1/2 trip", beats: 4 / 3 },
+  { label: "1/4 dot", beats: 1.5 },
   { label: "1/2", beats: 2 },
-  { label: "1/2.", beats: 3 },
+  { label: "1/2 dot", beats: 3 },
   { label: "1 bar", beats: 4 },
   { label: "2 bars", beats: 8 },
 ];
@@ -294,4 +297,98 @@ export function snapDelayToTempo(
     }
   }
   return best;
+}
+
+/**
+ * Phase offsets, as a fraction of a bar.
+ *
+ * Shifting a slot by one of these makes it land between the anchor's beats rather than on
+ * top of them — the offbeat and shuffle feels. Thirds are included because triplet phases
+ * are what give a dubby, swung placement that eighths alone cannot reach.
+ */
+export const PHASE_DIVISIONS: { label: string; fraction: number }[] = [
+  // Written as "1/8" rather than "⅛": most fonts draw the single-glyph fractions at about
+  // half height, so they stay illegible at any size that fits a knob row.
+  { label: "0", fraction: 0 },
+  { label: "1/8", fraction: 1 / 8 },
+  { label: "1/4", fraction: 1 / 4 },
+  { label: "1/3", fraction: 1 / 3 },
+  { label: "3/8", fraction: 3 / 8 },
+  { label: "1/2", fraction: 1 / 2 },
+  { label: "2/3", fraction: 2 / 3 },
+  { label: "3/4", fraction: 3 / 4 },
+];
+
+/**
+ * Rotate a loop's start point forward by `fraction` of a bar, wrapping inside the loop.
+ *
+ * Rotation rather than delay: the loop keeps its length and its place on the grid, so it
+ * stays locked to everything else — only which part of the audio lands on the downbeat
+ * changes. Delaying the start instead would push the loop end off the grid and drift.
+ *
+ * Returns the same loop unchanged when there is no tempo, no offset, or no room, so the
+ * caller never has to special-case those.
+ */
+export function phaseShiftLoop(
+  loopStart: number,
+  loopEnd: number,
+  bufferDuration: number,
+  bpm: number | undefined,
+  fraction: number,
+  opts: { beatsPerBar?: number } = {},
+): { loopStart: number; loopEnd: number } {
+  const loopDur = loopEnd - loopStart;
+  if (!bpm || !Number.isFinite(bpm) || bpm <= 0) return { loopStart, loopEnd };
+  if (!Number.isFinite(fraction) || Math.abs(fraction) < 1e-9) return { loopStart, loopEnd };
+  if (loopDur <= 0) return { loopStart, loopEnd };
+
+  const barSec = (60 / bpm) * (opts.beatsPerBar ?? 4);
+  // Offsets beyond one loop are equivalent to their remainder, and a positive modulo keeps
+  // a negative fraction from producing a start before the buffer.
+  const offset = (((fraction * barSec) % loopDur) + loopDur) % loopDur;
+
+  const newStart = loopStart + offset;
+  const newEnd = newStart + loopDur;
+  // Past the end of the audio there is nothing to rotate into, so leave it alone rather
+  // than silently truncating the loop.
+  if (newEnd > bufferDuration) return { loopStart, loopEnd };
+  return { loopStart: newStart, loopEnd: newEnd };
+}
+
+/**
+ * Move to the neighbouring delay division.
+ *
+ * A fixed seconds-per-press step cannot work here: the gaps between divisions are uneven
+ * (1/8→1/4 is far wider than 1/16→1/8), so any single step is either too small to escape
+ * the current division — the snap pulls it straight back and the key looks dead — or large
+ * enough to skip past several. Stepping by index sidesteps that entirely.
+ *
+ * Returns 0 when stepping below the smallest division, so the delay can be switched off.
+ */
+export function stepDelayDivision(
+  seconds: number,
+  bpm: number | undefined,
+  dir: 1 | -1,
+  maxSeconds: number,
+): number | null {
+  if (!bpm || !Number.isFinite(bpm) || bpm <= 0) return null;
+  const beatSec = 60 / bpm;
+  const usable = DELAY_DIVISIONS.filter((d) => d.beats * beatSec <= maxSeconds);
+  if (usable.length === 0) return null;
+
+  // Index of the division the current value sits on, by nearest match.
+  let idx = -1;
+  let bestErr = Infinity;
+  usable.forEach((d, i) => {
+    const err = Math.abs(d.beats * beatSec - seconds);
+    if (err < bestErr) { bestErr = err; idx = i; }
+  });
+
+  // At or below zero, stepping up enters at the smallest division.
+  if (seconds < 0.001) return dir > 0 ? usable[0].beats * beatSec : 0;
+
+  const next = idx + dir;
+  if (next < 0) return 0;                       // below the smallest division = off
+  if (next >= usable.length) return usable[usable.length - 1].beats * beatSec;
+  return usable[next].beats * beatSec;
 }

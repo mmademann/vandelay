@@ -7,7 +7,7 @@ const SWEEP = 270;
 const toRad = (deg: number) => (deg * Math.PI) / 180;
 
 export function Knob({
-  label, value, min, max, step, defaultValue, displayValue, disabled, onChange, onCommit, size = 48,
+  label, value, min, max, step, defaultValue, displayValue, disabled, onChange, onCommit, onStep, size = 48,
 }: {
   label: string; value: number; min: number; max: number; step: number;
   defaultValue: number; displayValue: string; disabled?: boolean; onChange: (v: number) => void;
@@ -18,6 +18,13 @@ export function Knob({
    * drives the audio.
    */
   onCommit?: (v: number) => void;
+  /**
+   * Overrides arrow-key stepping. For knobs whose useful values are an uneven scale (the
+   * tempo-synced delay divisions), a fixed `step` is either too small to leave the current
+   * value or big enough to skip several — this lets the owner move by one meaningful
+   * increment instead. Return null to fall back to the normal step.
+   */
+  onStep?: (current: number, dir: 1 | -1) => number | null;
   size?: number;
 }) {
   const R = (size - STROKE) / 2 - 1;
@@ -55,13 +62,14 @@ export function Knob({
       else if (e.key === "ArrowDown" || e.key === "ArrowLeft") dir = -1;
       else return;
       e.preventDefault(); // stop the page from scrolling
-      const next = clampStep(value + dir * step * (e.shiftKey ? 10 : 1));
+      const stepped = onStep?.(value, dir as 1 | -1);
+      const next = stepped ?? clampStep(value + dir * step * (e.shiftKey ? 10 : 1));
       onChange(next);
       onCommit?.(next);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [hovered, disabled, value, step, min, max, onChange, onCommit]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [hovered, disabled, value, step, min, max, onChange, onCommit, onStep]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const indicatorLen = R - 4;
   const indX2 = cx + indicatorLen * Math.cos(toRad(angle));

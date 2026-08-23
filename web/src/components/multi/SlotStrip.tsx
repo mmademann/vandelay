@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { cn } from "../../lib/cn";
-import { snapLoop, estimateBpm, snapDelayToTempo } from "../../lib/loopSnap";
+import { snapLoop, estimateBpm, snapDelayToTempo, stepDelayDivision, PHASE_DIVISIONS } from "../../lib/loopSnap";
 import { multiEngine } from "../../audio/multiEngine";
 import type { MultiSlot } from "../../lib/multiSettings";
 import { Knob } from "./Knob";
@@ -389,6 +389,10 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
       // saveSlotSettings replaces the whole record; without this every knob turn would
       // wipe the slot's stretch and it would load unstretched after a refresh.
       stretch,
+      phase: merged.phase,
+      // Stored as fractions so a later stretch does not invalidate them.
+      phaseBaseStartFrac: merged.phaseBaseStart !== undefined ? merged.phaseBaseStart / dur : undefined,
+      phaseBaseEndFrac: merged.phaseBaseEnd !== undefined ? merged.phaseBaseEnd / dur : undefined,
     });
   }
 
@@ -441,6 +445,39 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
     ? snapDelayToTempo(slot.effects.delayTime, delayBpm, EFFECTS_LIMITS.delayTime.max)
     : null;
 
+  /**
+   * Move this slot's loop to a new phase against the anchor's bar.
+   *
+   * Always computed from the un-phased base loop rather than the current one, so switching
+   * ⅛ → ¼ → ½ lands where each says instead of accumulating three offsets.
+   */
+  function applyPhase(next: number) {
+    if (!buffer || !delayBpm) return;
+    // Base is the loop as it stands the first time phase is used; every phase is computed
+    // from it. Nudging the live loop by a delta instead is not reversible when the bar and
+    // loop lengths do not divide evenly — the loop walks across the buffer and cannot get
+    // back to where it started.
+    const baseStart = slot.phaseBaseStart ?? slot.loopStart;
+    const baseEnd = slot.phaseBaseEnd ?? slot.loopEnd;
+    const loopDur = baseEnd - baseStart;
+    if (loopDur <= 0) return;
+
+    const barSec = (60 / delayBpm) * 4;
+    const offset = (((next * barSec) % loopDur) + loopDur) % loopDur;
+    let start = baseStart + offset;
+    // Past the end of the audio, the same musical position exists one loop earlier.
+    if (start + loopDur > buffer.duration) start -= loopDur;
+    if (start < 0) return;
+
+    update({
+      loopStart: start,
+      loopEnd: start + loopDur,
+      phase: next,
+      phaseBaseStart: baseStart,
+      phaseBaseEnd: baseEnd,
+    });
+  }
+
   const [pendingStretch, setPendingStretch] = useState<number | null>(null);
   // Drop the pending value once the prop catches up, so external changes (Match Tempos,
   // session load) are not masked by a stale drag position.
@@ -472,7 +509,8 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
     // "snapped" and still drift apart. Falls back to this slot's own tempo with no anchor.
     const bpm = anchorBpm ?? detectedBpm ?? estimateBpm(buffer);
     const r = snapLoop(buffer, slot.loopStart, slot.loopEnd, bpm);
-    update({ loopStart: r.loopStart, loopEnd: r.loopEnd });
+    // Snapping also redefines the un-phased loop.
+    update({ loopStart: r.loopStart, loopEnd: r.loopEnd, phase: 0, phaseBaseStart: undefined, phaseBaseEnd: undefined });
     // Remember what the note describes; the effect above clears it if the loop moves off this.
     snapBoundsRef.current = { start: r.loopStart, end: r.loopEnd };
 
@@ -778,7 +816,10 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
             loopEnd={slot.loopEnd}
             seekRevision={seekRevision}
             getPosition={() => multiEngine.getSlotPosition(slot.id)}
-            onLoopChange={(start, end) => update({ loopStart: start, loopEnd: end })}
+            onLoopChange={(start, end) =>
+              // A manual drag redefines the un-phased loop, so clear the stored base and
+              // phase — otherwise the next phase click would rotate around a stale base.
+              update({ loopStart: start, loopEnd: end, phase: 0, phaseBaseStart: undefined, phaseBaseEnd: undefined })}
             onSeek={(time) => { multiEngine.seekSlot(slot.id, time); setSeekRevision(multiEngine.getSeekNonce(slot.id)); }}
           />
           <div className="pointer-events-none absolute bottom-1 left-1.5 flex gap-1.5 text-[9px] font-mono tabular-nums text-white/40">
@@ -795,9 +836,16 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
 
       {/* Knobs */}
       <div className="flex flex-wrap gap-x-3 gap-y-2 border-t border-border/50 pt-2">
-        <Knob label="Gain" value={slot.gain} min={-60} max={6} step={0.5} defaultValue={0} size={40}
-          displayValue={slot.gain <= -60 ? "−∞" : `${slot.gain > 0 ? "+" : ""}${slot.gain.toFixed(1)}dB`}
-          onChange={(v) => update({ gain: v })} />
+        <div className="flex flex-col items-center gap-0.5">
+          <Knob label="Pitch" value={slot.pitch} min={-24} max={24} step={1} defaultValue={0} size={40}
+            displayValue={`${slot.pitch > 0 ? "+" : ""}${slot.pitch}st`} disabled={slot.linkPitch}
+            onChange={(v) => update({ pitch: v })} />
+          <button type="button" onClick={() => update({ linkPitch: !slot.linkPitch })}
+            className={cn("rounded px-2 py-0.5 text-[9px] uppercase tracking-wide font-semibold transition",
+              slot.linkPitch ? "bg-accent/25 text-accent" : "bg-muted text-foreground/30 hover:text-foreground/60")}>
+            Link
+          </button>
+        </div>
         <div className="flex flex-col items-center gap-0.5">
           {/* The knob sets this slot's own speed; master multiplies it. When master is
               engaged the readout shows the rate actually playing, with the base beneath. */}
@@ -852,23 +900,67 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
             <span className="text-[8px] uppercase tracking-wide text-foreground/25">2× click resets</span>
           ) : null}
         </div>
-        <div className="flex flex-col items-center gap-0.5">
-          <Knob label="Pitch" value={slot.pitch} min={-24} max={24} step={1} defaultValue={0} size={40}
-            displayValue={`${slot.pitch > 0 ? "+" : ""}${slot.pitch}st`} disabled={slot.linkPitch}
-            onChange={(v) => update({ pitch: v })} />
-          <button type="button" onClick={() => update({ linkPitch: !slot.linkPitch })}
-            className={cn("rounded px-2 py-0.5 text-[9px] uppercase tracking-wide font-semibold transition",
-              slot.linkPitch ? "bg-accent/25 text-accent" : "bg-muted text-foreground/30 hover:text-foreground/60")}>
-            Link
-          </button>
+
+        {/* Phase — where this slot's loop lands against the anchor's bar. Rotates the loop
+            start, so length and grid alignment are unchanged; only the part of the audio on
+            the downbeat moves. Needs a tempo to define a bar. */}
+        <div className="flex flex-col items-center justify-center gap-1">
+          <span className="text-[11px] uppercase tracking-wide text-foreground/45 leading-none">Phase</span>
+          <div className="grid grid-cols-4 gap-1">
+            {PHASE_DIVISIONS.map((d) => {
+              const active = Math.abs((slot.phase ?? 0) - d.fraction) < 1e-6;
+              return (
+                <button
+                  key={d.label}
+                  type="button"
+                  disabled={!buffer || !delayBpm}
+                  onClick={() => applyPhase(d.fraction)}
+                  title={
+                    !delayBpm
+                      ? "Needs a tempo — set a tempo anchor, or let this slot's BPM be detected"
+                      : d.fraction === 0
+                        ? "On the beat with the anchor"
+                        : `Shift this loop ${d.label} of a bar later against the anchor`
+                  }
+                  className={cn(
+                    // Fixed 4-column grid so the eight values read as two tidy rows rather
+                    // than wrapping unpredictably at different zoom levels.
+                    "rounded px-1 py-1 text-[12px] font-semibold leading-none transition tabular-nums",
+                    !buffer || !delayBpm
+                      ? "text-foreground/15 cursor-not-allowed"
+                      : active
+                        ? "bg-accent/25 text-accent"
+                        : "text-foreground/50 hover:text-foreground/90 hover:bg-muted/60",
+                  )}
+                >
+                  {d.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
+      </div>
+
+      {/* Second row: level, tone and space. Split from the timing controls above so the two
+          kinds of adjustment stay visually distinct — placement first, character second. */}
+      <div className="flex flex-wrap gap-x-3 gap-y-2 pt-1">
+        <Knob label="Gain" value={slot.gain} min={-60} max={6} step={0.5} defaultValue={0} size={40}
+          displayValue={slot.gain <= -60 ? "−∞" : `${slot.gain > 0 ? "+" : ""}${slot.gain.toFixed(1)}dB`}
+          onChange={(v) => update({ gain: v })} />
         <Knob label="Reverb" value={slot.effects.reverbWet} min={EFFECTS_LIMITS.reverbWet.min} max={EFFECTS_LIMITS.reverbWet.max} step={0.01} defaultValue={0} size={40}
           displayValue={`${Math.round(slot.effects.reverbWet * 100)}%`} onChange={(v) => updateEffect({ reverbWet: v })} />
         <Knob label="Decay" value={slot.effects.reverbDecay} min={EFFECTS_LIMITS.reverbDecay.min} max={EFFECTS_LIMITS.reverbDecay.max} step={0.1} defaultValue={0.1} size={40}
           displayValue={`${slot.effects.reverbDecay.toFixed(1)}s`} onChange={(v) => updateEffect({ reverbDecay: v })} />
         <Knob label="Delay" value={slot.effects.delayWet} min={EFFECTS_LIMITS.delayWet.min} max={EFFECTS_LIMITS.delayWet.max} step={0.01} defaultValue={0} size={40}
           displayValue={`${Math.round(slot.effects.delayWet * 100)}%`} onChange={(v) => updateEffect({ delayWet: v })} />
-        <Knob label="D.Time" value={slot.effects.delayTime} min={EFFECTS_LIMITS.delayTime.min} max={EFFECTS_LIMITS.delayTime.max} step={0.01} defaultValue={0} size={40}
+        <Knob label="D.Time" value={slot.effects.delayTime} min={EFFECTS_LIMITS.delayTime.min} max={EFFECTS_LIMITS.delayTime.max}
+          step={0.01}
+          defaultValue={0} size={40}
+          // Arrow keys move one division at a time. A seconds-based step cannot work: the
+          // gaps between divisions are uneven, so any fixed amount either fails to escape
+          // the current division (the snap pulls it back, and the key looks dead) or skips
+          // several at once.
+          onStep={(cur, dir) => stepDelayDivision(cur, delayBpm, dir, EFFECTS_LIMITS.delayTime.max)}
           displayValue={delaySync ? `${delaySync.label} · ${Math.round(slot.effects.delayTime * 1000)}ms` : `${slot.effects.delayTime.toFixed(2)}s`}
           onChange={(v) => {
             // Snap while dragging so the knob lands on divisions rather than sliding past

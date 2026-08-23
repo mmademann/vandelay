@@ -413,6 +413,15 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
             </button>
           </div>
         )}
+        <button
+          type="button"
+          onClick={onRewindAll}
+          disabled={slotCount === 0}
+          className="shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-muted/80 text-foreground/50 transition hover:text-foreground hover:bg-muted disabled:opacity-30"
+          title="Rewind all to loop start"
+        >
+          ⏮
+        </button>
         <div ref={recGroupRef} className="relative flex shrink-0 items-center">
           <button
             type="button"
@@ -499,15 +508,6 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
         {recError && (
           <span className="shrink-0 text-xs text-red-400" title={recError}>{recError}</span>
         )}
-        <button
-          type="button"
-          onClick={onRewindAll}
-          disabled={slotCount === 0}
-          className="shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-muted/80 text-foreground/50 transition hover:text-foreground hover:bg-muted disabled:opacity-30"
-          title="Rewind all to loop start"
-        >
-          ⏮
-        </button>
 
         {/* Master speed — a relative multiplier over every slot's own speed. Scaling all
             slots by the same ratio preserves the intervals between them, so key matching

@@ -32,6 +32,14 @@ export interface MultiSlot {
   detectedBpm?: number;
   /** Slot ignores the master speed dial — for drums held at original tempo under a slowed bed. */
   bypassMasterSpeed?: boolean;
+  /** Loop-start rotation as a fraction of the anchor's bar — lands the slot on the offbeat
+   *  or a triplet position against the anchor. 0 = on the downbeat. */
+  phase?: number;
+  /** The un-phased loop. Phase is always derived from this rather than nudged from the
+   *  current loop: incremental shifts are not reversible when the bar and loop lengths do
+   *  not divide evenly, so the loop walks across the buffer. */
+  phaseBaseStart?: number;
+  phaseBaseEnd?: number;
 }
 
 // Per-slot saved settings (keyed by slot UUID)
@@ -48,6 +56,13 @@ export interface MultiSlotSavedSettings {
   matchedBasePitch?: number;
   pitchInterval?: 1 | 7 | 12;
   bypassMasterSpeed?: boolean;
+  /** Loop-start rotation as a fraction of a bar; see MultiSlot.phase. */
+  phase?: number;
+  /** The un-phased loop, as fractions of the buffer so a stretch does not invalidate them.
+   *  Without these a refresh keeps `phase` but loses its origin, and the next phase click
+   *  rotates around the current (already shifted) loop instead. */
+  phaseBaseStartFrac?: number;
+  phaseBaseEndFrac?: number;
   /**
    * Time-stretch ratio applied to reach the tempo anchor. Stretched buffers are memory-only,
    * so this is what lets the stretch be re-applied on reload instead of silently reverting.

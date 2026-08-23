@@ -567,6 +567,13 @@ export function MultiPage() {
             muted: saved?.muted ?? slot.muted,
             effects: saved?.effects ?? sanitizeEffects({ ...DRY_EFFECTS }),
             bypassMasterSpeed: saved?.bypassMasterSpeed ?? slot.bypassMasterSpeed,
+            // Loop bounds already encode the shift; these restore which button reads as
+            // active and where future phase changes rotate from.
+            phase: saved?.phase ?? slot.phase,
+            phaseBaseStart:
+              saved?.phaseBaseStartFrac !== undefined ? saved.phaseBaseStartFrac * dur : undefined,
+            phaseBaseEnd:
+              saved?.phaseBaseEndFrac !== undefined ? saved.phaseBaseEndFrac * dur : undefined,
           };
         }
 
@@ -625,6 +632,9 @@ export function MultiPage() {
           // Keep the ratio we are about to re-apply, so a refresh before any further edit
           // does not lose it.
           stretch: restoreStretch ?? undefined,
+          phase: finalSlot.phase,
+          phaseBaseStartFrac: finalSlot.phaseBaseStart !== undefined ? finalSlot.phaseBaseStart / dur : undefined,
+          phaseBaseEndFrac: finalSlot.phaseBaseEnd !== undefined ? finalSlot.phaseBaseEnd / dur : undefined,
         });
 
         // Background analysis — only if this stem has no cached result at all. Keyed on the
@@ -694,6 +704,9 @@ export function MultiPage() {
             // saveSlotSettings replaces the whole record, so omitting this dropped the
             // stretch and the slot came back unstretched on the next refresh.
             stretch: e.stretch,
+            phase: s.phase,
+          phaseBaseStartFrac: s.phaseBaseStart !== undefined ? s.phaseBaseStart / dur : undefined,
+          phaseBaseEndFrac: s.phaseBaseEnd !== undefined ? s.phaseBaseEnd / dur : undefined,
           });
         }
         return updated;
@@ -754,6 +767,9 @@ export function MultiPage() {
       isMatched,
       matchedBasePitch,
       stretch: entry.stretch,
+      phase: s.phase,
+          phaseBaseStartFrac: s.phaseBaseStart !== undefined ? s.phaseBaseStart / dur : undefined,
+          phaseBaseEndFrac: s.phaseBaseEnd !== undefined ? s.phaseBaseEnd / dur : undefined,
     });
   }
 
@@ -820,6 +836,9 @@ export function MultiPage() {
       // Derive from the updater's own `prev`, which is always current, and persist from
       // there too — reading entriesRef here had the same staleness problem.
       let persisted: SlotEntry | null = null;
+      // The phase base is in the pre-swap timebase; swapBuffer rescaled the live loop but
+      // not this, so rescale it by the same ratio or the next phase click jumps the loop.
+      const tbRatio = stretch / baseStretch;
       setEntries((prev) =>
         prev.map((e) => {
           if (e.slot.id !== slotId) return e;
@@ -828,7 +847,15 @@ export function MultiPage() {
             buffer: stretched,
             stretch,
             stretching: false,
-            slot: { ...e.slot, loopStart, loopEnd },
+            slot: {
+              ...e.slot,
+              loopStart,
+              loopEnd,
+              phaseBaseStart:
+                e.slot.phaseBaseStart !== undefined ? e.slot.phaseBaseStart * tbRatio : undefined,
+              phaseBaseEnd:
+                e.slot.phaseBaseEnd !== undefined ? e.slot.phaseBaseEnd * tbRatio : undefined,
+            },
           };
           persisted = next;
           return next;
@@ -851,24 +878,11 @@ export function MultiPage() {
     const entry = entriesRef.current.find((e) => e.slot.id === slotId);
     if (!entry?.sourceBuffer) return;
     if (Math.abs(ratio - entry.stretch) < 0.005) return;
+    // reapplyStretch persists from inside its own state updater, which is the only place
+    // that sees the post-stretch buffer and loop bounds together. Writing again here read
+    // entriesRef before React had re-rendered, so it saved pre-stretch loop fractions
+    // alongside the new ratio — two halves of different timebases.
     await reapplyStretch(slotId, entry.sourceBuffer, ratio, entry.stretch);
-    // Persist the new ratio against the slot's own record too. reapplyStretch writes via
-    // persistMatchedState, which is UUID-keyed and therefore orphaned once a session load
-    // mints fresh IDs — this makes a manual reset survive a plain page reload as well.
-    const after = entriesRef.current.find((e) => e.slot.id === slotId);
-    if (after) {
-      const dur = after.buffer?.duration ?? 1;
-      const sl = after.slot;
-      saveSlotSettings(sl.id, {
-        speed: sl.speed, pitch: sl.pitch, linkPitch: sl.linkPitch,
-        gain: sl.gain, muted: sl.muted, effects: sl.effects,
-        loopStartFrac: sl.loopStart / dur, loopEndFrac: sl.loopEnd / dur,
-        isMatched: after.isMatched, matchedBasePitch: after.matchedBasePitch,
-        pitchInterval: after.pitchInterval,
-        bypassMasterSpeed: sl.bypassMasterSpeed,
-        stretch: ratio,
-      });
-    }
   }
 
   /**
@@ -983,7 +997,14 @@ export function MultiPage() {
    * Reads entriesRef rather than the stretched entries returned above because the stretch
    * pass has already rewritten loop bounds; this must see those, not the pre-stretch values.
    */
-  function quantizeAllToAnchorGrid() {
+  /**
+   * Quantize loops onto the tempo anchor's bar grid.
+   *
+   * `only` restricts it to a single slot, which is what the per-slot Match Tempo button
+   * needs — matching one slot's rate without also putting its loop on the grid leaves it
+   * drifting against everything else, so both paths run the same quantize.
+   */
+  function quantizeAllToAnchorGrid(only?: string) {
     const anchorId = tempoAnchorIdRef.current;
     if (!anchorId) return;
     const anchor = entriesRef.current.find((e) => e.slot.id === anchorId);
@@ -995,6 +1016,7 @@ export function MultiPage() {
 
     const skipped: string[] = [];
     for (const entry of entriesRef.current) {
+      if (only !== undefined && entry.slot.id !== only) continue;
       if (entry.loading || !entry.buffer) continue;
       // Loop bounds from the engine, not from entry.slot: this runs immediately after the
       // stretch pass, and React has not re-rendered yet, so entriesRef still holds the
@@ -1009,7 +1031,21 @@ export function MultiPage() {
       // for all of them — including slots whose own detected tempo differs.
       const q = quantizeToGrid(liveBuffer, loopStart, loopEnd, anchorBpm);
       if (!q) { skipped.push(entry.title); continue; }
-      multiEngine.updateSlot(entry.slot.id, { loopStart: q.loopStart, loopEnd: q.loopEnd });
+      // Quantizing rewrites the loop to whole bars, which discards any phase offset. The
+      // quantized loop becomes the new un-phased base, and the slot's phase is re-applied
+      // on top — otherwise the UI would keep showing "½" while the loop sat on the downbeat.
+      const phase = entry.slot.phase ?? 0;
+      const qDur = q.loopEnd - q.loopStart;
+      let finalStart = q.loopStart;
+      if (phase > 0 && qDur > 0) {
+        const barSec = (60 / anchorBpm) * 4;
+        const off = (((phase * barSec) % qDur) + qDur) % qDur;
+        const cand = q.loopStart + off;
+        finalStart = cand + qDur > liveBuffer.duration ? cand - qDur : cand;
+        if (finalStart < 0) finalStart = q.loopStart;
+      }
+      const finalEnd = finalStart + qDur;
+      multiEngine.updateSlot(entry.slot.id, { loopStart: finalStart, loopEnd: finalEnd });
       // Persist from the updater's own `prev`, not from the captured `entry`: the latter is
       // pre-stretch, and persistMatchedState divides by buffer.duration to store loop
       // fractions — using the old duration would save bounds that are wrong on reload.
@@ -1017,7 +1053,17 @@ export function MultiPage() {
       setEntries((prev) =>
         prev.map((e) => {
           if (e.slot.id !== entry.slot.id) return e;
-          const next = { ...e, slot: { ...e.slot, loopStart: q.loopStart, loopEnd: q.loopEnd } };
+          const next = {
+            ...e,
+            slot: {
+              ...e.slot,
+              loopStart: finalStart,
+              loopEnd: finalEnd,
+              // The quantized (unshifted) loop is the base every future phase derives from.
+              phaseBaseStart: q.loopStart,
+              phaseBaseEnd: q.loopEnd,
+            },
+          };
           updated = next;
           return next;
         }),
@@ -1030,7 +1076,9 @@ export function MultiPage() {
     setGridNote(
       skipped.length
         ? `Loops quantized to ${Math.round(anchorBpm)} bpm bars. Too short to fit a bar: ${skipped.join(", ")}.`
-        : `All loops quantized to whole bars at ${Math.round(anchorBpm)} bpm.`,
+        : only !== undefined
+          ? `Loop quantized to whole bars at ${Math.round(anchorBpm)} bpm.`
+          : `All loops quantized to whole bars at ${Math.round(anchorBpm)} bpm.`,
     );
   }
 
@@ -1174,6 +1222,9 @@ export function MultiPage() {
           isMatched: false, matchedBasePitch: 0,
           // A preset changes tone, not tempo — preserve the stretch through the overwrite.
           stretch: e.stretch,
+          phase: s.phase,
+          phaseBaseStartFrac: s.phaseBaseStart !== undefined ? s.phaseBaseStart / dur : undefined,
+          phaseBaseEndFrac: s.phaseBaseEnd !== undefined ? s.phaseBaseEnd / dur : undefined,
         });
         return { ...e, slot: s, isMatched: false, matchedBasePitch: 0 };
       }),
@@ -1540,7 +1591,13 @@ export function MultiPage() {
               isTempoAnchor={isTempoAnchor}
               hasTempoAnchor={tempoAnchorId !== null}
               onSetTempoAnchor={() => handleSetTempoAnchor(entry.slot.id)}
-              onTempoMatch={() => { void stretchSlotToTempoAnchor(entry.slot.id); }}
+              onTempoMatch={() => {
+                // Stretch then quantize, same as the transport's Match Tempos — rate alone
+                // still drifts if the loop is not a whole number of the anchor's bars.
+                void stretchSlotToTempoAnchor(entry.slot.id).then(() =>
+                  quantizeAllToAnchorGrid(entry.slot.id),
+                );
+              }}
               onStretchChange={(ratio) => { void handleStretchChange(entry.slot.id, ratio); }}
               stretch={entry.stretch}
               stretching={entry.stretching}
