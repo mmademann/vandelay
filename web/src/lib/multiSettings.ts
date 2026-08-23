@@ -12,6 +12,10 @@ export interface MultiSlot {
   /** Time-stretch ratio to re-apply on load. Memory-only buffers make this the only record
    *  that a slot was tempo matched. */
   stretch?: number;
+  /** Tempo relationship to the anchor, as a multiple of its heard tempo — see
+   *  TEMPO_RELATIONS. 1 = play at the anchor's tempo. Persisted because it is a choice, not
+   *  a derivation: without it, re-lock would drag a deliberately half-timed slot back to 1:1. */
+  tempoRelation?: number;
   speed: number;
   pitch: number;
   linkPitch: boolean;
@@ -35,11 +39,6 @@ export interface MultiSlot {
   /** Loop-start rotation as a fraction of the anchor's bar — lands the slot on the offbeat
    *  or a triplet position against the anchor. 0 = on the downbeat. */
   phase?: number;
-  /** The un-phased loop. Phase is always derived from this rather than nudged from the
-   *  current loop: incremental shifts are not reversible when the bar and loop lengths do
-   *  not divide evenly, so the loop walks across the buffer. */
-  phaseBaseStart?: number;
-  phaseBaseEnd?: number;
 }
 
 // Per-slot saved settings (keyed by slot UUID)
@@ -49,6 +48,9 @@ export interface MultiSlotSavedSettings {
   linkPitch: boolean;
   gain: number;
   muted: boolean;
+  /** Persisted alongside mute. Previously only mute survived, so a soloed slot came back
+   *  with every other slot audible again. */
+  soloed?: boolean;
   effects: EffectsState;
   loopStartFrac: number;
   loopEndFrac: number;
@@ -58,16 +60,13 @@ export interface MultiSlotSavedSettings {
   bypassMasterSpeed?: boolean;
   /** Loop-start rotation as a fraction of a bar; see MultiSlot.phase. */
   phase?: number;
-  /** The un-phased loop, as fractions of the buffer so a stretch does not invalidate them.
-   *  Without these a refresh keeps `phase` but loses its origin, and the next phase click
-   *  rotates around the current (already shifted) loop instead. */
-  phaseBaseStartFrac?: number;
-  phaseBaseEndFrac?: number;
   /**
    * Time-stretch ratio applied to reach the tempo anchor. Stretched buffers are memory-only,
    * so this is what lets the stretch be re-applied on reload instead of silently reverting.
    */
   stretch?: number;
+  /** Tempo relationship to the anchor; see MultiSlot.tempoRelation. */
+  tempoRelation?: number;
 }
 
 const SLOT_SETTINGS_KEY = "vandelay:multi:slot-settings:v1";
@@ -163,6 +162,23 @@ export function loadThrowSettings(): ThrowSettings {
 
 export function saveThrowSettings(s: ThrowSettings): void {
   try { localStorage.setItem(THROW_SETTINGS_KEY, JSON.stringify(s)); } catch {}
+}
+
+/**
+ * Whether matched slots re-stretch automatically when the anchor's tempo changes.
+ *
+ * Off by default: an automatic cascade fires a stretch per slot, which is both audible and
+ * unwanted while auditioning the anchor. With it off, slots go amber and wait for the
+ * Re-lock All button instead.
+ */
+const AUTO_RELOCK_KEY = "vandelay:multi:auto-relock:v1";
+
+export function loadAutoRelock(): boolean {
+  try { return localStorage.getItem(AUTO_RELOCK_KEY) === "1"; } catch { return false; }
+}
+
+export function saveAutoRelock(on: boolean): void {
+  try { localStorage.setItem(AUTO_RELOCK_KEY, on ? "1" : "0"); } catch {}
 }
 
 // Master speed — persisted like throw settings so it survives outside a named session

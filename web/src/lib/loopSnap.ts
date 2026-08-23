@@ -250,11 +250,112 @@ export function quantizeToGrid(
  * the echo fights the groove instead of reinforcing it. Snapping to these makes the echo
  * land on the grid every time.
  */
+/**
+ * Tempo relationships a matched slot may sit at, as a multiple of the anchor's heard tempo.
+ *
+ * 1:1 is "play at the anchor's tempo" and is what Match Tempos picks unless told otherwise.
+ * The rest exist because beat detection routinely lands on the wrong multiple — half-time and
+ * double-time are the classic failures, which is why every DJ tool ships a divide/multiply
+ * button rather than trusting its own analysis. Stepping through this list is that button.
+ *
+ * Ordered ascending so stepping is monotonic. 1/2 and 2 keep the slot's bar a whole multiple
+ * of the anchor's, so they stay on the shared grid; 3/4 and 4/3 are genuinely polymetric and
+ * put the slot on a related-but-different one (4 of its bars per 3 of the anchor's).
+ */
+export const TEMPO_RELATIONS: {
+  /** Compact form for the badge, where there is only room for a word. */
+  label: string;
+  /** What you will actually hear. Ratio notation means nothing unless you already think in it. */
+  name: string;
+  value: number;
+  gridSafe: boolean;
+}[] = [
+  // Named by direction and amount, not by "half time" / "double time". Those are the
+  // musician's words for it, but they make you stop and work out half of what.
+  // Direction first, so the list reads as one slow-to-fast run and you can find the half
+  // you want before reading any numbers. The list is ordered to match.
+  { label: "4× slow", name: "4× slower",     value: 1 / 4, gridSafe: true },
+  { label: "2× slow", name: "2× slower",     value: 1 / 2, gridSafe: true },
+  { label: "¾",       name: "¾ speed",       value: 3 / 4, gridSafe: false },
+  { label: "anchor",  name: "Anchor tempo",  value: 1,     gridSafe: true },
+  { label: "1⅓",      name: "1⅓ speed",      value: 4 / 3, gridSafe: false },
+  { label: "2× fast", name: "2× faster",     value: 2,     gridSafe: true },
+  { label: "4× fast", name: "4× faster",     value: 4,     gridSafe: true },
+];
+
+/**
+ * Buffer-length ratio that makes `targetBpm` play at `anchorBpm * relation`.
+ *
+ * Stretching to ratio r makes the audio r times longer, so its tempo drops by r. To land on
+ * a wanted tempo w from a source tempo t, r = t / w. At relation 1 that is exactly "play at
+ * the anchor's tempo"; at 1/2 it is half-time, and so on.
+ */
+export function stretchForRelation(targetBpm: number, anchorBpm: number, relation: number): number {
+  const want = anchorBpm * relation;
+  if (!Number.isFinite(want) || want <= 0) return 1;
+  const r = targetBpm / want;
+  return Number.isFinite(r) && r > 0 ? r : 1;
+}
+
+/**
+ * The relation Match Tempos picks on its own: the one needing the least time stretch.
+ *
+ * This generalises the octave fold it replaces. `raw / 2^round(log2(raw))` was exactly
+ * "choose the power-of-two relation closest to unity stretch" — same rule, a wider set. So a
+ * rack that only ever wanted 1:1 or a half/double-time correction behaves as it did before.
+ *
+ * Least-stretch is the right default because every stretch is an artifact budget: SoundTouch
+ * degrades with distance from 1, so the nearest relation is both the cleanest-sounding and
+ * the least likely to be a detection error amplified into audible damage.
+ */
+export function autoTempoRelation(targetBpm: number, anchorBpm: number): number {
+  const raw = targetBpm / anchorBpm;
+  if (!Number.isFinite(raw) || raw <= 0) return 1;
+  // The nearest power of two, unbounded — the octave fold this replaced, expressed as a
+  // relation. Rounding the log2 guarantees exactly one answer per input and a stretch always
+  // inside [1/√2, √2], however far apart the two tempos are. Searching TEMPO_RELATIONS
+  // instead was tried and is wrong twice over: the ladder is finite, so an extreme ratio
+  // cannot fold far enough, and 3:4 / 4:3 almost always need a SMALLER stretch than 1:1, so
+  // including them would quietly make polymeter the default. They are reachable by stepping,
+  // which is a deliberate act.
+  return Math.pow(2, Math.round(Math.log2(raw)));
+}
+
+/**
+ * Whether this relation keeps the slot's bar a whole multiple of the anchor's.
+ *
+ * Quantize rounds loops to whole bars of a grid derived from the anchor. That grid is only
+ * meaningful for a slot sharing the anchor's bar, so a polymetric slot must be left out of
+ * it rather than rounded to a length that does not repeat cleanly.
+ */
+export function isGridSafeRelation(relation: number): boolean {
+  let best = TEMPO_RELATIONS[0];
+  for (const r of TEMPO_RELATIONS) {
+    if (Math.abs(r.value - relation) < Math.abs(best.value - relation)) best = r;
+  }
+  return best.gridSafe;
+}
+
+/** Nearest entry in TEMPO_RELATIONS to an arbitrary value, for labelling a restored slot. */
+export function tempoRelationLabel(relation: number): string {
+  let best = TEMPO_RELATIONS[0];
+  for (const r of TEMPO_RELATIONS) {
+    if (Math.abs(r.value - relation) < Math.abs(best.value - relation)) best = r;
+  }
+  return best.label;
+}
+
 export const DELAY_DIVISIONS: { label: string; beats: number }[] = [
   // Suffixes are spelled out rather than using the usual "." for dotted and "T" for
   // triplet: at this size a trailing dot is invisible, so "1/16" and "1/16." looked like
   // the same value listed twice.
+  // Ordered by length, ascending — the arrow keys step by index, so an out-of-order entry
+  // would make a keypress jump backwards.
+  { label: "1/64", beats: 0.0625 },
+  { label: "1/32 trip", beats: 1 / 12 },
   { label: "1/32", beats: 0.125 },
+  { label: "1/16 trip", beats: 1 / 6 },
+  { label: "1/32 dot", beats: 0.1875 },
   { label: "1/16", beats: 0.25 },
   { label: "1/8 trip", beats: 1 / 3 },
   { label: "1/16 dot", beats: 0.375 },
@@ -267,7 +368,10 @@ export const DELAY_DIVISIONS: { label: string; beats: number }[] = [
   { label: "1/2", beats: 2 },
   { label: "1/2 dot", beats: 3 },
   { label: "1 bar", beats: 4 },
+  { label: "1 bar dot", beats: 6 },
   { label: "2 bars", beats: 8 },
+  { label: "3 bars", beats: 12 },
+  { label: "4 bars", beats: 16 },
 ];
 
 /**

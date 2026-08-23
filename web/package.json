@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node src/lib/__tests__/surfaceCoverage.test.mjs && node src/lib/__tests__/rackSync.test.mjs"
   },
   "dependencies": {
     "@breezystack/lamejs": "^1.2.7",

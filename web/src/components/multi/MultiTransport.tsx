@@ -146,7 +146,12 @@ interface Props {
   referenceSlotId: string | null;
   activeSessionName: string | null;
   slotTitles: string[];
-  getSlotsAndBuffers: () => { slots: MultiSlot[]; buffers: Map<string, AudioBuffer> };
+  getSlotsAndBuffers: () => {
+    slots: MultiSlot[];
+    buffers: Map<string, AudioBuffer>;
+    /** Anchor bar length per slot — the export needs it to reproduce each slot's phase. */
+    phaseBarSec: Map<string, number>;
+  };
   onStopAll: (fade?: boolean) => void;
   onPlayAll: (instant?: boolean) => void;
   onRewindAll: () => void;
@@ -159,8 +164,15 @@ interface Props {
   isPlaying: boolean;
   onMatchAll: () => void;
   onTempoMatchAll: () => void;
+  /** Any slot still decoding. Matching now would quantize against a half-loaded rack. */
+  slotsLoading: boolean;
   gridNote: string | null;
   onDismissGridNote: () => void;
+  /** Slots whose stretch no longer agrees with the anchor's current tempo. */
+  staleTempoCount: number;
+  onRelockStale: () => void;
+  autoRelock: boolean;
+  onToggleAutoRelock: () => void;
   tempoAnchorId: string | null;
   onRandomSession: () => void;
   randomDisabled: boolean;
@@ -174,7 +186,7 @@ function buildExportFilename(activeSessionName: string | null, slotTitles: strin
   return `${unique.slice(0, 2).join(" × ")} +${unique.length - 2}`;
 }
 
-export function MultiTransport({ masterSettings, slotCount, referenceSlotId, activeSessionName, slotTitles, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, onMasterSpeedChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll, onTempoMatchAll, gridNote, onDismissGridNote, tempoAnchorId, onRandomSession, randomDisabled }: Props) {
+export function MultiTransport({ masterSettings, slotCount, referenceSlotId, activeSessionName, slotTitles, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, onMasterSpeedChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll, onTempoMatchAll, slotsLoading, gridNote, onDismissGridNote, staleTempoCount, onRelockStale, autoRelock, onToggleAutoRelock, tempoAnchorId, onRandomSession, randomDisabled }: Props) {
   const [loopCount, setLoopCount] = useState(1);
   const [recording, setRecording] = useState(false);
   const [recElapsed, setRecElapsed] = useState(0);
@@ -335,7 +347,7 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
 
   async function handleExport() {
     if (exporting) return;
-    const { slots, buffers } = getSlotsAndBuffers();
+    const { slots, buffers, phaseBarSec } = getSlotsAndBuffers();
     const loopLen = multiEngine.getMasterLoopLength() ?? 0;
     if (!canExportMulti({ slots, buffers, masterLoopLength: loopLen }) || loopLen <= 0) return;
     setExporting(true);
@@ -347,6 +359,7 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
         masterSettings,
         masterLoopLength: loopLen,
         loopCount,
+        phaseBarSec,
         export: { format, quality },
       });
       if (blob.size < 44) throw new Error("Export produced an empty file.");
@@ -433,7 +446,7 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
               // Encoding is a real wait on long takes; keep it fully opaque and clearly
               // active rather than letting disabled:opacity-30 fade the only feedback out.
               recEncoding
-                ? "bg-amber-500/20 text-amber-400 ring-1 ring-amber-500/40 opacity-100"
+                ? "bg-muted text-foreground/70 ring-1 ring-border/70 opacity-100"
                 : recording
                   ? "bg-red-500/20 text-red-400 ring-1 ring-red-500/40 hover:bg-red-500/30 disabled:opacity-30"
                   : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted disabled:opacity-30",
@@ -441,7 +454,7 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
           >
             {recEncoding ? (
               <span className="flex items-center gap-1.5">
-                <span className="h-3 w-3 animate-spin rounded-full border-2 border-amber-400/30 border-t-amber-400" />
+                <span className="h-3 w-3 animate-spin rounded-full border-2 border-foreground/20 border-t-foreground/70" />
                 Encoding…
               </span>
             ) : recording ? (
@@ -553,28 +566,62 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
           <button
             type="button"
             onClick={onTempoMatchAll}
-            disabled={!tempoAnchorId}
+            disabled={!tempoAnchorId || slotsLoading}
             className="shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-muted/80 text-foreground/50 transition hover:text-orange-300 hover:bg-muted disabled:opacity-30 disabled:hover:text-foreground/50"
             title={tempoAnchorId
-              ? "Time-stretch every other slot to the tempo anchor's tempo. Pitch is unchanged, so key matching still holds."
+              ? slotsLoading
+                ? "Waiting for every slot to finish loading — matching now would quantize against a half-loaded rack"
+                : "Time-stretch every other slot to the tempo anchor's tempo. Pitch is unchanged, so key matching still holds."
               : "Set a tempo anchor on a slot first — then every other slot stretches to its tempo"}
           >
-            Match Tempos
+            ↻ Match Tempos
+            {/* Result rides on the button rather than as a separate element — it describes
+                what this button just did, and a floating note was easy to miss. */}
+            {gridNote && (
+              <span
+                onClick={(e) => { e.stopPropagation(); onDismissGridNote(); }}
+                className="ml-1.5 rounded bg-orange-400/15 px-1.5 py-0.5 text-[9px] font-medium normal-case tracking-normal text-orange-300/90"
+                title="Click to dismiss"
+              >
+                {gridNote}
+              </span>
+            )}
           </button>
         )}
 
-        {/* Persists until dismissed: a slot skipped for being too short is easy to miss,
-            and it is the one case where the grid is not actually shared. */}
-        {gridNote && (
+        {/* Re-lock: only the slots that drifted, unlike Match Tempos which rebuilds all of
+            them. Appears only when something is actually stale so it is not one more
+            permanent button competing for attention. */}
+        {staleTempoCount > 0 && (
           <button
             type="button"
-            onClick={onDismissGridNote}
-            className="shrink-0 rounded px-2 py-1 text-[10px] font-medium text-orange-300/90 bg-orange-400/10 ring-1 ring-orange-400/25 hover:bg-orange-400/20"
-            title="Dismiss"
+            onClick={onRelockStale}
+            className="shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-amber-500/20 text-amber-300 ring-1 ring-amber-400/40 transition hover:bg-amber-500/30 animate-pulse"
+            title={`${staleTempoCount} slot${staleTempoCount === 1 ? "" : "s"} drifted from the tempo anchor — re-stretch just those`}
           >
-            {gridNote}
+            ↻ Re-lock {staleTempoCount}
           </button>
         )}
+
+        {slotCount >= 2 && tempoAnchorId && (
+          <button
+            type="button"
+            onClick={onToggleAutoRelock}
+            className={cn(
+              "shrink-0 rounded px-2 py-1.5 text-[10px] font-bold uppercase tracking-wide transition",
+              autoRelock
+                ? "bg-orange-500/15 text-orange-300 ring-1 ring-orange-400/25"
+                : "bg-muted/80 text-foreground/40 hover:text-foreground/70",
+            )}
+            title={autoRelock
+              ? "Auto re-lock is ON — slots re-stretch themselves shortly after the anchor's tempo changes"
+              : "Auto re-lock is OFF — slots go amber when they drift and wait for you to re-lock"}
+          >
+            auto re-lock {autoRelock ? "on" : "off"}
+          </button>
+        )}
+
+
 
         {slotCount >= 2 && (
           <button
@@ -586,7 +633,7 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
               ? "Pitch-shift every other slot into key with the key anchor."
               : "Set a key anchor on a slot first — then every other slot shifts into its key"}
           >
-            Match Keys
+            ↻ Match Keys
           </button>
         )}
 

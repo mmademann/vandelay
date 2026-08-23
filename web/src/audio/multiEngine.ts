@@ -16,7 +16,20 @@ function slotPlaybackRate(slot: MultiSlot, masterSpeed = 1): number {
   return slot.bypassMasterSpeed ? base : base * masterSpeed;
 }
 
+/**
+ * Seconds a slot is displaced from its loop start by Phase.
+ *
+ * Duplicated character-for-character in renderMulti.ts so export and playback cannot drift;
+ * surfaceCoverage enforces that they stay identical.
+ */
+function phaseOffsetSec(phase: number, barSec: number, loopDur: number): number {
+  if (phase <= 0 || barSec <= 0 || loopDur <= 0) return 0;
+  return (((phase * barSec) % loopDur) + loopDur) % loopDur;
+}
+
 interface RuntimeSlot extends MultiSlot {
+  /** Anchor bar length in this slot's buffer seconds — set by the UI, used for Phase. */
+  phaseBarSec?: number;
   player: Tone.Player;
   chain: MultiEffectsChain;
   volume: Tone.Volume;
@@ -304,6 +317,37 @@ class MultiEngine {
     this.recomputeAllVolumes();
   }
 
+  /**
+   * Slide this slot's playback earlier or later by `seconds`, without touching its loop.
+   *
+   * This is what makes Phase audible. Moving loop bounds alone does not shift anything:
+   * updateSlot deliberately preserves the playhead when bounds change, so the audio keeps
+   * reading from wherever it already was and only the region differs on the next wrap.
+   * A phase offset has to move the read position itself — the equivalent of sliding the
+   * audio inside a fixed clip, so this slot's material arrives against the anchor at a
+   * different point in the bar.
+   */
+  nudgeSlot(id: string, seconds: number): void {
+    const slot = this.slots.get(id);
+    if (!slot || !Number.isFinite(seconds) || seconds === 0) return;
+    const loopDur = slot.loopEnd - slot.loopStart;
+    if (loopDur <= 0) return;
+
+    const cur = slot.playing ? this.getSlotPosition(id) : slot.startOffset;
+    // Positive modulo so a backwards nudge wraps to the end of the loop rather than
+    // landing before its start.
+    const rel = (((cur - slot.loopStart + seconds) % loopDur) + loopDur) % loopDur;
+    const next = slot.loopStart + rel;
+
+    slot.startOffset = next;
+    slot.seekNonce++;
+    if (slot.playing) {
+      const now = Tone.now();
+      slot.player.seek(next, now);
+      slot.startedAt = now;
+    }
+  }
+
   updateSlot(id: string, patch: Partial<MultiSlot>): void {
     const slot = this.slots.get(id);
     if (!slot) return;
@@ -363,10 +407,48 @@ class MultiEngine {
    * downbeats smear. Re-syncing is the whole reason to press rewind, so it has to be one
    * instant for all of them.
    */
+  /**
+   * Seconds this slot is displaced from its loop start by Phase.
+   *
+   * Phase is a playhead offset, so unlike loop bounds it is not implicit in the slot's
+   * geometry — every path that returns a slot to its start has to add it back, or the
+   * displacement silently disappears the first time you press rewind.
+   *
+   * `phaseBarSec` is the anchor's bar length in this slot's own buffer seconds, pushed down
+   * from the UI whenever the grid changes; the engine has no view of the tempo grid itself.
+   */
+  private phaseOffsetFor(slot: RuntimeSlot): number {
+    return phaseOffsetSec(slot.phase ?? 0, slot.phaseBarSec ?? 0, slot.loopEnd - slot.loopStart);
+  }
+
+  /** Where a slot should sit when returned to the top of its loop, phase included. */
+  startPositionFor(id: string): number {
+    const slot = this.slots.get(id);
+    if (!slot) return 0;
+    return slot.loopStart + this.phaseOffsetFor(slot);
+  }
+
+  /** The UI owns the tempo grid, so it tells the engine how long a bar is for this slot. */
+  setPhaseBarSec(id: string, barSec: number): void {
+    const slot = this.slots.get(id);
+    if (slot) slot.phaseBarSec = barSec;
+  }
+
+  /**
+   * Bar length the UI last pushed down for this slot.
+   *
+   * The offline render needs it to reproduce the phase offset: loop bounds are un-phased,
+   * so without the bar length an export plays every slot on the downbeat while live
+   * playback is displaced.
+   */
+  getPhaseBarSec(id: string): number {
+    return this.slots.get(id)?.phaseBarSec ?? 0;
+  }
+
   rewindAll(): void {
     const now = Tone.now();
     for (const slot of this.slots.values()) {
-      const target = slot.loopStart;
+      const target = slot.loopStart + this.phaseOffsetFor(slot);
       slot.startOffset = target;
       slot.seekNonce++;
       if (slot.playing) {
@@ -456,7 +538,12 @@ class MultiEngine {
     slot.player.loopStart = slot.loopStart;
     slot.player.loopEnd = slot.loopEnd;
     slot.player.loop = true;
-    slot.startOffset = Math.max(slot.loopStart, Math.min(slot.loopEnd - 0.01, slot.startOffset));
+    // Join the rack in phase rather than resuming from wherever this slot was parked.
+    // Starting a single slot mid-session otherwise puts it off the shared downbeat with
+    // nothing in the UI to say so, and only Play All or Rewind All would recover it.
+    const peer = this.matchingLoopPosition(slot);
+    slot.startOffset =
+      peer ?? Math.max(slot.loopStart, Math.min(slot.loopEnd - 0.01, slot.startOffset));
     const t = Tone.now() + 0.05;
     const anySoloed = Array.from(this.slots.values()).some((s) => s.soloed);
     const effectiveMute = slot.muted || (anySoloed && !slot.soloed);
@@ -582,7 +669,9 @@ class MultiEngine {
 
     for (const slot of this.slots.values()) {
       if (slot.playing && !fromLoopStart) continue;
-      if (fromLoopStart) slot.startOffset = slot.loopStart;
+      // Phase included: re-anchoring to a bare loopStart would put every slot at relative
+      // position 0 and silently discard the displacement.
+      if (fromLoopStart) slot.startOffset = slot.loopStart + this.phaseOffsetFor(slot);
       // Muted and non-soloed slots still start, just silently. Running them keeps them on
       // the same grid as everything else, so unmuting or soloing drops them straight in on
       // the beat instead of starting wherever they happened to be parked. Costs a voice and
@@ -689,10 +778,25 @@ class MultiEngine {
       const otherDur = other.loopEnd - other.loopStart;
       if (otherDur <= 0) continue;
       const pos = this.getSlotPosition(id);
-      const frac = ((pos - other.loopStart) / otherDur) % 1;
-      return slot.loopStart + ((frac % 1) + 1) % 1 * loopDur;
+      // Un-phase the peer before reading its progress. The peer is whichever slot happens
+      // to be first in the map and may carry its own displacement; without subtracting it
+      // every slot joining afterwards inherits that peer's phase as if it were the
+      // downbeat, and the rack quietly rotates as a whole.
+      const rel = pos - other.loopStart - this.phaseOffsetFor(other);
+      const frac = (((rel / otherDur) % 1) + 1) % 1;
+      // Then add this slot's own. Phase is a displacement from the shared downbeat, so
+      // every path that re-anchors a slot has to re-apply it — joining a running rack
+      // included, which is how the per-slot Play button and unmute both reach here.
+      return this.wrapIntoLoop(slot, slot.loopStart + frac * loopDur + this.phaseOffsetFor(slot));
     }
     return null;
+  }
+
+  /** Fold an absolute position back inside a slot's loop. */
+  private wrapIntoLoop(slot: RuntimeSlot, pos: number): number {
+    const loopDur = slot.loopEnd - slot.loopStart;
+    if (loopDur <= 0) return slot.loopStart;
+    return slot.loopStart + ((((pos - slot.loopStart) % loopDur) + loopDur) % loopDur);
   }
 
   private startSilencedSlots(): void {
