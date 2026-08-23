@@ -253,6 +253,36 @@ section("5. phase does not alter loop bounds (it is a timing offset)");
   }
 }
 
+section("5b. a phase offset lands at the same point of the ANCHOR's bar on every slot");
+{
+  // The bug this catches: Phase and Move used the anchor's raw file bar while quantize used
+  // the anchor's bar scaled into each slot's own timebase (anchorRate / slotRate). Every
+  // slot then quantized to one bar and phased against another. Master speed hides it — it
+  // scales both sides — so it only shows when slots carry their own Speed or unlinked Pitch,
+  // which this rack does (anchor 0.70, slaves 0.75 and 1.00).
+  const rack = matchTempos(buildRack());
+  const aRate = rate(rack.anchor, rack.masterSpeed);
+  const anchorHeardBar = ((60 / rack.anchor.rawBpm) * 4) / aRate;
+  for (const s of [rack.anchor, ...rack.slaves]) {
+    const sRate = rate(s, rack.masterSpeed);
+    for (const phase of [1 / 8, 1 / 3, 1 / 2, 3 / 4]) {
+      // What the app does now: bar in THIS slot's file seconds, then heard through its rate.
+      const heard = phaseOffset(phase, s.gridBpm, s.loopEnd - s.loopStart) / sRate;
+      ok(`${s.name} @ ${phase}: displaced ${(phase * anchorHeardBar).toFixed(3)}s of the anchor's bar`,
+         Math.abs(heard - phase * anchorHeardBar) < 1e-9,
+         `${heard} vs ${phase * anchorHeardBar}`);
+      // Witness for the regression: the un-scaled bar is wrong by exactly the rate ratio,
+      // so this assertion fails the moment someone "simplifies" the grid back to anchorBpm.
+      const naive = phaseOffset(phase, rack.anchor.rawBpm, s.loopEnd - s.loopStart) / sRate;
+      const shouldDiffer = Math.abs(sRate - aRate) > 1e-9;
+      ok(`${s.name} @ ${phase}: the un-scaled anchor bar ${shouldDiffer ? "is wrong" : "coincides (equal rates)"}`,
+         shouldDiffer ? Math.abs(naive - phase * anchorHeardBar) > 1e-6
+                      : Math.abs(naive - phase * anchorHeardBar) < 1e-9,
+         `naive ${naive} vs correct ${phase * anchorHeardBar}`);
+    }
+  }
+}
+
 section("6. phase never changes loop length (so it cannot cause drift)");
 {
   const plain = matchTempos(buildRack());
@@ -837,6 +867,48 @@ section("20. joining a running rack keeps the phase displacement");
        Math.abs(viaPhasedPeer - joiner.loopStart) < 1e-9,
        `landed at +${(viaPhasedPeer - joiner.loopStart).toFixed(6)} — it inherited the peer's phase`);
   }
+}
+
+section("20b. a slot joining a running rack lands on the bar, not on the peer's fraction");
+{
+  // multiEngine.matchingLoopPosition. Per-slot Play, unmute-into-playback and addSlot all
+  // route through it. It used to place the joining slot at the peer's FRACTION of its own
+  // loop, which only coincides with the beat when both loops are the same length: 30% of a
+  // 4-bar loop is 1.2 bars, 30% of a 6-bar loop is 1.8 — 0.6 of a bar off, silently.
+  const barSec = 2.0;                       // one anchor bar, in each slot's own file seconds
+  const join = (peerBars, peerPos, ownBars, ownPhase = 0) => {
+    const peerDur = peerBars * barSec, ownDur = ownBars * barSec;
+    const barsIn = peerPos / barSec;
+    const wrapped = ((barsIn % ownBars) + ownBars) % ownBars;
+    return { pos: wrapped * barSec + ownPhase * barSec, peerDur, ownDur };
+  };
+  const cases = [
+    { peerBars: 4, ownBars: 6, at: 1.2 },
+    { peerBars: 6, ownBars: 4, at: 3.7 },
+    { peerBars: 8, ownBars: 3, at: 5.25 },
+    { peerBars: 4, ownBars: 4, at: 2.5 },
+  ];
+  for (const c of cases) {
+    const peerPos = c.at * barSec;
+    const { pos } = join(c.peerBars, peerPos, c.ownBars);
+    // Same offset within the bar as the peer — that is what "in phase" means here.
+    const peerInBar = ((c.at % 1) + 1) % 1;
+    const ownInBar = (((pos / barSec) % 1) + 1) % 1;
+    ok(`${c.peerBars}-bar peer at ${c.at} bars -> ${c.ownBars}-bar slot joins in the same part of the bar`,
+       Math.abs(peerInBar - ownInBar) < 1e-9, `${peerInBar} vs ${ownInBar}`);
+    ok(`${c.peerBars}->${c.ownBars}: lands inside its own loop`,
+       pos >= -1e-9 && pos < c.ownBars * barSec, `${pos}`);
+    // Witness: the old fraction-matching only agrees when the loops are equal length.
+    const naive = ((peerPos / (c.peerBars * barSec)) % 1) * (c.ownBars * barSec);
+    const naiveInBar = (((naive / barSec) % 1) + 1) % 1;
+    const equalLen = c.peerBars === c.ownBars;
+    ok(`${c.peerBars}->${c.ownBars}: fraction-matching ${equalLen ? "coincides" : "does not"}`,
+       equalLen ? Math.abs(naiveInBar - peerInBar) < 1e-9 : Math.abs(naiveInBar - peerInBar) > 1e-9);
+  }
+  // Phase still rides on top of the bar-matched position.
+  const withPhase = join(4, 1.2 * barSec, 6, 0.5).pos;
+  const without = join(4, 1.2 * barSec, 6, 0).pos;
+  ok("joining applies this slot's own phase on top", Math.abs((withPhase - without) - 0.5 * barSec) < 1e-9);
 }
 
 section("21. export reproduces the phase offset it cannot inherit");

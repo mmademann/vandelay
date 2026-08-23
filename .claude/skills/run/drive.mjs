@@ -75,7 +75,11 @@ const browser = await chromium.launch({
   // context stays suspended in headless and every position reads 0.
   args: ["--no-sandbox", "--autoplay-policy=no-user-gesture-required"],
 });
-const page = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
+const page = await (await browser.newContext({
+  viewport: { width: 1280, height: 900 },
+  // The export step saves a real file; without this Chromium cancels the download.
+  acceptDownloads: true,
+})).newPage();
 
 const errors = [];
 page.on("pageerror", (e) => errors.push(`PAGEERROR: ${e.message}`));
@@ -161,6 +165,39 @@ await shot("04-matched");
 step.positions = await page.evaluate(() =>
   [...document.querySelectorAll("canvas")].map(
     (c) => c.closest("div")?.parentElement?.querySelector("div.pointer-events-none")?.textContent?.trim() ?? "?"));
+
+// Export: the offline render. CLAUDE.md called this out as never actually having been run —
+// tests and reasoning only, no file ever produced. Rendering one here is the cheapest way to
+// catch a graph that only exists in the live context (the convolver bug did exactly that),
+// an empty master, or a throw in Tone.Offline. It still says nothing about how it SOUNDS.
+await attempt("export", async () => {
+  await page.getByRole("button", { name: /↓ Export/ }).first().click({ timeout: 10000 });
+  const submit = page.getByRole("button", { name: /^Export (WAV|MP3|FLAC)/i }).first();
+  await submit.waitFor({ timeout: 10000 });
+  const [download] = await Promise.all([
+    page.waitForEvent("download", { timeout: 180000 }),
+    submit.click(),
+  ]);
+  const out = path.join(SHOTS, "export.wav");
+  await download.saveAs(out);
+  const bytes = fs.statSync(out).size;
+  step.exportBytes = bytes;
+  step.exportName = download.suggestedFilename();
+  // A WAV header alone is 44 bytes and silence compresses to nothing useful — anything this
+  // small means the render produced no audio, which is the failure worth catching.
+  if (bytes < 100000) throw new Error(`export too small: ${bytes} bytes`);
+  // Non-silent: scan the PCM for a sample above the noise floor. A rack that renders an
+  // empty master still yields a correctly-sized file of zeroes.
+  const buf = fs.readFileSync(out);
+  let peak = 0;
+  for (let i = 44; i + 1 < buf.length; i += 2) {
+    const v = Math.abs(buf.readInt16LE(i));
+    if (v > peak) peak = v;
+  }
+  step.exportPeak = peak;
+  if (peak < 500) throw new Error(`export is silent (peak ${peak})`);
+});
+await shot("05-exported");
 
 console.log(JSON.stringify({ slots, shots: SHOTS, step, errorCount: errors.length, errors: errors.slice(0, 25) }, null, 2));
 await browser.close();

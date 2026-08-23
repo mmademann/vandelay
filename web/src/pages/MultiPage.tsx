@@ -146,8 +146,38 @@ function pendingKey(trackId: string, stemName: StemName | null): string {
  * re-stretch it into that error. Mirrors multiEngine.slotPlaybackRate.
  */
 function heardBpm(rawBpm: number, slot: MultiSlot, masterSpeed: number): number {
+  return rawBpm * slotRate(slot, masterSpeed);
+}
+
+/** A slot's playback rate. Mirrors multiEngine.slotPlaybackRate. */
+function slotRate(slot: MultiSlot, masterSpeed: number): number {
   const base = slot.linkPitch ? slot.speed : slot.speed * Math.pow(2, slot.pitch / 12);
-  return rawBpm * (slot.bypassMasterSpeed ? base : base * (masterSpeed || 1));
+  return slot.bypassMasterSpeed ? base : base * (masterSpeed || 1);
+}
+
+/**
+ * The anchor's bar, measured in THIS slot's buffer seconds.
+ *
+ * Phase, Move, Snap and quantize all place things on the anchor's bar, and all four work in
+ * file time — loop bounds and playhead are buffer positions, which playback rate does not
+ * move. But "the anchor's bar in file seconds" is not one number: a slot playing at a
+ * different rate spans a different amount of its own audio in the same wall-clock bar, so
+ * the grid has to be scaled by anchorRate / slotRate.
+ *
+ * quantizeAllToAnchorGrid already did this and Phase/Move did not, so a slot whose Speed
+ * differed from the anchor's got quantized to one bar and phased against another — a 1/2
+ * bar offset landing 7% early at Speed 0.70 against 0.75. Master speed hides it (it scales
+ * both sides equally); a Speed knob or an unlinked Pitch does not.
+ */
+function anchorBarGridBpm(
+  anchorRawBpm: number,
+  anchorSlot: MultiSlot | undefined,
+  slot: MultiSlot,
+  masterSpeed: number,
+): number {
+  const aRate = anchorSlot ? slotRate(anchorSlot, masterSpeed) : 1;
+  const eRate = slotRate(slot, masterSpeed);
+  return anchorRawBpm * ((aRate || 1) / (eRate || 1));
 }
 
 export function MultiPage() {
@@ -206,8 +236,13 @@ export function MultiPage() {
   const pendingPhaseRestoreRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!anchorBpm || pendingPhaseRestoreRef.current.size === 0) return;
-    const barSec = (60 / anchorBpm) * 4;
+    const anchorSlot = entriesRef.current.find((e) => e.slot.id === tempoAnchorId)?.slot;
+    const ms = masterSettings.masterSpeed ?? 1;
     for (const id of pendingPhaseRestoreRef.current) {
+      const slot = entriesRef.current.find((e) => e.slot.id === id)?.slot;
+      // Per-slot grid — see anchorBarGridBpm. Falls back to the anchor's own bar for a slot
+      // that has since been removed, which is harmless because nothing reads it.
+      const barSec = (60 / (slot ? anchorBarGridBpm(anchorBpm, anchorSlot, slot, ms) : anchorBpm)) * 4;
       multiEngine.setPhaseBarSec(id, barSec);
       const target = multiEngine.startPositionFor(id);
       if (Math.abs(target - multiEngine.getLoopStart(id)) > 1e-6) multiEngine.seekSlot(id, target);
@@ -788,7 +823,17 @@ export function MultiPage() {
           }
           // Tell the engine the bar length first, then let it compute the offset — one
           // implementation shared with rewind and Play All, so they cannot disagree.
-          multiEngine.setPhaseBarSec(slot.id, (60 / bpm) * 4);
+          // Per-slot grid, matching what SlotStrip pushes down once it renders: the anchor's
+          // raw bar is only this slot's bar when the two play at the same rate.
+          const phaseGrid = anchorBpmRef.current !== undefined
+            ? anchorBarGridBpm(
+                anchorBpmRef.current,
+                entriesRef.current.find((e) => e.slot.id === tempoAnchorIdRef.current)?.slot,
+                finalSlot,
+                masterSettingsRef.current.masterSpeed ?? 1,
+              )
+            : bpm;
+          multiEngine.setPhaseBarSec(slot.id, (60 / phaseGrid) * 4);
           const target = multiEngine.startPositionFor(slot.id);
           if (Math.abs(target - multiEngine.getLoopStart(slot.id)) > 1e-6) {
             multiEngine.seekSlot(slot.id, target);
@@ -1386,22 +1431,16 @@ export function MultiPage() {
       //
       // Scaling the grid tempo by this slot's rate makes one bar of ITS buffer last the
       // same wall-clock time as one bar of the anchor's.
-      const eSlot = entry.slot;
-      const eBase = eSlot.linkPitch ? eSlot.speed : eSlot.speed * Math.pow(2, eSlot.pitch / 12);
-      const eRate = eSlot.bypassMasterSpeed
-        ? eBase
-        : eBase * (masterSettingsRef.current.masterSpeed ?? 1);
-      const aSlot = anchor?.slot;
-      const aBase = aSlot
-        ? aSlot.linkPitch ? aSlot.speed : aSlot.speed * Math.pow(2, aSlot.pitch / 12)
-        : 1;
-      const aRate = !aSlot || aSlot.bypassMasterSpeed
-        ? aBase
-        : aBase * (masterSettingsRef.current.masterSpeed ?? 1);
       // A slot playing faster consumes more of its own buffer per second, so one heard bar
-      // spans MORE of its audio — which is a LOWER tempo in its own file. Hence aRate/eRate,
-      // not the inverse.
-      const slotGridBpm = anchorBpm * ((aRate || 1) / (eRate || 1));
+      // spans MORE of its audio — which is a LOWER tempo in its own file. Shared with Phase
+      // and Move via anchorBarGridBpm; they drifted apart once and the symptom (a 1/2 bar
+      // offset landing early on a slot with its own Speed) was invisible to every test.
+      const slotGridBpm = anchorBarGridBpm(
+        anchorBpm,
+        anchor?.slot,
+        entry.slot,
+        masterSettingsRef.current.masterSpeed ?? 1,
+      );
 
       const q = quantizeToGrid(liveBuffer, loopStart, loopEnd, slotGridBpm);
       if (!q) { skipped.push(entry.title); continue; }
@@ -1994,8 +2033,13 @@ export function MultiPage() {
               isReference={isReference}
               hasReference={hasReference}
               anchorBpm={slotAnchorBpm}
-              // Includes the anchor itself, unlike anchorBpm.
-              rawGridBpm={anchorBpm ?? entry.detectedBpm}
+              // Includes the anchor itself, unlike anchorBpm — and scaled into this slot's
+              // own file timebase, the same grid quantize rounds to (see anchorBarGridBpm).
+              rawGridBpm={
+                anchorBpm !== undefined
+                  ? anchorBarGridBpm(anchorBpm, anchorEntryForBpm?.slot, entry.slot, masterSettings.masterSpeed ?? 1)
+                  : entry.detectedBpm
+              }
               // Effective, not raw: slots are heard at the anchor's played tempo, so a
               // "1/8" delay or a ½-bar phase must be computed from that. Using the raw
               // detected BPM put every echo off the beat whenever the anchor was not at

@@ -438,9 +438,69 @@ section("12. moving the loop region keeps its geometry consistent");
   const phaseLine = slotStrip.match(/const phaseBpm = [^\n]*/)?.[0] ?? "";
   ok("phaseBpm resolves through rawGridBpm (which includes the anchor)",
      /rawGridBpm/.test(phaseLine), phaseLine);
+  const rawGridProp = (multiPage.match(/rawGridBpm=\{[\s\S]*?\n\s*\}/) ?? [""])[0];
   ok("MultiPage passes rawGridBpm to every slot unconditionally",
-     /rawGridBpm=\{anchorBpm \?\? entry\.detectedBpm\}/.test(multiPage),
+     rawGridProp !== "" && !/isTempoAnchor|slotAnchorBpm/.test(rawGridProp),
      "a ternary on isTempoAnchor here is what disabled Phase on the anchor before");
+
+  // Phase, Move, Snap and quantize all place things on the anchor's bar measured in the
+  // slot's own buffer seconds — and that is NOT one number across the rack. Quantize scaled
+  // by anchorRate/slotRate and Phase/Move did not, so a slot with its own Speed was
+  // quantized to one bar and phased against another (a 1/2 bar offset landing ~7% early at
+  // 0.70 against 0.75). Master speed hides it; a Speed knob or unlinked Pitch does not.
+  const gridFn = fnBody(multiPage, "function anchorBarGridBpm");
+  ok("anchorBarGridBpm scales the anchor's bar by anchorRate / slotRate",
+     gridFn !== null && /slotRate\(anchorSlot, masterSpeed\)/.test(gridFn)
+       && /slotRate\(slot, masterSpeed\)/.test(gridFn)
+       && /anchorRawBpm \* \(\(aRate \|\| 1\) \/ \(eRate \|\| 1\)\)/.test(gridFn),
+     "without the ratio every slot is placed on the anchor's file bar, which is only its own bar at equal rates");
+  ok("rawGridBpm is that same per-slot grid",
+     /anchorBarGridBpm\(anchorBpm, anchorEntryForBpm\?\.slot, entry\.slot/.test(rawGridProp),
+     "Phase and Move read this prop; handing them the raw anchor tempo is the bug above");
+  ok("quantize derives its grid from the same helper",
+     /const slotGridBpm = anchorBarGridBpm\(/.test(multiPage),
+     "two copies of this formula is exactly how Phase and quantize drifted apart");
+  for (const [re, why] of [
+    [/const phaseGrid = anchorBpmRef\.current !== undefined/, "the decode-path phase restore"],
+    [/anchorBarGridBpm\(anchorBpm, anchorSlot, slot, ms\)/, "the deferred restore flushed when the anchor's BPM lands"],
+  ]) {
+    ok(`phase restore uses the per-slot grid: ${why}`, re.test(multiPage),
+       "a restore on the anchor's raw bar puts the slot back at a different offset than the UI shows");
+  }
+
+  // Snap rounds loop bounds — buffer positions — so it needs the same per-slot bar, not the
+  // anchor's raw tempo. On the anchor the two are equal, so withholding anchorBpm still does
+  // its job (the anchor keeps snapping to its own tempo).
+  ok("Snap rounds to the per-slot grid",
+     /const bpm = rawGridBpm \?\? detectedBpm \?\? estimateBpm\(buffer\)/.test(slotStrip),
+     "anchorBpm here made Snap and Match Tempos disagree about the length of a bar");
+  ok("only the delay readout still falls back to the raw anchor tempo",
+     /const delayBpm = gridBpm \?\? anchorBpm \?\? detectedBpm/.test(slotStrip),
+     "delay is heard time and has its own domain — see the three-domain table");
+
+  // SlotStrip must take its bar length from that prop, not from a tempo of its own.
+  ok("SlotStrip derives the Phase/Move bar from rawGridBpm",
+     /const phaseBpm = rawGridBpm \?\? detectedBpm/.test(slotStrip)
+       && /setPhaseBarSec\(slot\.id, phaseBpm \? \(60 \/ phaseBpm\) \* 4 : 0\)/.test(slotStrip),
+     "the engine has no view of the grid, so this push-down is the only thing keeping export and playback on the same bar");
+}
+
+section("12b. joining a running rack is matched in bars");
+{
+  // The fraction of a peer's loop is not a musical position unless both loops are the same
+  // length. matchingLoopPosition must convert through the bar length the UI pushes down.
+  const fn = fnBody(engine, "private matchingLoopPosition");
+  ok("matchingLoopPosition exists", fn !== null);
+  ok("it converts the peer's progress through the bar, not the loop fraction",
+     /const otherBar = other\.phaseBarSec/.test(fn ?? "") && /const barsIn = rel \/ otherBar/.test(fn ?? ""),
+     "matching raw fractions puts a 6-bar slot 0.6 of a bar off a 4-bar peer");
+  ok("it still un-phases the peer and re-applies its own phase",
+     /rel = pos - other\.loopStart - this\.phaseOffsetFor\(other\)/.test(fn ?? "")
+       && /unphased \+ this\.phaseOffsetFor\(slot\)/.test(fn ?? ""),
+     "invariant 20: the peer's own offset is not everyone else's downbeat");
+  ok("it falls back to the fraction when no bar length is known",
+     /rel \/ otherDur/.test(fn ?? ""),
+     "with no tempo anchor there is no bar; starting at the top would be worse");
 }
 
 section("13. expensive analysis is memoised");

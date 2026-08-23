@@ -783,11 +783,32 @@ class MultiEngine {
       // every slot joining afterwards inherits that peer's phase as if it were the
       // downbeat, and the rack quietly rotates as a whole.
       const rel = pos - other.loopStart - this.phaseOffsetFor(other);
-      const frac = (((rel / otherDur) % 1) + 1) % 1;
-      // Then add this slot's own. Phase is a displacement from the shared downbeat, so
+
+      // Match the peer's position in BARS, not its fraction of its own loop. The two are
+      // the same only when both loops are the same length: a peer 30% through a 4-bar loop
+      // is 1.2 bars in, while 30% of a 6-bar loop is 1.8 bars — the joining slot lands 0.6
+      // of a bar off the beat, and nothing in the UI says so. Bar lengths come from the UI
+      // via setPhaseBarSec (the per-slot grid), so this is the same bar Phase and quantize
+      // use. Without them — no tempo anchor, nothing detected — fall back to the fraction,
+      // which is still better than starting at the top.
+      const otherBar = other.phaseBarSec ?? 0;
+      const ownBar = slot.phaseBarSec ?? 0;
+      let unphased: number;
+      if (otherBar > 0 && ownBar > 0) {
+        const barsIn = rel / otherBar;
+        const ownLoopBars = loopDur / ownBar;
+        // Fold into this slot's own loop length in bars, so a short loop joining a long one
+        // lands at the matching point of the bar rather than past its own end.
+        const wrapped = ownLoopBars > 0 ? (((barsIn % ownLoopBars) + ownLoopBars) % ownLoopBars) : 0;
+        unphased = slot.loopStart + wrapped * ownBar;
+      } else {
+        const frac = (((rel / otherDur) % 1) + 1) % 1;
+        unphased = slot.loopStart + frac * loopDur;
+      }
+      // Then add this slot's own phase. Phase is a displacement from the shared downbeat, so
       // every path that re-anchors a slot has to re-apply it — joining a running rack
       // included, which is how the per-slot Play button and unmute both reach here.
-      return this.wrapIntoLoop(slot, slot.loopStart + frac * loopDur + this.phaseOffsetFor(slot));
+      return this.wrapIntoLoop(slot, unphased + this.phaseOffsetFor(slot));
     }
     return null;
   }

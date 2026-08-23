@@ -641,7 +641,14 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
     // snap is useless without one, so don't depend on the cache being populated.
     // Anchor's grid wins: two slots each snapped to their own detected tempo are both
     // "snapped" and still drift apart. Falls back to this slot's own tempo with no anchor.
-    const bpm = anchorBpm ?? detectedBpm ?? estimateBpm(buffer);
+    //
+    // rawGridBpm, not anchorBpm: Snap rounds loop bounds, which are buffer positions, so it
+    // needs the anchor's bar measured in THIS slot's file seconds — the same per-slot grid
+    // quantize rounds to (MultiPage.anchorBarGridBpm). The anchor's raw tempo is only that
+    // bar for a slot playing at the anchor's rate; anywhere else Snap and Match Tempos
+    // disagreed about what "a bar" is. On the anchor itself the two are equal, so its Snap
+    // still uses its own tempo, which is what withholding anchorBpm was protecting.
+    const bpm = rawGridBpm ?? detectedBpm ?? estimateBpm(buffer);
     const r = snapLoop(buffer, slot.loopStart, slot.loopEnd, bpm);
     update({ loopStart: r.loopStart, loopEnd: r.loopEnd });
     // Remember what the note describes; the effect above clears it if the loop moves off this.
@@ -800,8 +807,8 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
             className={cn("rounded px-2 py-1 text-xs font-bold uppercase tracking-wide transition",
               "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted",
               !buffer && "opacity-30 cursor-not-allowed")}
-            title={anchorBpm
-              ? `Snap loop to whole bars at ${Math.round(anchorBpm)} BPM — the tempo anchor's grid — then to zero crossings`
+            title={rawGridBpm
+              ? `Snap loop to whole bars at ${Math.round(rawGridBpm)} BPM — the tempo anchor's grid in this slot's timebase — then to zero crossings`
               : detectedBpm
               ? `Snap loop to whole bars at ${Math.round(detectedBpm)} BPM (this slot's own tempo), then to zero crossings`
               : "Snap loop to whole bars (tempo measured from the audio), then to zero crossings"}>

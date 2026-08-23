@@ -189,6 +189,13 @@ used the wrong **time domain**. Per-function tests all passed while the feature 
 Only a whole-system model catches that — it found the non-idempotent phase bug on its first
 run.
 
+### `.claude/skills/run/drive.mjs` — the only check that runs the real app
+
+`npm test` never executes the app. The driver launches it in headless Chromium, drives the
+transport, and now **renders a real export** and asserts the file is neither tiny nor silent
+— the gap CLAUDE.md used to describe as "export has never actually been rendered". It still
+says nothing about how any of it *sounds*.
+
 ### Adding to the suite
 
 Prefer a **new property in the simulation** over a per-function test. Ask "what would a
@@ -281,17 +288,30 @@ Traps that have each actually bitten:
 26. **Per-slot play joins in phase** — `playSlot` and `startSilencedSlots` both derive their start from `matchingLoopPosition()`, a peer's progress through its own loop. Resuming from the slot's parked `startOffset` put it off the shared downbeat with nothing in the UI to say so. That helper applies the phase offset too — see invariant 20.
 27. **`worker.format: "es"` in `vite.config.ts` is load-bearing** — the analysis worker dynamically imports Essentia, which forces a code-split, and Vite's default IIFE worker format cannot code-split. Removing it breaks `vite build` while leaving dev working.
 
-28. **Quantize uses a per-slot grid, not one shared BPM** — bars must be equal in *heard*
+28a. **One grid helper, four consumers** — `anchorBarGridBpm(anchorRaw, anchorSlot, slot,
+    masterSpeed)` in `MultiPage.tsx` returns the anchor's bar measured in *that slot's* buffer
+    seconds (`anchorRaw × anchorRate / slotRate`). **Phase, Move, Snap and quantize must all
+    use it.** Quantize did and the other three did not, so a slot carrying its own Speed was
+    quantized to one bar and phased/snapped against another — a ½-bar Phase landing ~7% early
+    at Speed 0.70 against 0.75. Master speed hides this (it scales both sides equally); a
+    Speed knob or an unlinked Pitch does not. It reaches the engine as `phaseBarSec`, which is
+    also what the offline render reads, so getting it wrong desyncs exports too.
+28b. **Joining a running rack is matched in bars, not loop fractions** —
+    `multiEngine.matchingLoopPosition` converts the peer's progress through `phaseBarSec`.
+    A fraction is only a musical position when both loops are the same length: 30% of a 4-bar
+    loop is 1.2 bars, 30% of a 6-bar loop is 1.8 — the joining slot lands 0.6 of a bar off the
+    beat. Falls back to the fraction when no bar length is known.
+29. **Quantize uses a per-slot grid, not one shared BPM** — bars must be equal in *heard*
     time, and every slot plays at a different rate. `slotGridBpm = anchorRawBpm × (anchorRate
     / slotRate)`. Quantizing every slot to the same file-domain bar made bars last different
     wall-clock durations — 6s of drift over 32 bars at Speed 0.70 vs 0.75, while every slot
     still displayed `TEMPO MATCHED`.
-29. **Quantize rounds the region only — it must not touch phase** — live loop bounds are
+30. **Quantize rounds the region only — it must not touch phase** — live loop bounds are
     already un-phased (the offset lives in the playhead), so quantize just rounds them.
     Adding the offset here as well applies it twice, and a phased slot walks forward one
     phase step on every Match Tempos. This was the bug that made phase a bounds shift in
     the first place; keep the two separate.
-30. **Tempo matching picks a *relation*, and the automatic choice must stay the unbounded
+31. **Tempo matching picks a *relation*, and the automatic choice must stay the unbounded
     octave fold** — `autoTempoRelation` returns `2^round(log2(targetBpm/anchorBpm))`, which
     keeps the stretch inside `[1/√2, √2]` for any input. The old `while (s > 1.45) s /= 2;
     while (s < 0.7) s *= 2` band spanned 2.07×, so a 1 BPM difference flipped the result by a
@@ -300,10 +320,10 @@ Traps that have each actually bitten:
     `TEMPO_RELATIONS` instead of rounding the log2 cannot fold a ratio beyond the ladder's
     ends, and letting `3:4`/`4:3` into the automatic set makes polymeter the default, because
     they almost always need a *smaller* stretch than `1:1`.
-31. **Delay re-sync must be debounced** — it watches the heard tempo, which master speed and
+32. **Delay re-sync must be debounced** — it watches the heard tempo, which master speed and
     Speed both move continuously while dragging. Rewriting `delayTime` per frame pushed a new
     value into the audio graph every frame and was audible as the delay warbling. 400ms.
-32. **The anchor's grid applies to every slot, matched or not** — a shared grid is the point
+33. **The anchor's grid applies to every slot, matched or not** — a shared grid is the point
     of a tempo anchor. Giving an unmatched slot its own delay grid was tried and reverted: it
     made that slot's echoes sound isolated from the rest of the rack.
 
