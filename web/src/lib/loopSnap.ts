@@ -346,32 +346,38 @@ export function tempoRelationLabel(relation: number): string {
 }
 
 export const DELAY_DIVISIONS: { label: string; beats: number }[] = [
-  // Suffixes are spelled out rather than using the usual "." for dotted and "T" for
-  // triplet: at this size a trailing dot is invisible, so "1/16" and "1/16." looked like
-  // the same value listed twice.
-  // Ordered by length, ascending — the arrow keys step by index, so an out-of-order entry
-  // would make a keypress jump backwards.
-  { label: "1/64", beats: 0.0625 },
-  { label: "1/32 trip", beats: 1 / 12 },
-  { label: "1/32", beats: 0.125 },
-  { label: "1/16 trip", beats: 1 / 6 },
-  { label: "1/32 dot", beats: 0.1875 },
-  { label: "1/16", beats: 0.25 },
-  { label: "1/8 trip", beats: 1 / 3 },
-  { label: "1/16 dot", beats: 0.375 },
-  { label: "1/8", beats: 0.5 },
-  { label: "1/4 trip", beats: 2 / 3 },
-  { label: "1/8 dot", beats: 0.75 },
-  { label: "1/4", beats: 1 },
-  { label: "1/2 trip", beats: 4 / 3 },
-  { label: "1/4 dot", beats: 1.5 },
-  { label: "1/2", beats: 2 },
-  { label: "1/2 dot", beats: 3 },
-  { label: "1 bar", beats: 4 },
-  { label: "1 bar dot", beats: 6 },
-  { label: "2 bars", beats: 8 },
-  { label: "3 bars", beats: 12 },
-  { label: "4 bars", beats: 16 },
+  // Both namings, beats first: the number is the length ("0.5" of a beat) and the note value
+  // after it is the name the rest of the world uses for that length ("1/8"). Beats alone
+  // needed no decoding but could not be matched against a pedal or a DAW; note values alone
+  // are only a length if you read music, since an eighth NOTE is half a beat. Ordered by
+  // length, ascending — the arrow keys step by index, so an out-of-order entry would make a
+  // keypress jump backwards.
+  //
+  // Three families, interleaved by length: plain notes, their dotted forms at 1.5x and their
+  // triplets at 2/3. 4 beats is a bar.
+  { label: "0.06 · 1/64", beats: 0.0625 },
+  { label: "0.08 · 1/32 trip", beats: 1 / 12 },
+  { label: "0.125 · 1/32", beats: 0.125 },
+  { label: "0.17 · 1/16 trip", beats: 1 / 6 },
+  { label: "0.19 · 1/32 dot", beats: 0.1875 },
+  { label: "0.25 · 1/16", beats: 0.25 },
+  { label: "0.33 · 1/8 trip", beats: 1 / 3 },
+  { label: "0.375 · 1/16 dot", beats: 0.375 },
+  { label: "0.5 · 1/8", beats: 0.5 },
+  { label: "0.67 · 1/4 trip", beats: 2 / 3 },
+  { label: "0.75 · 1/8 dot", beats: 0.75 },
+  { label: "1 · 1/4", beats: 1 },
+  { label: "1.33 · 1/2 trip", beats: 4 / 3 },
+  { label: "1.5 · 1/4 dot", beats: 1.5 },
+  { label: "2 · 1/2", beats: 2 },
+  { label: "2.67 · 1 bar trip", beats: 8 / 3 },
+  { label: "3 · 1/2 dot", beats: 3 },
+  { label: "4 · 1 bar", beats: 4 },
+  { label: "5.33 · 2 bar trip", beats: 16 / 3 },
+  { label: "6 · 1 bar dot", beats: 6 },
+  { label: "8 · 2 bars", beats: 8 },
+  { label: "12 · 3 bars", beats: 12 },
+  { label: "16 · 4 bars", beats: 16 },
 ];
 
 /**

@@ -30,6 +30,7 @@ const multiPage = read("pages/MultiPage.tsx");
 const slotStrip = read("components/multi/SlotStrip.tsx");
 const settings  = read("lib/multiSettings.ts");
 const engine    = read("audio/multiEngine.ts");
+const knob      = read("components/multi/Knob.tsx");
 const render    = read("audio/renderMulti.ts");
 const loopSnap  = read("lib/loopSnap.ts");
 const transport = read("components/multi/MultiTransport.tsx");
@@ -501,6 +502,29 @@ section("12b. joining a running rack is matched in bars");
   ok("it falls back to the fraction when no bar length is known",
      /rel \/ otherDur/.test(fn ?? ""),
      "with no tempo anchor there is no bar; starting at the top would be worse");
+}
+
+section("12c. Shift escapes the delay ladder");
+{
+  // The delay knob snaps to divisions while dragging, which makes every off-grid value
+  // unreachable. Shift bypasses it — on the pointer AND on the arrow keys, because a knob
+  // you can only set one way is a knob with a hidden mode.
+  ok("Shift-drag skips the knob's own step quantisation",
+     /const next = e\.shiftKey \? clampRange\(raw\) : clampStep\(raw\)/.test(knob),
+     "clampStep alone still lands on 0.01 boundaries, which is not free");
+  ok("Shift-drag tells the caller to skip its snapping too",
+     /setLive\(next, \{ free: e\.shiftKey \}\)/.test(knob),
+     "the ladder snap lives in SlotStrip, so the flag has to reach it");
+  ok("Shift-arrow escapes the ladder only where there is one",
+     /const free = e\.shiftKey && onStep !== undefined/.test(knob)
+       && /const coarse = e\.shiftKey && onStep === undefined \? 10 : 1/.test(knob),
+     "Shift means 10x coarse on every other knob; changing that would be a silent regression");
+  ok("the delay knob honours the free flag",
+     /if \(opts\?\.free\) \{[\s\S]{0,120}delayTime: v < 0\.001 \? 0 : v/.test(slotStrip),
+     "without this Shift-drag repaints freely and then snaps back on the next render");
+  ok("an off-grid delay is not labelled as a division",
+     /Math\.abs\(delaySync\.seconds - slot\.effects\.delayTime\) < 0\.0005/.test(slotStrip),
+     "nearest-division labelling would call a deliberately free 210ms delay \"0.5 \u00b7 1/8\"");
 }
 
 section("13. expensive analysis is memoised");

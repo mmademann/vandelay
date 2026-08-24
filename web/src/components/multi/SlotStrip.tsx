@@ -1195,12 +1195,26 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
           // the current division (the snap pulls it back, and the key looks dead) or skips
           // several at once.
           onStep={(cur, dir) => stepDelayDivision(cur, delayBpm, dir, EFFECTS_LIMITS.delayTime.max)}
-          displayValue={delaySync ? `${delaySync.label} · ${Math.round(slot.effects.delayTime * 1000)}ms` : `${slot.effects.delayTime.toFixed(2)}s`}
-          onChange={(v) => {
+          // Off-grid values read as raw milliseconds — calling one "0.5 · 1/8" when it is 40ms
+          // away from that division is the exact lie the snapping exists to prevent.
+          displayValue={
+            delaySync && Math.abs(delaySync.seconds - slot.effects.delayTime) < 0.0005
+              ? `${delaySync.label} · ${Math.round(slot.effects.delayTime * 1000)}ms`
+              : slot.effects.delayTime > 0.001
+                ? `free · ${Math.round(slot.effects.delayTime * 1000)}ms`
+                : "off"
+          }
+          onChange={(v, opts) => {
+            // Shift bypasses the ladder entirely — drag or arrow keys — for the delays that
+            // want to sit deliberately between divisions.
+            if (opts?.free) {
+              updateEffect({ delayTime: v < 0.001 ? 0 : v });
+              return;
+            }
             // Snap while dragging so the knob lands on divisions rather than sliding past
             // them — a delay one frame off the grid is exactly what this is preventing.
             // Below the smallest division, let it fall to a true zero so the delay can be
-            // switched off rather than sticking at 1/32.
+            // switched off rather than sticking at the shortest one.
             const snapped = v < 0.02 ? null : snapDelayToTempo(v, delayBpm, EFFECTS_LIMITS.delayTime.max);
             updateEffect({ delayTime: v < 0.02 ? 0 : snapped ? snapped.seconds : v });
           }} />

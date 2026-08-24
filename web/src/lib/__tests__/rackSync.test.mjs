@@ -80,7 +80,7 @@ const phaseOffset = (phase, gridBpm, loopDur) => {
 };
 
 /** loopSnap.snapDelayToTempo — nearest division, in HEARD seconds. */
-const DIVISIONS = [0.0625, 1/12, 0.125, 1/6, 0.1875, 0.25, 1/3, 0.375, 0.5, 2/3, 0.75, 1, 4/3, 1.5, 2, 3, 4, 6, 8, 12, 16];
+const DIVISIONS = [0.0625, 1/12, 0.125, 1/6, 0.1875, 0.25, 1/3, 0.375, 0.5, 2/3, 0.75, 1, 4/3, 1.5, 2, 8/3, 3, 4, 16/3, 6, 8, 12, 16];
 const snapDelay = (seconds, bpm, max = 4) => {
   const beat = 60 / bpm;
   let best = null, err = Infinity;
