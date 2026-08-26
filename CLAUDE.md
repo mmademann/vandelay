@@ -115,6 +115,10 @@ web/src/
   components/        UI (mix/ subfolder for mixer, multi/ subfolder for multi)
     multi/
       SlotStrip.tsx       Per-slot UI (waveform, knobs, presets, play/pause/rewind, THROW button, key badge, octave shift, MATCHED badge)
+      SlotStrip: ⚡ Sweet spots — per-slot tempo/delay pairs whose beat grids share a pulse.
+                          `lockingDelays()` in loopSnap.ts computes which delay divisions
+                          divide BOTH the anchor's beat and the slot's; picking a row sets the
+                          relation and the delay together. Phase is left alone deliberately.
       SlotPicker.tsx      Inline track+stem picker panel (YouTube URL input above search; youtu.be short-link parsing)
       MultiTransport.tsx Transport bar: Sessions dropdown · Play All · Rewind All · Throw (floating panel) · Match All · Export (floating panel) · Clear
   lib/               Loaders, caches, persistence, format helpers, presets

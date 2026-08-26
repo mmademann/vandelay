@@ -31,6 +31,7 @@ const slotStrip = read("components/multi/SlotStrip.tsx");
 const settings  = read("lib/multiSettings.ts");
 const engine    = read("audio/multiEngine.ts");
 const knob      = read("components/multi/Knob.tsx");
+const picker    = read("components/multi/SlotPicker.tsx");
 const render    = read("audio/renderMulti.ts");
 const loopSnap  = read("lib/loopSnap.ts");
 const transport = read("components/multi/MultiTransport.tsx");
@@ -525,6 +526,136 @@ section("12c. Shift escapes the delay ladder");
   ok("an off-grid delay is not labelled as a division",
      /Math\.abs\(delaySync\.seconds - slot\.effects\.delayTime\) < 0\.0005/.test(slotStrip),
      "nearest-division labelling would call a deliberately free 210ms delay \"0.5 \u00b7 1/8\"");
+}
+
+section("12d. the sweet-spot picker sets both halves of the pair");
+{
+  // A tempo relation and a delay only "click" together, so the control has to write both.
+  // Writing the relation alone leaves the delay wherever it was, which is the failure this
+  // picker exists to prevent.
+  ok("SlotStrip offers sweet-spot combos", /const clickCombos = useMemo/.test(slotStrip));
+  // Colour carries meaning in this rack: orange is the tempo family, teal is the key family,
+  // and bright pulsing amber means "needs you now". A tempo control in teal reads as a key
+  // control at a glance, which is the whole point of having two families.
+  ok("the sweet-spot picker wears the tempo colour, not the key colour",
+     !/border-accent\/25 bg-accent\/5[\s\S]{0,600}⚡ Sweet spots/.test(slotStrip),
+     "it sets a tempo relation and a delay — neither is a key control");
+  ok("the picker does not borrow the word \"lock\"",
+     /⚡ Sweet spots…/.test(slotStrip),
+     "↻ Re-lock already means re-stretching a drifted slot; one word, two meanings is how this got confusing");
+  ok("each row carries the relation, its tempo, the delay and the stretch it costs",
+     /\{c\.name\} · \{Math\.round\(c\.bpm\)\} bpm · delay \{Math\.round\(c\.delaySec \* 1000\)\}ms/.test(slotStrip)
+       && /stretchPct/.test(slotStrip),
+     "a row that names only a tempo is the relation picker again");
+  ok("the delay in a row carries a unit",
+     !/delay \{c\.tickBeats/.test(slotStrip),
+     "on the knob a bare 0.25 is read against D.TIME and its ms; in a dropdown row it is 0.25 of nothing");
+  ok("choosing a row writes the relation AND the delay",
+     /onTempoRelationChange\(autoRelation !== undefined && combo\.value === autoRelation \? null : combo\.value\);[\s\S]{0,160}delayTime: combo\.delaySec/.test(slotStrip),
+     "half the pair is worse than neither — the delay would sit on the old relation's grid");
+  ok("offered delays are filtered against the delay ceiling",
+     /b \* beatSec <= EFFECTS_LIMITS\.delayTime\.max/.test(slotStrip),
+     "a 4x-slower slot's shared tick can exceed 4s, and the knob would clamp it off the grid");
+  // The active row has to survive a reload like every other setting — but it is not a new
+  // piece of state. It is exactly "relation + delay are the pair from that row", and both of
+  // those already persist (tempoRelation is a PROPERTIES row above; delayTime rides with the
+  // effects). A stored third copy could disagree with the two it was derived from.
+  ok("the active sweet spot is derived from the two persisted halves, not stored",
+     /const activeCombo = clickCombos\.find\(/.test(slotStrip)
+       && /Math\.abs\(c\.value - effectiveRelation\) < 1e-6/.test(slotStrip)
+       && /Math\.abs\(c\.delaySec - slot\.effects\.delayTime\) < 0\.002/.test(slotStrip),
+     "storing it would let a reloaded slot claim a sweet spot its delay had been moved off");
+  ok("no sweetSpot field was added to the persisted shapes",
+     !/sweetSpot/i.test(settings) && !/sweetSpot/i.test(multiPage),
+     "it is derived; a persisted copy is a second source of truth");
+  ok("the tempo relation list is titled too",
+     /<option value="">↻ Tempo — change…<\/option>/.test(slotStrip),
+     "opened, seven unlabelled rows do not say what they are choosing between");
+  ok("neither title row is disabled",
+     !/<option value="" disabled>/.test(slotStrip),
+     "greyed out reads as broken, not as a heading — and the two pickers must match");
+  ok("selecting the tempo title is a no-op",
+     /if \(e\.target\.value === ""\) return;/.test(slotStrip),
+     'Number("") is 0, which would pin a relation of zero');
+  ok("the picker shows which row is in force",
+     /value=\{activeCombo \? String\(activeCombo\.value\) : ""\}/.test(slotStrip),
+     "a permanent placeholder cannot say whether you are sitting on one");
+  ok("and reads as engaged while one is",
+     /activeCombo[\s\S]{0,120}border-orange-400\/50 bg-orange-500\/20/.test(slotStrip),
+     "same lit-orange treatment as every other engaged tempo control");
+  ok("the picker is hidden on the tempo anchor",
+     /clickCombos\.length > 0 && !isTempoAnchor/.test(slotStrip),
+     "the anchor has no relation to the anchor");
+  const lock = fnBody(loopSnap, "export function lockingDelays");
+  ok("lockingDelays requires BOTH grids to divide evenly",
+     /whole\(1 \/ b\) && whole\(slotBeat \/ b\)/.test(lock ?? ""),
+     "dividing only the slot's beat is the 0.375-at-4/3 case that fights the kick");
+}
+
+section("12e. an async stretch must not resurrect the slot it captured");
+{
+  // stretchSlotToTempoAnchor reads its entry, yields twice (a frame for the spinner, then
+  // the stretch itself), and commits. Spreading the CAPTURED slot at the end puts back every
+  // value the user changed in between. Real symptom: the Sweet spots picker writes a delay
+  // and a relation in one click, the stretch clobbered the delay, and the row only took
+  // effect on the second attempt — in the audio and in localStorage, not just in the badge.
+  const fn = fnBody(multiPage, "async function stretchSlotToTempoAnchor");
+  ok("stretchSlotToTempoAnchor exists", fn !== null);
+  ok("the swap ratio is measured from the engine's buffer, not from React state",
+     /const held = multiEngine\.getBuffer\(targetSlotId\)/.test(fn ?? "")
+       && /stretch \/ currentStretch/.test(fn ?? "")
+       && !/stretch \/ target\.stretch/.test(fn ?? ""),
+     "a stale ratio rescales loop bounds against a buffer already swapped — the loop lands wrong or collapses");
+  ok("and the early-return compares against that same measured value",
+     /Math\.abs\(stretch - currentStretch\) < 0\.005/.test(fn ?? ""),
+     "comparing against the stale copy skips a rebuild that is genuinely needed");
+  ok("it commits from the updater's prev, not from the captured entry",
+     /slot: \{ \.\.\.e\.slot, loopStart, loopEnd \}/.test(fn ?? "")
+       && !/\.\.\.target\.slot/.test(fn ?? ""),
+     "spreading target.slot after an await reverts anything changed during the rebuild");
+  ok("and persists that same committed entry",
+     /persisted = next;/.test(fn ?? "") && !/persistMatchedState\(\s*\{ \.\.\.target/.test(fn ?? ""),
+     "persisting the stale copy writes the reverted value to storage too");
+}
+
+section("12f. a picker row never sits on a raw YouTube id");
+{
+  // GET /api/stems/library falls back to the id when history has no title yet, and there is
+  // a real window where that happens: the stems land (so /status reports ready and the
+  // client refetches) just before the title is recorded. A row reading "yTiVw3rFNhU" is
+  // unusable — you cannot tell which track it is — and it used to persist until a reload.
+  ok("the picker notices a title that is just the id",
+     /library\.some\(\(e\) => e\.title === e\.id\)/.test(picker),
+     "nothing else distinguishes the fallback from a real title");
+  ok("and refetches to heal it", /titleRetriesRef/.test(picker) && /fetchLibrary\(\)/.test(picker));
+  ok("but a bounded number of times",
+     /titleRetriesRef\.current >= 3/.test(picker),
+     "a track with no history entry looks identical and would poll forever");
+}
+
+section("12g. a stored anchor whose slot is gone must not lock the rack");
+{
+  // Both anchors persist by trackId/stem, so a restored id can match no loaded slot. Gating
+  // "has an anchor" on the id alone made every slot offer "Match Tempo" / "Match Key"
+  // against nothing, while no slot offered "Set ... Anchor" — the rack could not be
+  // re-anchored at all without clearing it.
+  ok("anchor presence is decided by a loaded slot, not a stored id",
+     /const hasReference = entries\.some\(\(e\) => e\.slot\.id === referenceSlotId\)/.test(multiPage)
+       && /const hasTempoAnchor = entries\.some\(\(e\) => e\.slot\.id === tempoAnchorId\)/.test(multiPage),
+     "a dangling id reads as an anchor that exists");
+  ok("and that is what SlotStrip is told",
+     /hasTempoAnchor=\{hasTempoAnchor\}/.test(multiPage)
+       && !/hasTempoAnchor=\{tempoAnchorId !== null\}/.test(multiPage));
+
+  // Phase and Move need a bar length. Snap has always fallen back to measuring the buffer;
+  // these read the same prop, so without the same fallback they sat dead on a rack with no
+  // anchor while Snap on the same slot worked.
+  ok("Phase/Move fall back to a measured tempo, like Snap",
+     /entry\.detectedBpm \?\? \(entry\.sourceBuffer \? sourceBpm\(entry\.sourceBuffer\) : undefined\)/.test(multiPage),
+     "greyed-out Phase and Move next to a working Snap is the symptom");
+  ok("that fallback uses the memoised measurement",
+     /sourceBpm\(entry\.sourceBuffer\)/.test(multiPage),
+     "estimateBpm is ~30ms and this is a render path");
 }
 
 section("13. expensive analysis is memoised");

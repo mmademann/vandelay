@@ -269,19 +269,71 @@ export const TEMPO_RELATIONS: {
   name: string;
   value: number;
   gridSafe: boolean;
+  /**
+   * `value` as a fraction in lowest terms. Kept alongside the decimal because the two
+   * numbers that decide how a relation *feels* both come straight out of it: the slot's
+   * beat grid meets the anchor's every `q` anchor beats, and the finest pulse both grids
+   * divide evenly is one `p`th of an anchor beat. See sharedTickBeats.
+   */
+  p: number;
+  q: number;
 }[] = [
   // Named by direction and amount, not by "half time" / "double time". Those are the
   // musician's words for it, but they make you stop and work out half of what.
   // Direction first, so the list reads as one slow-to-fast run and you can find the half
   // you want before reading any numbers. The list is ordered to match.
-  { label: "4× slow", name: "4× slower",     value: 1 / 4, gridSafe: true },
-  { label: "2× slow", name: "2× slower",     value: 1 / 2, gridSafe: true },
-  { label: "¾",       name: "¾ speed",       value: 3 / 4, gridSafe: false },
-  { label: "anchor",  name: "Anchor tempo",  value: 1,     gridSafe: true },
-  { label: "1⅓",      name: "1⅓ speed",      value: 4 / 3, gridSafe: false },
-  { label: "2× fast", name: "2× faster",     value: 2,     gridSafe: true },
-  { label: "4× fast", name: "4× faster",     value: 4,     gridSafe: true },
+  { label: "4× slow", name: "4× slower",     value: 1 / 4, gridSafe: true,  p: 1, q: 4 },
+  { label: "2× slow", name: "2× slower",     value: 1 / 2, gridSafe: true,  p: 1, q: 2 },
+  { label: "¾",       name: "¾ speed",       value: 3 / 4, gridSafe: false, p: 3, q: 4 },
+  { label: "anchor",  name: "Anchor tempo",  value: 1,     gridSafe: true,  p: 1, q: 1 },
+  { label: "1⅓",      name: "1⅓ speed",      value: 4 / 3, gridSafe: false, p: 4, q: 3 },
+  { label: "2× fast", name: "2× faster",     value: 2,     gridSafe: true,  p: 2, q: 1 },
+  { label: "4× fast", name: "4× faster",     value: 4,     gridSafe: true,  p: 4, q: 1 },
 ];
+
+/**
+ * The finest pulse the anchor and a slot at this relation both divide evenly, in anchor
+ * beats. One `p`th of a beat, where the relation is `p/q` in lowest terms.
+ *
+ * This is the number that decides whether a delay sounds welded to the rack or merely near
+ * it. At 4/3 the anchor's beat splits into 4 and the slot's into 3, and both land on the
+ * same 179ms tick at 84bpm — a delay set there reinforces a grid both tracks already share.
+ * A delay one rung away (0.375) still divides the slot's beat but not the anchor's, and the
+ * echoes fight the kick.
+ */
+export function sharedTickBeats(relation: number): number {
+  let best = TEMPO_RELATIONS[0];
+  for (const r of TEMPO_RELATIONS) {
+    if (Math.abs(r.value - relation) < Math.abs(best.value - relation)) best = r;
+  }
+  return 1 / best.p;
+}
+
+/**
+ * Delay times, in anchor beats, that land on BOTH beat grids at this relation.
+ *
+ * A delay locks when it divides one anchor beat a whole number of times AND divides the
+ * slot's beat (`q/p` anchor beats) a whole number of times. The coarsest is the shared tick;
+ * the rest are its subdivisions that survive the same test.
+ */
+export function lockingDelays(relation: number): number[] {
+  let best = TEMPO_RELATIONS[0];
+  for (const r of TEMPO_RELATIONS) {
+    if (Math.abs(r.value - relation) < Math.abs(best.value - relation)) best = r;
+  }
+  const slotBeat = best.q / best.p;
+  const whole = (x: number) => Math.abs(x - Math.round(x)) < 1e-9;
+  return DELAY_DIVISIONS.map((d) => d.beats).filter((b) => whole(1 / b) && whole(slotBeat / b));
+}
+
+/** Anchor beats between the two grids meeting — the denominator, by construction. */
+export function coincidenceBeats(relation: number): number {
+  let best = TEMPO_RELATIONS[0];
+  for (const r of TEMPO_RELATIONS) {
+    if (Math.abs(r.value - relation) < Math.abs(best.value - relation)) best = r;
+  }
+  return best.q;
+}
 
 /**
  * Buffer-length ratio that makes `targetBpm` play at `anchorBpm * relation`.

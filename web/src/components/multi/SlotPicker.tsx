@@ -86,6 +86,32 @@ export function SlotPicker({ library: libraryProp, onConfirm, onClose, onLibrary
     };
   }, []);
 
+  /**
+   * Heal a row that is showing a raw YouTube id instead of a title.
+   *
+   * The server falls back to the id when history has no entry for a separated track, which
+   * is a real window: the stems appear (so /status says ready and the client refetches)
+   * slightly before the title is recorded. Whatever the client read in that window then sits
+   * in state until a reload, and a raw id is unusable — you cannot tell which track it is.
+   *
+   * Bounded, because the fallback is also what a genuinely history-less track looks like
+   * forever; retrying that on a timer would be an infinite poll for a title that is never
+   * coming.
+   */
+  const titleRetriesRef = useRef(0);
+  useEffect(() => {
+    if (!library.some((e) => e.title === e.id)) return;
+    if (titleRetriesRef.current >= 3) return;
+    const t = setTimeout(() => {
+      titleRetriesRef.current += 1;
+      fetchLibrary()
+        .then((data) => { setLibrary(data); onLibraryUpdated?.(data); })
+        .catch(() => { /* transient; the next render may schedule another */ });
+    }, 2500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [library]);
+
   async function handleUrlSubmit() {
     const trimmed = urlInput.trim();
     if (!trimmed || separating) return;

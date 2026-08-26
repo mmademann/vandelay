@@ -1210,6 +1210,17 @@ export function MultiPage() {
     // re-lock want), `null` clears it back to automatic, a number sets it. Without the null
     // case a stored relation is unreachable — which is how a slot written by an earlier
     // build got stuck honouring a relation the user never picked.
+    // What the ENGINE currently holds, not what React state says. entriesRef only refreshes
+    // on render, so picking a second sweet spot before the first has committed read a stale
+    // ratio: the swap then rescaled loop bounds and playhead by stretch/oldStretch against a
+    // buffer that was already at the new length, and the loop came out wrong — sometimes
+    // collapsed to nothing. swapBuffer keeps the engine's copy current, so it is the truth.
+    const held = multiEngine.getBuffer(targetSlotId);
+    const currentStretch =
+      held && target.sourceBuffer.duration > 0
+        ? held.duration / target.sourceBuffer.duration
+        : target.stretch;
+
     const chosen =
       relationOverride === undefined ? target.tempoRelation : (relationOverride ?? undefined);
     // Heard-to-heard: targetBpm is the raw file tempo, so it must be scaled by this slot's
@@ -1221,7 +1232,7 @@ export function MultiPage() {
 
     // Nothing to rebuild, but a step that lands on the same buffer length must still record
     // the relation or the badge and the stale check disagree with what is playing.
-    if (Math.abs(stretch - target.stretch) < 0.005) {
+    if (Math.abs(stretch - currentStretch) < 0.005) {
       if (chosen !== target.tempoRelation || relation !== target.effectiveRelation) {
         setEntries((prev) =>
           prev.map((e) =>
@@ -1242,26 +1253,41 @@ export function MultiPage() {
 
     try {
       const stretched = stretchBuffer(target.sourceBuffer, stretch);
-      // Ratio is relative to what the engine currently holds, not to the source.
-      multiEngine.swapBuffer(targetSlotId, stretched, stretch / target.stretch);
-      const stretchedSlot = {
-        ...target.slot,
-        loopStart: multiEngine.getLoopStart(targetSlotId),
-        loopEnd: multiEngine.getLoopEnd(targetSlotId),
-      };
+      // Ratio is relative to what the engine currently holds, not to the source — and it
+      // has to be measured from the engine for the same reason (see currentStretch above).
+      multiEngine.swapBuffer(targetSlotId, stretched, stretch / currentStretch);
+      const loopStart = multiEngine.getLoopStart(targetSlotId);
+      const loopEnd = multiEngine.getLoopEnd(targetSlotId);
+
+      // Derive the committed slot from the updater's own `prev`, never from `target`.
+      // `target` was read before the two awaits above, so anything the user changed while
+      // the buffer was rebuilding — a knob, or the delay the Sweet spots picker writes in
+      // the same click — is still at its old value in that copy, and spreading it here put
+      // the old value back. That is why picking a second sweet spot appeared to do nothing
+      // until you picked it twice: the first attempt genuinely reverted its own delay, in
+      // the audio and in storage, not just in the badge.
+      let persisted: SlotEntry | null = null;
       setEntries((prev) =>
-        prev.map((e) =>
-          e.slot.id === targetSlotId
-            ? { ...e, buffer: stretched, stretch, tempoRelation: chosen, effectiveRelation: relation, stretching: false, slot: stretchedSlot }
-            : e,
-        ),
+        prev.map((e) => {
+          if (e.slot.id !== targetSlotId) return e;
+          const next = {
+            ...e,
+            buffer: stretched,
+            stretch,
+            tempoRelation: chosen,
+            effectiveRelation: relation,
+            stretching: false,
+            slot: { ...e.slot, loopStart, loopEnd },
+          };
+          persisted = next;
+          return next;
+        }),
       );
       // Persist so the stretch can be re-applied on reload — the buffer itself is memory-only.
-      persistMatchedState(
-        { ...target, buffer: stretched, stretch, tempoRelation: chosen, effectiveRelation: relation, slot: stretchedSlot },
-        target.isMatched ?? false,
-        target.matchedBasePitch ?? 0,
-      );
+      if (persisted) {
+        const pEntry: SlotEntry = persisted;
+        persistMatchedState(pEntry, pEntry.isMatched ?? false, pEntry.matchedBasePitch ?? 0);
+      }
     } catch {
       setEntries((prev) => prev.map((e) => (e.slot.id === targetSlotId ? { ...e, stretching: false } : e)));
     }
@@ -2001,7 +2027,13 @@ export function MultiPage() {
             );
           }
           const isReference = entry.slot.id === referenceSlotId;
-          const hasReference = referenceSlotId !== null;
+          // Presence of a LOADED anchor, not merely a stored id. Both anchors persist by
+          // trackId/stem, so a session whose anchor slot is no longer in the rack restores an
+          // id that matches nothing — and then every slot offered "Match Tempo" / "Match Key"
+          // against an anchor that does not exist, with no slot showing "Set … Anchor". The
+          // rack became unsettable: nothing to match to, and no way to nominate one.
+          const hasReference = entries.some((e) => e.slot.id === referenceSlotId);
+          const hasTempoAnchor = entries.some((e) => e.slot.id === tempoAnchorId);
           const isTempoAnchor = entry.slot.id === tempoAnchorId;
           // The anchor itself snaps to its own tempo, so it gets no override.
           const slotAnchorBpm = isTempoAnchor ? undefined : anchorBpm;
@@ -2038,7 +2070,12 @@ export function MultiPage() {
               rawGridBpm={
                 anchorBpm !== undefined
                   ? anchorBarGridBpm(anchorBpm, anchorEntryForBpm?.slot, entry.slot, masterSettings.masterSpeed ?? 1)
-                  : entry.detectedBpm
+                  // No anchor: this slot's own tempo defines its bar. Falling back to
+                  // measuring the buffer matches what Snap has always done — without it
+                  // Phase and Move sat greyed out on any slot Essentia had not returned a
+                  // BPM for, while Snap on the same slot worked fine. sourceBpm is memoised
+                  // per buffer, so this is safe in a render path.
+                  : entry.detectedBpm ?? (entry.sourceBuffer ? sourceBpm(entry.sourceBuffer) : undefined)
               }
               // Effective, not raw: slots are heard at the anchor's played tempo, so a
               // "1/8" delay or a ½-bar phase must be computed from that. Using the raw
@@ -2051,7 +2088,7 @@ export function MultiPage() {
               autoRelation={autoRelations.get(entry.slot.id)}
               onTempoRelationChange={(rel) => { void handleTempoRelationChange(entry.slot.id, rel); }}
               isTempoAnchor={isTempoAnchor}
-              hasTempoAnchor={tempoAnchorId !== null}
+              hasTempoAnchor={hasTempoAnchor}
               onSetTempoAnchor={() => handleSetTempoAnchor(entry.slot.id)}
               onTempoMatch={() => {
                 // Stretch then quantize, same as the transport's Match Tempos — rate alone

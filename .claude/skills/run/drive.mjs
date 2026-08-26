@@ -174,10 +174,15 @@ await attempt("export", async () => {
   await page.getByRole("button", { name: /↓ Export/ }).first().click({ timeout: 10000 });
   const submit = page.getByRole("button", { name: /^Export (WAV|MP3|FLAC)/i }).first();
   await submit.waitFor({ timeout: 10000 });
+  // The render is offline but not fast: the master loop is the LONGEST slot loop, so a rack
+  // holding a full 11-minute track renders 11 minutes of audio through every effects chain.
+  // Timed, and reported, because a slow render and a hung one look identical from here.
+  const started = Date.now();
   const [download] = await Promise.all([
-    page.waitForEvent("download", { timeout: 180000 }),
+    page.waitForEvent("download", { timeout: 600000 }),
     submit.click(),
   ]);
+  step.exportSeconds = Math.round((Date.now() - started) / 1000);
   const out = path.join(SHOTS, "export.wav");
   await download.saveAs(out);
   const bytes = fs.statSync(out).size;

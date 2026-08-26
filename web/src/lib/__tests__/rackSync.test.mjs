@@ -911,6 +911,133 @@ section("20b. a slot joining a running rack lands on the bar, not on the peer's 
   ok("joining applies this slot's own phase on top", Math.abs((withPhase - without) - 0.5 * barSec) < 1e-9);
 }
 
+section("20c. the \u26a1 click-in combos really do land on both beat grids");
+{
+  // loopSnap.lockingDelays / sharedTickBeats. The picker offers a delay per tempo relation;
+  // the claim is that the echoes land on the anchor's grid AND the slot's. That is only true
+  // when the delay divides one anchor beat and the slot's beat (q/p anchor beats) a whole
+  // number of times each. Pure arithmetic, so a wrong table cannot hide behind the audio.
+  const RELATIONS = [
+    { name: "4x slower", value: 1 / 4, p: 1, q: 4 },
+    { name: "2x slower", value: 1 / 2, p: 1, q: 2 },
+    { name: "3/4 speed", value: 3 / 4, p: 3, q: 4 },
+    { name: "anchor",    value: 1,     p: 1, q: 1 },
+    { name: "1 1/3",     value: 4 / 3, p: 4, q: 3 },
+    { name: "2x faster", value: 2,     p: 2, q: 1 },
+    { name: "4x faster", value: 4,     p: 4, q: 1 },
+  ];
+  const whole = (x) => Math.abs(x - Math.round(x)) < 1e-9;
+  for (const r of RELATIONS) {
+    ok(`${r.name}: p/q reproduces the decimal`, Math.abs(r.p / r.q - r.value) < 1e-12);
+    const slotBeat = r.q / r.p;                       // in anchor beats
+    const locks = DIVISIONS.filter((b) => whole(1 / b) && whole(slotBeat / b));
+    ok(`${r.name}: at least one locking delay exists`, locks.length > 0);
+    const tick = 1 / r.p;                              // sharedTickBeats
+    ok(`${r.name}: the shared tick is the coarsest locking value`,
+       Math.abs(Math.max(...locks) - tick) < 1e-9, `${Math.max(...locks)} vs ${tick}`);
+    for (const b of locks) {
+      ok(`${r.name}: ${b.toFixed(4)} divides the anchor's beat`, whole(1 / b));
+      ok(`${r.name}: ${b.toFixed(4)} divides the slot's beat`, whole(slotBeat / b));
+    }
+    // A neighbour that divides only one side must NOT be offered — that is the 0.375-at-4/3
+    // case the user heard as fighting the kick.
+    const oneSided = DIVISIONS.filter((b) => whole(slotBeat / b) !== whole(1 / b));
+    for (const b of oneSided) {
+      ok(`${r.name}: ${b.toFixed(4)} is correctly excluded (divides only one grid)`,
+         !locks.includes(b));
+    }
+  }
+  // The concrete case from the session that started this: 84bpm anchor, 1 1/3 slot.
+  const beatMs = (60 / 84) * 1000;
+  ok("84bpm anchor at 1 1/3: shared tick is 179ms",
+     Math.abs(beatMs / 4 - 178.571) < 0.01 && Math.abs((beatMs / (4 / 3)) / 3 - 178.571) < 0.01,
+     `${beatMs / 4}`);
+}
+
+section("20d. two stretches in a row: bounds, playhead and phase together");
+{
+  // multiEngine.swapBuffer + MultiPage.stretchSlotToTempoAnchor. Picking a second sweet spot
+  // before the first has committed to React state used to read the OLD stretch and rescale
+  // by stretch/staleStretch against a buffer already swapped — bounds landed wrong, and a
+  // big enough error collapsed the loop. The ratio is now measured from the engine's buffer.
+  const SOURCE_DUR = 60, BAR = 2.0;              // anchor bar, in the slot's file seconds
+  const mk = () => ({ dur: SOURCE_DUR, loopStart: 8, loopEnd: 8 + 4 * BAR, stretch: 1, phase: 0.25 });
+  // swapBuffer, faithfully: bounds and playhead scale, the bar does not.
+  const swap = (s, nextStretch, ratio) => {
+    s.loopStart *= ratio; s.loopEnd *= ratio; s.dur *= ratio; s.stretch = nextStretch;
+    return s;
+  };
+  const engineRatio = (s, next) => next / s.stretch;   // measured from what is held
+
+  const a = swap(mk(), 1.04, engineRatio(mk(), 1.04));
+  const b = swap({ ...a }, 0.7, engineRatio(a, 0.7));
+  ok("after two stretches the region is the source region scaled once, not twice",
+     Math.abs(b.loopStart - 8 * 0.7) < 1e-9 && Math.abs(b.loopEnd - (8 + 4 * BAR) * 0.7) < 1e-9,
+     `${b.loopStart} / ${b.loopEnd}`);
+  ok("the loop is still 4 bars long in its own timebase",
+     Math.abs((b.loopEnd - b.loopStart) / (BAR * 0.7) - 4) < 1e-9);
+
+  // The witness: the stale ratio compounds, and the further the two stretches are apart the
+  // worse it gets. 1.04 then 0.7 lands 4% off; a 5.57x row after a 0.35x row lands nowhere.
+  const stale = swap({ ...a }, 0.7, 0.7 / 1);      // 1 = the not-yet-committed stretch
+  ok("a stale ratio does NOT produce the same region", Math.abs(stale.loopStart - b.loopStart) > 1e-6,
+     `${stale.loopStart} vs ${b.loopStart}`);
+
+  // Phase is a fraction of the ANCHOR's bar, and the anchor does not move when a slot is
+  // stretched — so the offset in the slot's new timebase is phase x the new bar, and the
+  // playhead starts there. It must not be carried through the stretch as a scaled constant.
+  const barAfter = BAR * 0.7;
+  const offset = b.phase * barAfter;
+  const start = b.loopStart + offset;
+  ok("phase still lands a quarter of a bar into the loop", Math.abs(offset / barAfter - 0.25) < 1e-9);
+  ok("the playhead starts at loopStart + phase, inside the loop",
+     start > b.loopStart && start < b.loopEnd, `${start} in ${b.loopStart}..${b.loopEnd}`);
+  ok("phase did not move the region", Math.abs(b.loopStart - 8 * 0.7) < 1e-9);
+
+  // And Move still slides the region without disturbing either.
+  const moved = { ...b, loopStart: b.loopStart + barAfter / 4, loopEnd: b.loopEnd + barAfter / 4 };
+  ok("move keeps the length", Math.abs((moved.loopEnd - moved.loopStart) - (b.loopEnd - b.loopStart)) < 1e-9);
+  ok("move keeps the phase fraction", Math.abs((moved.loopStart + offset - moved.loopStart) / barAfter - 0.25) < 1e-9);
+}
+
+section("20e. Snap on a slot that is stretched, phased and moved");
+{
+  // SlotStrip.doSnap -> loopSnap.quantizeToGrid, on the per-slot grid (rawGridBpm). The
+  // question this answers: does rounding the region still behave once the other three
+  // controls have been used? Each one touches a different quantity, which is the design.
+  const anchorRaw = 120, aRate = 0.70, eRate = 0.75;
+  const gridBpm = anchorRaw * (aRate / eRate);         // anchorBarGridBpm
+  const bar = (60 / gridBpm) * 4;                       // in the slot's file seconds
+  const anchorHeardBar = ((60 / anchorRaw) * 4) / aRate;
+
+  ok("the slot's grid bar is one anchor bar in heard time",
+     Math.abs(bar / eRate - anchorHeardBar) < 1e-9, `${bar / eRate} vs ${anchorHeardBar}`);
+
+  // Stretched: the grid is unchanged, because a stretch alters the buffer, not the rate that
+  // maps file seconds to heard seconds. Snapping a stretched slot needs no extra term.
+  for (const stretch of [1, 1.04, 0.7, 2.79]) {
+    ok(`stretch ${stretch}: the grid bar is unaffected`,
+       Math.abs(((60 / gridBpm) * 4) - bar) < 1e-9);
+  }
+
+  // A moved, ragged region rounds to whole bars and keeps its start.
+  const start = 3.17, ragged = start + 3.62 * bar;
+  const bars = Math.max(1, Math.round((ragged - start) / bar));
+  const snapped = { loopStart: start, loopEnd: start + bars * bar };
+  ok("snap rounds the length to whole bars", Math.abs((snapped.loopEnd - snapped.loopStart) / bar - 4) < 1e-9);
+  ok("snap does not drag the region back to a bar line — Move stays honoured",
+     Math.abs(snapped.loopStart - start) < 1e-9);
+  ok("snapped length is a whole number of anchor bars in heard time",
+     Math.abs(((snapped.loopEnd - snapped.loopStart) / eRate) / anchorHeardBar - 4) < 1e-9);
+
+  // Phase is a playhead offset, so snapping the bounds cannot disturb it.
+  const phase = 1 / 3;
+  const before = phase * bar, after = phase * ((60 / gridBpm) * 4);
+  ok("snap leaves the phase offset untouched", Math.abs(before - after) < 1e-9);
+  ok("the phased playhead still sits inside the snapped loop",
+     snapped.loopStart + after > snapped.loopStart && snapped.loopStart + after < snapped.loopEnd);
+}
+
 section("21. export reproduces the phase offset it cannot inherit");
 {
   // renderMulti schedules an offline player, which — unlike the live one — has loop = false
