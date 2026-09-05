@@ -261,7 +261,14 @@ export function MultiPage() {
   const [sessionName, setSessionName] = useState("");
   // Lazy initialiser so the header shows the right name on the very first paint after a
   // reload, rather than flashing "Sessions" and correcting itself.
-  const [activeSessionName, setActiveSessionName] = useState<string | null>(loadActiveSessionName);
+  //
+  // Only when the URL actually carries slots, though. The name persists on its own, so an
+  // empty rack was restoring the last session's label with nothing loaded under it — and
+  // that label is the only thing claiming a session is open, so the page read as a
+  // half-restored session rather than the blank slate it was.
+  const [activeSessionName, setActiveSessionName] = useState<string | null>(() =>
+    (searchParams.get("slots") ?? "").trim() === "" ? null : loadActiveSessionName(),
+  );
   const [renamingSession, setRenamingSession] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [sessionsPanelOpen, setSessionsPanelOpen] = useState(false);
@@ -1478,6 +1485,8 @@ export function MultiPage() {
       // apply it twice.
       const finalStart = q.loopStart;
       const finalEnd = q.loopEnd;
+      // No carryPlayhead: rounding the region must not drag the audio with it. The engine
+      // folds the playhead back in if the shorter loop no longer contains it.
       multiEngine.updateSlot(entry.slot.id, { loopStart: finalStart, loopEnd: finalEnd });
       // Persist from the updater's own `prev`, not from the captured `entry`: the latter is
       // pre-stretch, and persistMatchedState divides by buffer.duration to store loop
@@ -1798,7 +1807,11 @@ export function MultiPage() {
         {sessionsPanelOpen && (
           <div
             ref={sessionsPanelRef}
-            className="absolute left-0 top-full mt-1 z-50 w-72 rounded-md border border-border/40 bg-zinc-900/95 shadow-xl backdrop-blur-sm ring-1 ring-border/30 p-3 flex flex-col gap-2"
+            // Capped and scrollable: the list grows with every saved session, and past a
+            // dozen the panel ran off the bottom of the window with the save box — the only
+            // way to add another — pushed out of reach. The header and the actions stay
+            // pinned; only the list between them scrolls.
+            className="absolute left-0 top-full mt-1 z-50 flex w-72 max-h-[min(70vh,32rem)] flex-col gap-2 rounded-md border border-border/40 bg-zinc-900/95 p-3 shadow-xl ring-1 ring-border/30 backdrop-blur-sm"
           >
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-semibold uppercase tracking-widest text-foreground/40">Sessions</span>
@@ -1810,6 +1823,7 @@ export function MultiPage() {
               <div className="py-2 text-xs text-foreground/30">No saved sessions yet.</div>
             )}
 
+            <div className="-mr-1 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-1">
             {namedSessions.map((s) => (
               <div key={s.name} className="group flex items-center rounded border border-border bg-muted/40 px-3 py-2">
                 {renamingSession === s.name ? (
@@ -1871,6 +1885,7 @@ export function MultiPage() {
                 >🗑</button>
               </div>
             ))}
+            </div>
 
             <form
               onSubmit={(e) => { e.preventDefault(); handleSaveSession(); }}

@@ -420,8 +420,8 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
     });
   }
 
-  function update(patch: Partial<MultiSlot>) {
-    multiEngine.updateSlot(slot.id, patch);
+  function update(patch: Partial<MultiSlot>, opts?: { carryPlayhead?: boolean }) {
+    multiEngine.updateSlot(slot.id, patch, opts);
     onChange(patch);
     persistSettings(patch);
     if (patch.speed !== undefined || patch.pitch !== undefined || patch.linkPitch !== undefined) {
@@ -582,11 +582,9 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
     const nextStart = Math.max(0, Math.min(slot.loopStart + bars * barSec, buffer.duration - loopDur));
     if (Math.abs(nextStart - slot.loopStart) < 1e-6) return;
 
-    update({ loopStart: nextStart, loopEnd: nextStart + loopDur });
-
-    // Carry the playhead with the region — updateSlot preserves absolute position, so
-    // without this the playhead is left behind and a large move puts it outside the loop.
-    multiEngine.nudgeSlot(slot.id, nextStart - slot.loopStart);
+    // Move means "the region and what is playing move together", which the engine now takes
+    // as an argument rather than as a follow-up nudge each caller had to remember.
+    update({ loopStart: nextStart, loopEnd: nextStart + loopDur }, { carryPlayhead: true });
     setSeekRevision(multiEngine.getSeekNonce(slot.id));
   }
 

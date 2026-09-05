@@ -262,8 +262,18 @@ class MultiEngine {
     slot.seekNonce++;
 
     if (wasPlaying) {
-      const t = Tone.now() + 0.05;
-      slot.player.start(t, newPos);
+      // Restart in the FUTURE, from where the slot will be by then — not from where it was
+      // when the position was read. `newPos` was sampled at "now"; starting it 50ms later
+      // from that same offset drops the slot 50ms behind the rest of the rack on every
+      // buffer swap (a sweet spot, a re-lock, auto re-lock). At 84bpm that is 7% of a beat,
+      // which on drums is an audible flam. Advance by the lead time in FILE seconds, so the
+      // playback rate has to be folded in, and wrap so a swap near the loop end stays inside.
+      const lead = 0.05;
+      const t = Tone.now() + lead;
+      const rate = slot.player.playbackRate as number;
+      const advanced = this.wrapIntoLoop(slot, newPos + lead * (Number.isFinite(rate) ? rate : 1));
+      slot.player.start(t, advanced);
+      slot.startOffset = advanced;
       slot.startedAt = t;
       slot.playing = true;
     } else {
@@ -348,9 +358,29 @@ class MultiEngine {
     }
   }
 
-  updateSlot(id: string, patch: Partial<MultiSlot>): void {
+  /**
+   * Write slot properties, and decide what happens to the playhead in ONE place.
+   *
+   * Loop bounds and the playhead are separate quantities, so every caller that moved bounds
+   * had to remember whether to move the read position with them — Move carries it, Snap and
+   * quantize do not, and quantize additionally has to fold a playhead the new loop no longer
+   * contains. That was three call sites each remembering a different rule, and the one that
+   * forgot (quantize, mid-playback) left slots running past their own loop.
+   *
+   * Now the rule is an argument. `carryPlayhead` slides the read position with the region,
+   * which is what Move means; without it the position stays put, which is what Snap and
+   * quantize mean. Either way the playhead is folded back inside the loop before returning,
+   * because a player parked outside its loop region plays to the end of the buffer instead
+   * of wrapping — that guarantee belongs here rather than at each call site.
+   */
+  updateSlot(id: string, patch: Partial<MultiSlot>, opts?: { carryPlayhead?: boolean }): void {
     const slot = this.slots.get(id);
     if (!slot) return;
+
+    const boundsMoved = patch.loopStart !== undefined || patch.loopEnd !== undefined;
+    const startDelta = boundsMoved && patch.loopStart !== undefined
+      ? patch.loopStart - slot.loopStart
+      : 0;
 
     Object.assign(slot, patch);
 
@@ -364,7 +394,7 @@ class MultiEngine {
         slot.player.playbackRate = slotPlaybackRate(slot, this.masterSettings.masterSpeed);
       }
     }
-    if (patch.loopStart !== undefined || patch.loopEnd !== undefined) {
+    if (boundsMoved) {
       slot.player.loopStart = slot.loopStart;
       slot.player.loopEnd = slot.loopEnd;
       if (slot.playing) {
@@ -372,6 +402,13 @@ class MultiEngine {
         slot.startOffset = pos;
         slot.startedAt = Tone.now();
       }
+      // Sliding the region without the playhead strands it behind — a large Move would put
+      // it outside the loop entirely, which is why Move used to follow every bounds write
+      // with its own nudge.
+      if (opts?.carryPlayhead && startDelta !== 0) this.nudgeSlot(id, startDelta);
+      // Always, whichever rule applied: a position outside the loop plays on to the end of
+      // the buffer rather than wrapping.
+      this.reseatInLoop(id);
     }
     if (patch.gain !== undefined || patch.muted !== undefined || patch.soloed !== undefined) {
       this.recomputeAllVolumes();
@@ -811,6 +848,33 @@ class MultiEngine {
       return this.wrapIntoLoop(slot, unphased + this.phaseOffsetFor(slot));
     }
     return null;
+  }
+
+  /**
+   * After a bounds change, fold a running playhead back inside the loop.
+   *
+   * `updateSlot` writes the player's loop points and deliberately leaves the playhead where
+   * it is — a Move must not jump the audio. But quantize can shorten a loop past the current
+   * position, and a player whose position sits outside its loop region plays on to the end
+   * of the buffer before it ever wraps. Wrapping by whole loop durations is safe for the
+   * grid: post-quantize a loop is a whole number of bars, so folding by it preserves the
+   * slot's position within the bar exactly.
+   *
+   * No-op when the playhead is already inside, so Move and Snap stay silent.
+   */
+  reseatInLoop(id: string): void {
+    const slot = this.slots.get(id);
+    if (!slot || !slot.playing) return;
+    const dur = slot.loopEnd - slot.loopStart;
+    if (dur <= 0) return;
+    const pos = this.getSlotPosition(id);
+    if (pos >= slot.loopStart && pos < slot.loopEnd) return;
+    const wrapped = this.wrapIntoLoop(slot, pos);
+    const now = Tone.now();
+    slot.player.seek(wrapped, now);
+    slot.startOffset = wrapped;
+    slot.startedAt = now;
+    slot.seekNonce++;
   }
 
   /** Fold an absolute position back inside a slot's loop. */

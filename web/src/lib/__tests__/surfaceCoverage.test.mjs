@@ -419,8 +419,8 @@ section("12. moving the loop region keeps its geometry consistent");
      "Move changes what is looped; Phase changes when it lands — keep them independent");
   ok("it clamps to the buffer rather than wrapping", /Math\.max\(0/.test(mv ?? "") && /buffer\.duration/.test(mv ?? ""));
   ok("it preserves loop length", /loopDur/.test(mv ?? ""));
-  ok("it carries the playhead with the region", /nudgeSlot/.test(mv ?? ""),
-     "updateSlot preserves absolute position, so without this the playhead jumps musically and a large move leaves it outside the loop");
+  ok("it carries the playhead with the region", /carryPlayhead: true/.test(mv ?? ""),
+     "bounds and playhead are separate, so Move has to say which rule it wants — the engine applies it");
   ok("it repaints the playhead marker", /setSeekRevision/.test(mv ?? ""));
   // Both rewind paths must target loopStart, which Move updates — so they follow the region.
   const rw = fnBody(engine, "rewindAll()");
@@ -656,6 +656,61 @@ section("12g. a stored anchor whose slot is gone must not lock the rack");
   ok("that fallback uses the memoised measurement",
      /sourceBpm\(entry\.sourceBuffer\)/.test(multiPage),
      "estimateBpm is ~30ms and this is a render path");
+}
+
+section("12h. swapBuffer compensates its own scheduling lead");
+{
+  const fn = fnBody(engine, "swapBuffer(id: string, buffer: AudioBuffer, ratio: number)");
+  ok("swapBuffer exists", fn !== null);
+  ok("it advances the resume position by the lead, scaled by playback rate",
+     /const advanced = this\.wrapIntoLoop\(slot, newPos \+ lead \* \(Number\.isFinite\(rate\) \? rate : 1\)\)/.test(fn ?? ""),
+     "starting at now+lead from a position sampled at now puts the slot a lead behind the rack");
+  ok("and the parked offset follows it",
+     /slot\.startOffset = advanced;/.test(fn ?? ""),
+     "a later pause/resume would otherwise rewind by the lead again");
+}
+
+section("12i. quantizing a running rack does not strand a playhead");
+{
+  // updateSlot leaves the playhead alone on purpose (Move must not jump the audio), but
+  // quantize can shorten a loop past the current position, and a player sitting outside its
+  // loop region plays to the end of the buffer before it ever wraps.
+  const fn = fnBody(engine, "reseatInLoop(id: string)");
+  ok("the engine can fold a stranded playhead back in", fn !== null);
+  ok("it is a no-op while the playhead is inside",
+     /if \(pos >= slot\.loopStart && pos < slot\.loopEnd\) return;/.test(fn ?? ""),
+     "Move and Snap must stay silent");
+  ok("it folds by whole loop durations, preserving the bar position",
+     /const wrapped = this\.wrapIntoLoop\(slot, pos\)/.test(fn ?? ""),
+     "a post-quantize loop is a whole number of bars, so folding by it keeps the beat");
+  // The fold is the engine's job, not each caller's — that was the whole point of moving the
+  // rule into updateSlot. Quantize must NOT ask to carry the playhead: rounding the region
+  // must not drag the audio with it.
+  ok("updateSlot folds a stranded playhead itself",
+     /if \(boundsMoved\)[\s\S]{0,700}this\.reseatInLoop\(id\);/.test(engine),
+     "leaving it to callers is how quantize came to miss it");
+  ok("quantize does not carry the playhead",
+     /multiEngine\.updateSlot\(entry\.slot\.id, \{ loopStart: finalStart, loopEnd: finalEnd \}\)/.test(multiPage)
+       && !/reseatInLoop\(entry\.slot\.id\)/.test(multiPage),
+     "rounding a region is not a Move");
+  ok("no call site outside the engine folds the playhead by hand",
+     !/reseatInLoop/.test(multiPage) && !/reseatInLoop/.test(slotStrip),
+     "one door: the rule lives in updateSlot or it decays back to three call sites");
+}
+
+section("12j. the sessions panel stays inside the window");
+{
+  // The list grows with every save. Unbounded, it ran off the bottom of the screen and took
+  // the save box — the only way to add another session — with it.
+  const panel = multiPage.slice(multiPage.indexOf("sessionsPanelOpen && ("), multiPage.indexOf("sessionsPanelOpen && (") + 6000);
+  ok("the panel is height-capped", /max-h-\[min\(70vh,32rem\)\]/.test(panel),
+     "a viewport-relative cap, so it also works on a short window");
+  ok("the list scrolls, not the panel",
+     /overflow-y-auto/.test(panel) && /min-h-0/.test(panel),
+     "without min-h-0 a flex child refuses to shrink and the scroller never engages");
+  ok("the save form sits outside the scroller",
+     panel.indexOf("overflow-y-auto") < panel.indexOf("Save current session"),
+     "it is the one control that must stay reachable at any list length");
 }
 
 section("13. expensive analysis is memoised");

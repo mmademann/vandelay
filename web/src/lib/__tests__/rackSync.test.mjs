@@ -1038,6 +1038,63 @@ section("20e. Snap on a slot that is stretched, phased and moved");
      snapped.loopStart + after > snapped.loopStart && snapped.loopStart + after < snapped.loopEnd);
 }
 
+section("20f. a mid-playback buffer swap resumes where the slot WILL be, not where it was");
+{
+  // multiEngine.swapBuffer. It reads the position at "now" and restarts the player at
+  // now + 0.05 (the scheduling lead every start in this engine uses). Starting from the
+  // sampled offset drops the slot a full lead behind the rack on every swap — a sweet spot,
+  // a re-lock, an auto re-lock — and those stack.
+  const LEAD = 0.05;
+  const swapResume = (pos, ratio, rate, loopStart, loopEnd) => {
+    const scaled = Math.max(loopStart, Math.min(loopEnd, pos * ratio));
+    const advanced = scaled + LEAD * rate;
+    const dur = loopEnd - loopStart;
+    return loopStart + ((((advanced - loopStart) % dur) + dur) % dur);
+  };
+  for (const rate of [0.5, 0.75, 1, 1.33]) {
+    const loopStart = 2, loopEnd = 10, pos = 5;
+    const resumed = swapResume(pos, 1, rate, loopStart, loopEnd);
+    ok(`rate ${rate}: resumes one lead ahead, in file seconds`,
+       Math.abs(resumed - (pos + LEAD * rate)) < 1e-9, `${resumed}`);
+    // Heard time is what matters: the slot must be exactly LEAD seconds of wall clock later.
+    ok(`rate ${rate}: that is exactly the lead in heard time`,
+       Math.abs((resumed - pos) / rate - LEAD) < 1e-9);
+  }
+  // A swap close to the loop end wraps rather than starting past it.
+  const nearEnd = swapResume(9.99, 1, 1, 2, 10);
+  ok("a swap near the loop end wraps inside the loop", nearEnd >= 2 && nearEnd < 10, `${nearEnd}`);
+  // And the scaling still happens first, so a stretch does not lose the position.
+  const scaled = swapResume(6, 0.5, 1, 1, 5);
+  ok("the position is rescaled before the lead is added", Math.abs(scaled - (3 + LEAD)) < 1e-9, `${scaled}`);
+}
+
+section("20g. quantizing mid-playback keeps the slot in its loop and on the bar");
+{
+  // multiEngine.reseatInLoop, called by quantizeAllToAnchorGrid. Folding by whole loop
+  // durations is what preserves the beat: a quantized loop is a whole number of bars.
+  const BAR = 2.0;
+  const reseat = (pos, loopStart, loopEnd) => {
+    if (pos >= loopStart && pos < loopEnd) return pos;
+    const dur = loopEnd - loopStart;
+    return loopStart + ((((pos - loopStart) % dur) + dur) % dur);
+  };
+  // A 6-bar loop quantized down to 4 bars, with the playhead at 5.5 bars — outside the new
+  // region, which is exactly the case that used to run on to the end of the buffer.
+  const start = 1.0;
+  const pos = start + 5.5 * BAR;
+  const out = reseat(pos, start, start + 4 * BAR);
+  ok("a stranded playhead is folded back inside", out >= start && out < start + 4 * BAR, `${out}`);
+  ok("and lands at the same point in the bar",
+     Math.abs((((out - start) / BAR) % 1) - (((pos - start) / BAR) % 1)) < 1e-9,
+     `${((out - start) / BAR) % 1} vs ${((pos - start) / BAR) % 1}`);
+  ok("a playhead already inside is left untouched",
+     reseat(start + 1.25 * BAR, start, start + 4 * BAR) === start + 1.25 * BAR,
+     "Move and Snap must not jump the audio");
+  // Growing the loop never strands anything, so it must also be a no-op.
+  ok("growing the loop leaves the playhead alone",
+     reseat(start + 3.5 * BAR, start, start + 8 * BAR) === start + 3.5 * BAR);
+}
+
 section("21. export reproduces the phase offset it cannot inherit");
 {
   // renderMulti schedules an offline player, which — unlike the live one — has loop = false
