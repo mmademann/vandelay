@@ -22,6 +22,11 @@ router.post("/stems", async (req, res) => {
 
   const id = parsed.data.id ?? (parsed.data.url ? extractVideoId(parsed.data.url) : null);
   if (!id) return res.status(400).json({ error: "Could not extract YouTube video ID" });
+  // The id reaches this route straight from the request body, and below it is interpolated
+  // into cache/<id>.wav and stems/htdemucs/<id>/. Every other id-taking route runs this
+  // check; the upload path added `id` here and skipped it. CORS is wide open, so any page
+  // the user visits can post an arbitrary one.
+  if (!isValidTrackId(id)) return res.status(400).json({ error: "Invalid id" });
 
   try {
     // Download WAV first — demucs needs it on disk before it can start. An uploaded track is

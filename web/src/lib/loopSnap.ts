@@ -323,7 +323,20 @@ export function lockingDelays(relation: number): number[] {
   }
   const slotBeat = best.q / best.p;
   const whole = (x: number) => Math.abs(x - Math.round(x)) < 1e-9;
-  return DELAY_DIVISIONS.map((d) => d.beats).filter((b) => whole(1 / b) && whole(slotBeat / b));
+  // Locked means an exact whole-number relationship to BOTH beats — the tick either divides
+  // the beat or is a whole number of them.
+  //
+  // The "or a whole number of them" half is not decoration. Requiring the tick to divide an
+  // anchor beat caps every delay at one beat, and a slot playing 2x or 4x slower has beats
+  // that long or longer — so 4x slower, 2x slower and anchor all collapsed onto the same
+  // one-beat delay, and stepping between those three rows left the delay knob visibly
+  // unchanged. A slower slot's natural echo is bars, not subdivisions.
+  const locked = (beat: number, b: number) => whole(beat / b) || whole(b / beat);
+  // Never longer than the slot's own beat, so the echo reads as that slot's pulse rather
+  // than as a bar-length wash it happens to be a multiple of.
+  return DELAY_DIVISIONS.map((d) => d.beats).filter(
+    (b) => b <= slotBeat + 1e-9 && locked(1, b) && locked(slotBeat, b),
+  );
 }
 
 /** Anchor beats between the two grids meeting — the denominator, by construction. */

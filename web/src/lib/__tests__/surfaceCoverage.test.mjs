@@ -570,17 +570,17 @@ section("12d. one tempo control, and it sets both halves of the pair");
      /r\.delaySec !== undefined[\s\S]{0,80}\\u26a1 delay/.test(slotStrip),
      "if every row claimed a delay the marker would carry no information");
   ok("choosing a row writes the relation AND the delay",
-     /onTempoRelationChange\(autoRelation !== undefined && v === autoRelation \? null : v\);[\s\S]{0,700}delayTime: row\.delaySec/.test(slotStrip),
+     /onTempoRelationChange\(autoRelation !== undefined && v === autoRelation \? null : v\);[\s\S]{0,1800}delayTime: row\.delaySec/.test(slotStrip),
      "half the pair is worse than neither — the delay would sit on the old relation's grid");
-  // The reason the merge is safe: a half/double-time correction is a CORRECTION, and it must
-  // not cost you a delay you dialed by hand. Same rule the tempo re-sync already uses.
-  ok("a hand-set delay is left alone",
-     /delayOnGrid = delaySync !== null[\s\S]{0,160}<= 0\.005/.test(slotStrip)
-       && /row\?\.delaySec !== undefined && delayOnGrid/.test(slotStrip),
-     "merging the two controls would otherwise make every x2 correction destructive to a free delay");
-  ok("a delay switched off stays off",
-     /slot\.effects\.delayTime > 0\.001[\s\S]{0,120}snapDelayToTempo/.test(slotStrip),
-     "delaySync is null at zero, so the on-a-division test fails and the row cannot switch a delay on");
+  // It writes the delay UNCONDITIONALLY, and that is the fix, not an oversight. The first
+  // version gated it on "the delay is already within 5ms of a division", to protect a
+  // hand-dialed one. But snapDelayToTempo returns the nearest division however far away it
+  // is, so a real delay is either 0 or reads `free`, the gate declined every single time,
+  // and picking a row moved no knob. Re-adding any such gate silently kills the feature.
+  ok("the delay write is not gated on being near a division",
+     /if \(row\?\.delaySec !== undefined\) \{/.test(slotStrip)
+       && !/delayOnGrid/.test(slotStrip),
+     "the 5ms gate never passed in practice, so the row appeared to do nothing");
   ok("offered delays are filtered against the delay ceiling",
      /b \* beatSec <= EFFECTS_LIMITS\.delayTime\.max/.test(slotStrip),
      "a 4x-slower slot's shared tick can exceed 4s, and the knob would clamp it off the grid");
@@ -615,9 +615,17 @@ section("12d. one tempo control, and it sets both halves of the pair");
      /!isTempoAnchor && hasTempoAnchor && tempoRows\.length > 0/.test(slotStrip),
      "the anchor has no relation to the anchor, and there is nothing to be relative to with no anchor at all");
   const lock = fnBody(loopSnap, "export function lockingDelays");
-  ok("lockingDelays requires BOTH grids to divide evenly",
-     /whole\(1 \/ b\) && whole\(slotBeat \/ b\)/.test(lock ?? ""),
-     "dividing only the slot's beat is the 0.375-at-4/3 case that fights the kick");
+  ok("lockingDelays requires an exact relationship to BOTH grids",
+     /locked\(1, b\) && locked\(slotBeat, b\)/.test(lock ?? "")
+       && /whole\(beat \/ b\) \|\| whole\(b \/ beat\)/.test(lock ?? ""),
+     "locking to only the slot's beat is the 0.375-at-4/3 case that fights the kick");
+  ok("a tick may be a whole NUMBER of beats, not only a division of one",
+     /whole\(b \/ beat\)/.test(lock ?? ""),
+     "divisions-only caps every delay at one beat, so 4x slower / 2x slower / anchor all " +
+     "collapsed onto the same value and stepping between those rows moved no knob");
+  ok("but never longer than the slot's own beat",
+     /b <= slotBeat \+ 1e-9/.test(lock ?? ""),
+     "a multiple of the anchor's beat that exceeds the slot's reads as a bar-length wash, not its pulse");
 }
 
 section("12e. an async stretch must not resurrect the slot it captured");
@@ -848,19 +856,19 @@ section("12m. the sweep filter reaches live AND export");
        && /connect\(filterOff\)/.test(multiChain),
      "an export that ignores the filter is the classic half-implemented effect here");
   ok("both read the same two fields",
-     (multiChain.match(/filterFreq/g) ?? []).length >= 2 && (multiChain.match(/filterQ/g) ?? []).length >= 2);
+     (multiChain.match(/sweepFreq/g) ?? []).length >= 2 && (multiChain.match(/sweepRes/g) ?? []).length >= 2);
   ok("defaults leave it open, so old sessions are unchanged",
-     /filterFreq: 20000/.test(read("store.ts")) && /filterQ: 0\.5/.test(read("store.ts")),
+     /sweepFreq: 20000/.test(read("store.ts")) && /sweepRes: 0\.5/.test(read("store.ts")),
      "a filter that defaults closed silently dulls every existing session");
   ok("the frequency knob is logarithmic",
-     /Math\.log2\(\(slot\.effects\.filterFreq/.test(slotStrip)
-       && /EFFECTS_LIMITS\.filterFreq\.min \* Math\.pow\(2, v\)/.test(slotStrip),
+     /Math\.log2\(\(slot\.effects\.sweepFreq/.test(slotStrip)
+       && /EFFECTS_LIMITS\.sweepFreq\.min \* Math\.pow\(2, v\)/.test(slotStrip),
      "linear, the entire usable sweep lives in the last eighth of the travel");
   ok("the sweep reaches low enough to actually choke",
-     /filterFreq: \{ min: 30, max: 20000 \}/.test(read("store.ts")),
+     /sweepFreq: \{ min: 30, max: 20000 \}/.test(read("store.ts")),
      "a floor above the bass leaves low end passing at the bottom of the travel");
   ok("resonance range is the full sweep-to-squeal",
-     /filterQ: \{ min: 0\.5, max: 20 \}/.test(read("store.ts")));
+     /sweepRes: \{ min: 0\.5, max: 20 \}/.test(read("store.ts")));
 }
 
 section("12n. the session label names a session that exists");
@@ -874,6 +882,10 @@ section("12n. the session label names a session that exists");
   ok("a refused rename does not move the label",
      /const refused = updated\.some\(\(s\) => s\.name === oldName\);[\s\S]{0,120}if \(!refused\)/.test(multiPage),
      "renameNamedSession declines a name that is already taken; relabelling anyway pointed the header at a different session");
+  ok("an empty ?slots= clears the label on navigation, not only on mount",
+     /if \(\(searchParams\.get\("slots"\) \?\? ""\)\.trim\(\) === ""\) setActiveSessionName\(null\);/.test(multiPage)
+       && /\}, \[searchParams\]\);/.test(multiPage),
+     "the lazy initialiser only runs on mount, so clicking the home link left a blank rack still naming a session");
   ok("import re-checks the label against the imported list",
      /setNamedSessions\(data\.namedSessions\);[\s\S]{0,240}data\.namedSessions\.some\(\(s\) => s\.name === cur\)/.test(multiPage),
      "import replaces every session, so the name the header holds may no longer exist");
@@ -908,6 +920,87 @@ section("12o. a faded mute is a level change, not a stop");
      /onClick=\{\(\) => update\(\{ muted: !slot\.muted \}\)\}/.test(slotStrip)
        && /update\(\{ muted: !slot\.muted \}, \{ fadeSec: multiEngine\.fadeSeconds\(\) \}\)/.test(slotStrip),
      "the split control is instant on the left, fade on the right — same shape as Play All");
+}
+
+section("12p. a tempo row has to be audible, and reachable in one click");
+{
+  ok("picking a row switches the delay on when it is at zero",
+     /slot\.effects\.delayWet <= 0\.001[\s\S]{0,120}delayWet: 0\.5, delayFeedback: 0\.35/.test(slotStrip),
+     "both default to 0, so writing only delayTime moved a knob and changed nothing audible");
+  ok("but never overwrites a delay mix already dialled in",
+     /\? \{ delayWet: 0\.5, delayFeedback: 0\.35 \}[\s\S]{0,40}: null/.test(slotStrip),
+     "turning something on from zero is a reveal; overwriting the user's mix is a theft");
+  ok("feedback stays well under the wet level",
+     /delayFeedback: 0\.3[0-9]?/.test(slotStrip) && !/delayFeedback: 0\.[5-9]/.test(slotStrip),
+     "the slow rows hand out bar-length delays; 60% feedback on one is a ~20s tail");
+  ok("Lock All runs keys before tempos",
+     /handleMatchAll\(\);[\s\S]{0,400}handleTempoMatchAll\(\)/.test(multiPage),
+     "Match Keys writes Speed and the tempo pass reads it — the reverse order leaves every slave stale");
+  ok("and yields between the two so the tempo pass sees the new Speed",
+     /handleMatchAll\(\);[\s\S]{0,300}await new Promise\(\(r\) => setTimeout\(r, 0\)\);[\s\S]{0,200}handleTempoMatchAll/.test(multiPage),
+     "entriesRef is a render behind, so without it the heard BPM is computed from pre-match Speed");
+  ok("it runs whichever anchors are set rather than demanding both",
+     /if \(referenceSlotIdRef\.current\)[\s\S]{0,400}if \(tempoAnchorIdRef\.current\)/.test(multiPage),
+     "a rack with only a tempo anchor should still lock");
+  ok("the transport lists Keys before Tempos",
+     transport.indexOf("↻ Match Keys") < transport.indexOf("↻ Match Tempos"),
+     "left to right the UI read backwards from the order that works, with nothing saying so");
+  ok("Lock All comes first of the three",
+     transport.indexOf("⚓ Lock All") < transport.indexOf("↻ Match Keys"),
+     "it is the one-click path; the single-dimension buttons are the fallback");
+}
+
+section("12q. the slot sweep filter is not the throw filter");
+{
+  // Both dials are labelled Freq. They were both called filterFreq too, in the same
+  // codebase — so a grep in the area most likely to be edited returned the wrong one.
+  ok("the slot filter uses the sweep names",
+     /sweepFreq/.test(read("store.ts")) && /sweepRes/.test(read("store.ts")));
+  ok("the throw filter keeps its own",
+     /filterFreq: number/.test(settings) && !/sweepFreq/.test(settings),
+     "ThrowSettings is a different filter with a different range and default");
+  ok("no EffectsState field is still called filterFreq",
+     !/filterFreq|filterQ/.test(read("audio/multiChain.ts")),
+     "the slot chain is the one place the two could be confused");
+  ok("a filter saved under the old names is still read",
+     /\(e as LegacyFilterEffects\)\.filterFreq/.test(read("store.ts"))
+       && /\(e as LegacyFilterEffects\)\.filterQ/.test(read("store.ts")),
+     "without the legacy read, a slot with a dialled sweep reloads wide open and silently loses it");
+}
+
+section("12r. the sweeps that were costing CPU or padding files");
+{
+  ok("the throw impulse is only regenerated when the decay moved",
+     /if \(settings\.reverbDecay === prevDecay\) return;/.test(engine),
+     "it was rebuilding one convolution impulse per slot on every throw knob, for a value the impulse ignores");
+  ok("export appends no reverb tail at zero wet",
+     /if \(e\.reverbWet <= 0\) return 0;/.test(reverbSlot),
+     "the decay knob keeps its value when wet goes to 0, so every such export gained up to 8s of silence");
+  ok("a slot added to a running rack joins in phase",
+     /this\.matchingLoopPosition\(runtime\) \?\? slot\.loopStart/.test(engine),
+     "addSlot was the third join path and the only one still starting at the top of its own loop");
+  ok("POST /api/stems validates the id it is handed",
+     /isValidTrackId\(id\)\) return res\.status\(400\)/.test(stemsRoute),
+     "it is interpolated into cache/<id>.wav and stems/htdemucs/<id>/, and CORS is wide open");
+}
+
+section("12s. doc comments sit on the function they describe");
+{
+  // Two had drifted onto the wrong declaration, and one of them argued for behaviour that
+  // had been deliberately removed — in the file where confusing time domains has caused the
+  // same bug twice. A comment that contradicts the code is worse than none.
+  const before = (a, b) => engine.indexOf(a) < engine.indexOf(b) && engine.indexOf(a) !== -1;
+  ok("the rewind comment is on rewindAll",
+     /one shared timestamp[\s\S]{0,420}\n  rewindAll\(\): void \{/.test(engine));
+  ok("the phase-offset comment is on phaseOffsetFor",
+     /displaced from its loop start by Phase[\s\S]{0,620}\n  private phaseOffsetFor\(/.test(engine));
+  ok("startSilencedSlots describes what it now does",
+     /private startSilencedSlots\(\): void \{/.test(engine)
+       && /joins at `matchingLoopPosition`, NOT at its own parked/.test(engine)
+       && !/there is no shared position to align to/.test(engine),
+     "the old text said slots resume from their own startOffset — the exact behaviour that was fixed");
+  ok("setSend keeps only its own comment",
+     before("Keep a parallel send out of the render graph", "  private static setSend("));
 }
 
 section("13. expensive analysis is memoised");

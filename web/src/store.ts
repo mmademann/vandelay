@@ -29,8 +29,8 @@ export const EFFECTS_LIMITS = {
   //
   // Q to 20 is a hard squeal at the cutoff. Worth knowing: the resonant peak sits AT the
   // cutoff, so with Freq open this knob does nothing audible — it only bites on the way down.
-  filterFreq: { min: 30, max: 20000 },
-  filterQ: { min: 0.5, max: 20 },
+  sweepFreq: { min: 30, max: 20000 },
+  sweepRes: { min: 0.5, max: 20 },
   phaserWet: { min: 0, max: 1 },
   chorusWet: { min: 0, max: 1 },
 } as const;
@@ -62,8 +62,8 @@ export interface EffectsState {
   eqLow?: number;
   eqMid?: number;
   eqHigh?: number;
-  filterFreq?: number;
-  filterQ?: number;
+  sweepFreq?: number;
+  sweepRes?: number;
   phaserWet?: number;
   chorusWet?: number;
 }
@@ -73,6 +73,9 @@ function clamp(v: number, min: number, max: number) { return Math.min(max, Math.
 export function resolveReverbType(e: EffectsState): ReverbType {
   return e.reverbType === "convolution" ? "convolution" : "algorithmic";
 }
+
+/** Pre-rename shape of the slot sweep filter — read once, in sanitizeEffects, never written. */
+interface LegacyFilterEffects { filterFreq?: number; filterQ?: number }
 
 export function sanitizeEffects(e: EffectsState): EffectsState {
   return {
@@ -92,8 +95,17 @@ export function sanitizeEffects(e: EffectsState): EffectsState {
     eqLow: clamp(e.eqLow ?? 0, EFFECTS_LIMITS.eqLow.min, EFFECTS_LIMITS.eqLow.max),
     eqMid: clamp(e.eqMid ?? 0, EFFECTS_LIMITS.eqMid.min, EFFECTS_LIMITS.eqMid.max),
     eqHigh: clamp(e.eqHigh ?? 0, EFFECTS_LIMITS.eqHigh.min, EFFECTS_LIMITS.eqHigh.max),
-    filterFreq: clamp(e.filterFreq ?? EFFECTS_LIMITS.filterFreq.max, EFFECTS_LIMITS.filterFreq.min, EFFECTS_LIMITS.filterFreq.max),
-    filterQ: clamp(e.filterQ ?? EFFECTS_LIMITS.filterQ.min, EFFECTS_LIMITS.filterQ.min, EFFECTS_LIMITS.filterQ.max),
+    // Legacy read: these two shipped as filterFreq/filterQ, which collided with the throw
+    // send's own filterFreq. Renamed — but a slot saved under the old names would otherwise
+    // come back with the filter wide open, silently losing a sweep that was dialled in.
+    sweepFreq: clamp(
+      e.sweepFreq ?? (e as LegacyFilterEffects).filterFreq ?? EFFECTS_LIMITS.sweepFreq.max,
+      EFFECTS_LIMITS.sweepFreq.min, EFFECTS_LIMITS.sweepFreq.max,
+    ),
+    sweepRes: clamp(
+      e.sweepRes ?? (e as LegacyFilterEffects).filterQ ?? EFFECTS_LIMITS.sweepRes.min,
+      EFFECTS_LIMITS.sweepRes.min, EFFECTS_LIMITS.sweepRes.max,
+    ),
     phaserWet: clamp(e.phaserWet ?? 0, EFFECTS_LIMITS.phaserWet.min, EFFECTS_LIMITS.phaserWet.max),
     chorusWet: clamp(e.chorusWet ?? 0, EFFECTS_LIMITS.chorusWet.min, EFFECTS_LIMITS.chorusWet.max),
   };
@@ -117,8 +129,8 @@ export const DEFAULT_EFFECTS: EffectsState = {
   eqLow: 0,
   eqMid: 0,
   eqHigh: 0,
-  filterFreq: 20000,
-  filterQ: 0.5,
+  sweepFreq: 20000,
+  sweepRes: 0.5,
   phaserWet: 0,
   chorusWet: 0,
 };
@@ -142,8 +154,8 @@ export const BYPASS_EFFECTS: EffectsState = {
   eqLow: 0,
   eqMid: 0,
   eqHigh: 0,
-  filterFreq: 20000,
-  filterQ: 0.5,
+  sweepFreq: 20000,
+  sweepRes: 0.5,
   phaserWet: 0,
   chorusWet: 0,
 };

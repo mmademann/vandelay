@@ -174,6 +174,10 @@ export function applyDualReverb(reverbs: DualReverbNodes, e: EffectsState): void
 
 export function reverbExportTailSec(e: EffectsState): number {
   const cap = 8;
+  // Nothing to ring out when the reverb is contributing nothing. Reading only the decay
+  // appended up to 8 seconds of pure silence to the end of every export whose reverb
+  // happened to be turned down — the decay knob keeps its value when wet goes to 0.
+  if (e.reverbWet <= 0) return 0;
   if (resolveReverbType(e) === "convolution") {
     return Math.min(impulseBuffer?.duration ?? 3.5, cap);
   }

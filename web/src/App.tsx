@@ -23,9 +23,8 @@ export default function App() {
   return (
     <BrowserRouter>
       <div className="flex h-dvh w-full flex-col gap-4 overflow-hidden px-4 py-4 sm:px-6">
-        <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-1.5">
-          <div id="multi-transport-portal" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5" />
-          <nav className="flex shrink-0 items-center gap-4 text-xs uppercase tracking-widest ml-auto">
+        <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1.5">
+          <nav className="flex shrink-0 items-center gap-4 text-xs uppercase tracking-widest">
             {/* Multi does everything Single/Mix/Stems do, including separation via
                 SlotPicker. Routes stay live so existing links keep working. */}
             {/* <NavLink
@@ -83,6 +82,7 @@ export default function App() {
               </svg>
             </NavLink>
           </nav>
+          <div id="multi-transport-portal" className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1.5" />
         </header>
 
         <main className="flex min-h-0 flex-1 flex-col">

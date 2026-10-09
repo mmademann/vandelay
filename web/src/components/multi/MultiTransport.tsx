@@ -164,6 +164,7 @@ interface Props {
   isPlaying: boolean;
   onMatchAll: () => void;
   onTempoMatchAll: () => void;
+  onLockAll: () => void;
   /** Any slot still decoding. Matching now would quantize against a half-loaded rack. */
   slotsLoading: boolean;
   gridNote: string | null;
@@ -186,7 +187,7 @@ function buildExportFilename(activeSessionName: string | null, slotTitles: strin
   return `${unique.slice(0, 2).join(" × ")} +${unique.length - 2}`;
 }
 
-export function MultiTransport({ masterSettings, slotCount, referenceSlotId, activeSessionName, slotTitles, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, onMasterSpeedChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll, onTempoMatchAll, slotsLoading, gridNote, onDismissGridNote, staleTempoCount, onRelockStale, autoRelock, onToggleAutoRelock, tempoAnchorId, onRandomSession, randomDisabled }: Props) {
+export function MultiTransport({ masterSettings, slotCount, referenceSlotId, activeSessionName, slotTitles, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, onMasterSpeedChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll, onTempoMatchAll, onLockAll, slotsLoading, gridNote, onDismissGridNote, staleTempoCount, onRelockStale, autoRelock, onToggleAutoRelock, tempoAnchorId, onRandomSession, randomDisabled }: Props) {
   const [loopCount, setLoopCount] = useState(1);
   const [recording, setRecording] = useState(false);
   const [recElapsed, setRecElapsed] = useState(0);
@@ -560,6 +561,40 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
           </div>
         )}
 
+        {/* Everything, in the one order that works: keys first, then tempos.
+            Match Keys writes Speed and tempo matching reads it, so the reverse order leaves
+            every slave stale. Set the two anchors, press this, done. The two buttons beside
+            it stay for when you want one dimension without the other. */}
+        {slotCount >= 2 && (
+          <button
+            type="button"
+            onClick={onLockAll}
+            disabled={(!referenceSlotId && !tempoAnchorId) || slotsLoading}
+            className="shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-accent/15 text-accent ring-1 ring-accent/30 transition hover:bg-accent/25 disabled:opacity-30 disabled:hover:bg-accent/15"
+            title={(!referenceSlotId && !tempoAnchorId)
+              ? "Set a key anchor and a tempo anchor first"
+              : slotsLoading
+                ? "Waiting for every slot to finish loading"
+                : "Match keys, then match tempos — the order that holds. Runs whichever anchors are set."}
+          >
+            ⚓ Lock All
+          </button>
+        )}
+
+        {slotCount >= 2 && (
+          <button
+            type="button"
+            onClick={onMatchAll}
+            disabled={!referenceSlotId}
+            className="shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-muted/80 text-foreground/50 transition hover:text-accent hover:bg-muted disabled:opacity-30 disabled:hover:text-foreground/50"
+            title={referenceSlotId
+              ? "Pitch-shift every other slot into key with the key anchor."
+              : "Set a key anchor on a slot first — then every other slot shifts into its key"}
+          >
+            ↻ Match Keys
+          </button>
+        )}
+
         {/* Stretch all slots onto the tempo anchor's grid. Independent of key matching:
             stretching changes duration only, so both can be applied to the same slot. */}
         {slotCount >= 2 && (
@@ -623,19 +658,6 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
 
 
 
-        {slotCount >= 2 && (
-          <button
-            type="button"
-            onClick={onMatchAll}
-            disabled={!referenceSlotId}
-            className="shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-muted/80 text-foreground/50 transition hover:text-accent hover:bg-muted disabled:opacity-30 disabled:hover:text-foreground/50"
-            title={referenceSlotId
-              ? "Pitch-shift every other slot into key with the key anchor."
-              : "Set a key anchor on a slot first — then every other slot shifts into its key"}
-          >
-            ↻ Match Keys
-          </button>
-        )}
 
         {/* Export dropdown */}
         {slotCount > 0 && (

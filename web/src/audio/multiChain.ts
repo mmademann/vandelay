@@ -118,8 +118,8 @@ export async function createOfflineMultiEqChain(
 
   const filterOff = new Tone.Filter({
     type: "lowpass",
-    frequency: clamp(effects.filterFreq ?? EFFECTS_LIMITS.filterFreq.max, EFFECTS_LIMITS.filterFreq.min, EFFECTS_LIMITS.filterFreq.max),
-    Q: clamp(effects.filterQ ?? EFFECTS_LIMITS.filterQ.min, EFFECTS_LIMITS.filterQ.min, EFFECTS_LIMITS.filterQ.max),
+    frequency: clamp(effects.sweepFreq ?? EFFECTS_LIMITS.sweepFreq.max, EFFECTS_LIMITS.sweepFreq.min, EFFECTS_LIMITS.sweepFreq.max),
+    Q: clamp(effects.sweepRes ?? EFFECTS_LIMITS.sweepRes.min, EFFECTS_LIMITS.sweepRes.min, EFFECTS_LIMITS.sweepRes.max),
   }).connect(bassInput);
   const chorusOff = new Tone.Chorus({ frequency: 1.5, delayTime: 3.5, depth: 0.7, wet: clamp(effects.chorusWet ?? 0, 0, 1) }).connect(filterOff);
   chorusOff.start();
@@ -163,8 +163,8 @@ export function applyMultiEffectsChain(chain: MultiEffectsChain, e: EffectsState
   chain.eqLo.gain.value = clamp(e.eqLow ?? 0, EFFECTS_LIMITS.eqLow.min, EFFECTS_LIMITS.eqLow.max);
   chain.eqMid.gain.value = clamp(e.eqMid ?? 0, EFFECTS_LIMITS.eqMid.min, EFFECTS_LIMITS.eqMid.max);
   chain.eqHi.gain.value = clamp(e.eqHigh ?? 0, EFFECTS_LIMITS.eqHigh.min, EFFECTS_LIMITS.eqHigh.max);
-  chain.filter.frequency.value = clamp(e.filterFreq ?? EFFECTS_LIMITS.filterFreq.max, EFFECTS_LIMITS.filterFreq.min, EFFECTS_LIMITS.filterFreq.max);
-  chain.filter.Q.value = clamp(e.filterQ ?? EFFECTS_LIMITS.filterQ.min, EFFECTS_LIMITS.filterQ.min, EFFECTS_LIMITS.filterQ.max);
+  chain.filter.frequency.value = clamp(e.sweepFreq ?? EFFECTS_LIMITS.sweepFreq.max, EFFECTS_LIMITS.sweepFreq.min, EFFECTS_LIMITS.sweepFreq.max);
+  chain.filter.Q.value = clamp(e.sweepRes ?? EFFECTS_LIMITS.sweepRes.min, EFFECTS_LIMITS.sweepRes.min, EFFECTS_LIMITS.sweepRes.max);
   chain.phaser.wet.value = clamp(e.phaserWet ?? 0, 0, 1);
   chain.chorus.wet.value = clamp(e.chorusWet ?? 0, 0, 1);
   applyBassBoost(chain.bass, e.bassBoost);

@@ -1004,14 +1004,26 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
                 // Choosing the recommended row means "stop pinning", not "pin this value",
                 // so a later anchor change is free to move it.
                 onTempoRelationChange(autoRelation !== undefined && v === autoRelation ? null : v);
-                // Move the delay onto the row's pulse only if it is already sitting on a
-                // division — the same rule the tempo re-sync uses. A delay dialed free (or
-                // switched off, where delaySync is null) is left exactly where it is, so
-                // a half/double-time correction never costs you a delay you chose by hand.
-                const delayOnGrid = delaySync !== null
-                  && Math.abs(delaySync.seconds - slot.effects.delayTime) <= 0.005;
-                if (row?.delaySec !== undefined && delayOnGrid) {
-                  update({ effects: { ...slot.effects, delayTime: row.delaySec } });
+                // Always move the delay onto the row's pulse. This was once gated on "only
+                // if the delay is already within 5ms of a division", to protect a delay
+                // dialed by hand — but snapDelayToTempo returns the nearest division however
+                // far away it is, so in practice the delay is either off (0) or reads `free`
+                // and the gate declined every time. The feature did nothing. Writing it
+                // always costs one drag to undo, and the lit state already says when the
+                // relation and the delay are a matched pair.
+                if (row?.delaySec !== undefined) {
+                  // A delay time is inaudible on a silent delay, and both Delay and D.Feedbk
+                  // default to 0 — so on a fresh slot the row moved D.Time and nothing could
+                  // be heard. Switch the delay on, but only from zero: a mix already dialled
+                  // in is the user's, and overwriting it is worse than doing nothing.
+                  //
+                  // Feedback stays well under the wet level deliberately. The slow rows now
+                  // hand out bar-length delays (2857ms at 84bpm), and 60% feedback on one of
+                  // those is a 20-second tail that smears the whole rack.
+                  const wake = slot.effects.delayWet <= 0.001
+                    ? { delayWet: 0.5, delayFeedback: 0.35 }
+                    : null;
+                  update({ effects: { ...slot.effects, delayTime: row.delaySec, ...wake } });
                 }
               }}
               title="How fast this slot plays against the tempo anchor, and the delay that lands on the beat at that speed. The 2x rows correct beat detection landing on the wrong multiple. ⚡ rows also set the delay — but only if your delay is already on a division, so a hand-set one is left alone. Off-grid rows are polymetric, so those loops stay unquantized rather than rounded to a bar they do not share. Everything stays adjustable afterwards: move Phase, the delay, or the relation."
@@ -1356,24 +1368,24 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
             the last eighth of the travel and everything below 2kHz is unreachable. The knob
             value is the exponent; the readout converts back to Hz. */}
         <Knob label="Freq"
-          value={Math.log2((slot.effects.filterFreq ?? EFFECTS_LIMITS.filterFreq.max) / EFFECTS_LIMITS.filterFreq.min)}
+          value={Math.log2((slot.effects.sweepFreq ?? EFFECTS_LIMITS.sweepFreq.max) / EFFECTS_LIMITS.sweepFreq.min)}
           min={0}
-          max={Math.log2(EFFECTS_LIMITS.filterFreq.max / EFFECTS_LIMITS.filterFreq.min)}
+          max={Math.log2(EFFECTS_LIMITS.sweepFreq.max / EFFECTS_LIMITS.sweepFreq.min)}
           step={0.01}
-          defaultValue={Math.log2(EFFECTS_LIMITS.filterFreq.max / EFFECTS_LIMITS.filterFreq.min)}
+          defaultValue={Math.log2(EFFECTS_LIMITS.sweepFreq.max / EFFECTS_LIMITS.sweepFreq.min)}
           size={40}
           displayValue={(() => {
-            const hz = slot.effects.filterFreq ?? EFFECTS_LIMITS.filterFreq.max;
-            return hz >= EFFECTS_LIMITS.filterFreq.max ? "open"
+            const hz = slot.effects.sweepFreq ?? EFFECTS_LIMITS.sweepFreq.max;
+            return hz >= EFFECTS_LIMITS.sweepFreq.max ? "open"
               : hz >= 1000 ? `${(hz / 1000).toFixed(1)}k`
               : `${Math.round(hz)}Hz`;
           })()}
-          onChange={(v) => updateEffect({ filterFreq: EFFECTS_LIMITS.filterFreq.min * Math.pow(2, v) })} />
-        <Knob label="Res" value={slot.effects.filterQ ?? EFFECTS_LIMITS.filterQ.min}
-          min={EFFECTS_LIMITS.filterQ.min} max={EFFECTS_LIMITS.filterQ.max} step={0.1}
-          defaultValue={EFFECTS_LIMITS.filterQ.min} size={40}
-          displayValue={`${(slot.effects.filterQ ?? EFFECTS_LIMITS.filterQ.min).toFixed(1)}`}
-          onChange={(v) => updateEffect({ filterQ: v })} />
+          onChange={(v) => updateEffect({ sweepFreq: EFFECTS_LIMITS.sweepFreq.min * Math.pow(2, v) })} />
+        <Knob label="Res" value={slot.effects.sweepRes ?? EFFECTS_LIMITS.sweepRes.min}
+          min={EFFECTS_LIMITS.sweepRes.min} max={EFFECTS_LIMITS.sweepRes.max} step={0.1}
+          defaultValue={EFFECTS_LIMITS.sweepRes.min} size={40}
+          displayValue={`${(slot.effects.sweepRes ?? EFFECTS_LIMITS.sweepRes.min).toFixed(1)}`}
+          onChange={(v) => updateEffect({ sweepRes: v })} />
         <Knob label="Phaser" value={slot.effects.phaserWet ?? 0} min={0} max={1} step={0.01} defaultValue={0} size={40}
           displayValue={`${Math.round((slot.effects.phaserWet ?? 0) * 100)}%`} onChange={(v) => updateEffect({ phaserWet: v })} />
         <Knob label="Chorus" value={slot.effects.chorusWet ?? 0} min={0} max={1} step={0.01} defaultValue={0} size={40}

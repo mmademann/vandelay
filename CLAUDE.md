@@ -76,6 +76,13 @@ Loop regions are managed in engine code, not via the player's native loop points
 
 **Multi engine specifics**: each slot has independent playback position tracking (`startedAt` + `startOffset`). All timing uses `Tone.now()` — never mix with raw `AudioContext.currentTime`. Position formula: `loopStart + ((offsetInLoop + elapsed) % loopDur + loopDur) % loopDur` (positive modulo required). `play()`/`stop()` skip already-playing/paused slots so Play All / Pause All respect individual slot states.
 
+**Slot sweep filter vs throw filter**: `EffectsState.sweepFreq` / `sweepRes` is the per-slot
+resonant lowpass (the Freq/Res dials, 30Hz–20k, pre-delay so echoes carry the sweep).
+`ThrowSettings.filterFreq` / `filterSweep` is a *different* filter on the throw send (80–8k,
+default 700). Both dials are labelled Freq; they were both named `filterFreq` until the
+collision made a grep in this area ambiguous. `sanitizeEffects` still reads the old
+`filterFreq`/`filterQ` once, so a slot saved before the rename keeps its sweep.
+
 **Multi effects**: `TapeDelay` (in `tapeDelay.ts`) replaces `FeedbackDelay` in the multi chain — adds a feedback lowpass filter + distortion + pitch-wobble LFO controlled by `spaceEchoWow` (S.ECHO knob). **Big Knob** (`bigKnobWet`) drives a parallel spring reverb send (`springConvolver → springWet → master`) tapped from the slot's gain output, independent of all other effects. **3-band EQ** (`eqLo/eqMid/eqHi`) sits pre-delay so echoes inherit the EQ'd tone. **Throw** (`throwSend → throwFilter → throwDelay → throwReverb → master`) is a momentary gated send per slot; throw character (delay + reverb settings) is global via `ThrowSettings` in `MultiMasterSettings`. The throw filter adds an env-swept resonant lowpass on the echoes.
 
 **Lazy graph build**: audio context needs a user gesture. URL loads decode the buffer first; Tone graph builds on first Play (`ensureGraph` / `playAll`). **Re-apply settings after graph rebuild** (track switch, `engine.load`) or the chain stays at factory defaults.
@@ -97,6 +104,10 @@ Loop regions are managed in engine code, not via the player's native loop points
 
 Separate from key matching and deliberately orthogonal to it: **key matching moves pitch, tempo matching moves time**, so both apply to the same slot without fighting.
 
+- **Order matters, and only one direction works**: key matching copies the key anchor's
+  **Speed** onto every slave, and tempo matching *reads* Speed to derive the heard BPM. So
+  keys-then-tempos holds and tempos-then-keys leaves every slave stale. `⚓ Lock All` exists
+  to remove the choice; the transport used to list the two buttons in the wrong order.
 - **Tempo anchor** is a second, independent anchor (`tempoAnchorId`, persisted via `loadTempoAnchorKey`/`saveTempoAnchorKey`, and on session slots as `isTempoAnchor`). Pinning a stretched slot as the anchor resets it to its own tempo — the anchor defines the grid, so it must play unstretched.
 - **Stretch** (`stretchBuffer.ts`, SoundTouch) rebuilds the buffer at a new length without changing pitch. `slot.stretch` is the ratio; 1 = source. Always computed from `entry.sourceBuffer` (the untouched decode) so repeated adjustments never compound. SoundTouch holds a window internally, so the source is padded with silence and the result trimmed to `expectedFrames`.
 - **`multiEngine.swapBuffer(id, buffer, ratio)`** installs a stretched buffer and rescales loop bounds *and* playhead by the same ratio. `ratio` is relative to what the engine currently holds, not to the source.
@@ -162,7 +173,7 @@ web/src/
 
 ## Multi UI layout (current)
 
-**Transport bar** (top): `Session <name>` button (names the active session; falls back to `Sessions (N)`) · `▶ Play All` / `⏸ Pause All` (+ `Fade` half) · `⏮` (Rewind All) · `● Rec` · master speed slider · `↻ Match Tempos` (with an inline result chip after quantizing) · `↻ Re-lock N` (only while slots are stale) · `auto re-lock on/off` · `↻ Match Keys` · `↓ Export` (floating panel) · `⚄ Random` · `↯ Throw` (floating panel) · `Clear`
+**Transport bar** (top): `Session <name>` button (names the active session; falls back to `Sessions (N)`) · `▶ Play All` / `⏸ Pause All` (+ `Fade` half) · `⏮` (Rewind All) · `● Rec` · master speed slider · `⚓ Lock All` (keys then tempos — the order that holds; the two below are the single-dimension fallbacks) · `↻ Match Keys` · `↻ Match Tempos` (with an inline result chip after quantizing) · `↻ Re-lock N` (only while slots are stale) · `auto re-lock on/off` · `↓ Export` (floating panel) · `⚄ Random` · `↯ Throw` (floating panel) · `Clear`
 
 **Per-slot (SlotStrip)**:
 - Header row: key badge (`C# min`, BPM on hover, `?` if unknown) · tempo anchor button (`⚓ Tempo Anchor` / `Set Tempo Anchor` / `Tempo 1:1 ↻` / `↻ Re-lock Tempo`) · tempo dropdown (`↻ Tempo — change…` / `⚡ Sweet spot — change…`; relation + its locking delay, non-anchor slots only) · key anchor button (`⚓ Key Anchor` / `Set Key Anchor` / `Key Matched ↻` / `Match Key`) · semitone interval group (`1 7 12` + `▼▲`) · `⇥ Snap` · `Move ◀ 1/4 | 1/4 ▶` · stem/track label · track title · remove (✕)

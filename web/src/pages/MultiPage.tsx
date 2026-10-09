@@ -397,6 +397,17 @@ export function MultiPage() {
   const pendingTempoAnchorIdRef = useRef<string | null>(null);
   const viabilityMapRef = useRef<Map<string, boolean>>(new Map());
 
+  // Same rule as the initialiser above, but for navigation rather than reload: an empty
+  // `?slots=` means no session is open, so the header must not keep naming one.
+  //
+  // The initialiser only runs on mount. Clicking the π home link from a loaded session is a
+  // client-side nav, so the component never remounts — the rack emptied and the label stayed,
+  // leaving a blank slate that claimed a session was open. Clear is not enough either; it is
+  // one of several ways to arrive at a bare `/`.
+  useEffect(() => {
+    if ((searchParams.get("slots") ?? "").trim() === "") setActiveSessionName(null);
+  }, [searchParams]);
+
   // Mirror the active session name to localStorage. Done as an effect rather than at each
   // setter so every path that changes it — save, resave, load, rename, clear — persists.
   useEffect(() => { saveActiveSessionName(activeSessionName); }, [activeSessionName]);
@@ -1371,6 +1382,30 @@ export function MultiPage() {
     }
   }
 
+  /**
+   * Key, then tempo, in the one order that works.
+   *
+   * Match Keys copies the key anchor's Speed onto every slave, and tempo matching *reads*
+   * Speed to work out the heard BPM. So keys after tempos invalidates all the tempo work
+   * and leaves a row of amber Re-lock buttons. Two buttons, one correct order, and nothing
+   * on screen said so — the transport even listed them backwards.
+   *
+   * Does nothing the two buttons do not; it just removes the chance to get it wrong.
+   */
+  async function handleLockAll() {
+    if (entriesRef.current.some((e) => e.loading)) {
+      setGridNote("still loading — try again once every slot has finished");
+      return;
+    }
+    if (referenceSlotIdRef.current) {
+      handleMatchAll();
+      // Let the speed/pitch writes commit before the tempo pass reads them. Without this,
+      // stretchSlotToTempoAnchor computes the anchor's heard BPM from pre-match Speed.
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    if (tempoAnchorIdRef.current) await handleTempoMatchAll();
+  }
+
   async function handleTempoMatchAll() {
     const anchorId = tempoAnchorIdRef.current;
     if (!anchorId) return;
@@ -1974,6 +2009,7 @@ export function MultiPage() {
           isPlaying={isPlayingAll}
           onMatchAll={handleMatchAll}
           onTempoMatchAll={() => { void handleTempoMatchAll(); }}
+          onLockAll={() => { void handleLockAll(); }}
           slotsLoading={entries.some((e) => e.loading)}
           staleTempoCount={staleTempoIds.size}
           onRelockStale={() => { void handleRelockStale(); }}

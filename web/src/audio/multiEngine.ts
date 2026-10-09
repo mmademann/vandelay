@@ -232,9 +232,15 @@ class MultiEngine {
 
     if (this.running) {
       const t = Tone.now() + 0.05;
-      player.start(t, slot.loopStart);
+      // Join the rack where it already is, not at the top of this slot's loop. Starting at
+      // loopStart put a stem added mid-session on its own downbeat, wherever that happened
+      // to fall against everything else, and only Rewind All recovered it. playSlot and
+      // startSilencedSlots were both fixed to do this; addSlot was the third join path and
+      // was missed. Falls back to loopStart when nothing else is playing. Invariant 26.
+      const at = this.matchingLoopPosition(runtime) ?? slot.loopStart;
+      player.start(t, at);
       runtime.startedAt = t;
-      runtime.startOffset = slot.loopStart;
+      runtime.startOffset = at;
       runtime.playing = true;
     }
   }
@@ -471,24 +477,6 @@ class MultiEngine {
   }
 
   /**
-   * Return every slot to its loop start on one shared timestamp.
-   *
-   * Distinct from calling seekSlot per slot, which is what this replaced: each of those
-   * calls reads Tone.now() separately, so the slots restart microseconds apart and the
-   * downbeats smear. Re-syncing is the whole reason to press rewind, so it has to be one
-   * instant for all of them.
-   */
-  /**
-   * Seconds this slot is displaced from its loop start by Phase.
-   *
-   * Phase is a playhead offset, so unlike loop bounds it is not implicit in the slot's
-   * geometry — every path that returns a slot to its start has to add it back, or the
-   * displacement silently disappears the first time you press rewind.
-   *
-   * `phaseBarSec` is the anchor's bar length in this slot's own buffer seconds, pushed down
-   * from the UI whenever the grid changes; the engine has no view of the tempo grid itself.
-   */
-  /**
    * Keep a parallel send out of the render graph while it is silent.
    *
    * Web Audio processes every node reachable from the destination, so a convolver at 0% wet
@@ -510,6 +498,16 @@ class MultiEngine {
     return live;
   }
 
+  /**
+   * Seconds this slot is displaced from its loop start by Phase.
+   *
+   * Phase is a playhead offset, so unlike loop bounds it is not implicit in the slot's
+   * geometry — every path that returns a slot to its start has to add it back, or the
+   * displacement silently disappears the first time you press rewind.
+   *
+   * `phaseBarSec` is the anchor's bar length in this slot's own buffer seconds, pushed down
+   * from the UI whenever the grid changes; the engine has no view of the tempo grid itself.
+   */
   private phaseOffsetFor(slot: RuntimeSlot): number {
     return phaseOffsetSec(slot.phase ?? 0, slot.phaseBarSec ?? 0, slot.loopEnd - slot.loopStart);
   }
@@ -538,6 +536,14 @@ class MultiEngine {
     return this.slots.get(id)?.phaseBarSec ?? 0;
   }
 
+  /**
+   * Return every slot to its loop start on one shared timestamp.
+   *
+   * Distinct from calling seekSlot per slot, which is what this replaced: each of those
+   * calls reads Tone.now() separately, so the slots restart microseconds apart and the
+   * downbeats smear. Re-syncing is the whole reason to press rewind, so it has to be one
+   * instant for all of them.
+   */
   rewindAll(): void {
     const now = Tone.now();
     for (const slot of this.slots.values()) {
@@ -615,6 +621,7 @@ class MultiEngine {
   }
 
   setThrowSettings(settings: ThrowSettings): void {
+    const prevDecay = this.masterSettings.throwSettings.reverbDecay;
     this.masterSettings = { ...this.masterSettings, throwSettings: settings };
     if (this.throwDebounceTimer) clearTimeout(this.throwDebounceTimer);
     for (const slot of this.slots.values()) {
@@ -625,7 +632,11 @@ class MultiEngine {
       slot.throwFilter.frequency.value = settings.filterFreq;
       slot.throwFilter.Q.value = settings.filterSweep * 18;
     }
-    // Debounce reverb IR regeneration (expensive)
+    // Only the decay changes the impulse. Regenerating on every throw setting meant dragging
+    // the throw delay or wet knob rebuilt one convolution impulse per slot — five of them on
+    // a full rack — for a value the impulse does not depend on. Debounced as well, because
+    // dragging the decay knob itself still fires per frame.
+    if (settings.reverbDecay === prevDecay) return;
     this.throwDebounceTimer = setTimeout(async () => {
       if (this._disposed) return;
       for (const [id, slot] of this.slots.entries()) {
@@ -868,11 +879,6 @@ class MultiEngine {
   }
 
   /**
-   * Start any slot that is now audible but still stopped. Each resumes from its own
-   * startOffset — where it was parked — rather than being seeked to match other slots.
-   * Loops are independent lengths, so there is no shared position to align to.
-   */
-  /**
    * Where `slot` should start to be in phase with the rest of the rack.
    *
    * Uses another playing slot's progress through its own loop, scaled into this slot's loop
@@ -958,6 +964,14 @@ class MultiEngine {
     return slot.loopStart + ((((pos - slot.loopStart) % loopDur) + loopDur) % loopDur);
   }
 
+  /**
+   * Start any slot that is now audible but still stopped — unmuting into a running rack.
+   *
+   * It joins at `matchingLoopPosition`, NOT at its own parked `startOffset`. Resuming from
+   * where it was parked is what this used to do, and it dropped the slot off the shared
+   * downbeat with nothing in the UI to say so; only Play All or Rewind All recovered it.
+   * See invariant 26.
+   */
   private startSilencedSlots(): void {
     const anySoloed = Array.from(this.slots.values()).some((s) => s.soloed);
     const t = Tone.now() + 0.05;
