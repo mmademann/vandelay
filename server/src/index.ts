@@ -11,6 +11,10 @@ const PORT = 5174;
 app.use(cors());
 // Multi-state backups are a full localStorage snapshot and outgrew the 100kb default.
 app.use(express.json({ limit: "25mb" }));
+// Uploaded audio arrives as a raw body on /api/upload — a 30-minute WAV is ~300MB, and the
+// source file can be a video container, so the ceiling is generous. Registered before the
+// routers so the JSON parser never sees it.
+app.use(express.raw({ type: "application/octet-stream", limit: "600mb" }));
 
 app.use("/api", audioRouter);
 app.use("/api", stemsRouter);

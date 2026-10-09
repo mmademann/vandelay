@@ -3,27 +3,37 @@ import { existsSync, statSync, createReadStream, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { extractVideoId } from "../lib/youtube.js";
-import { extractAudio } from "../lib/extract.js";
+import { extractAudio, CACHE_DIR } from "../lib/extract.js";
 import { recordHistory, readHistory } from "../lib/history.js";
+import { isValidTrackId } from "../lib/trackId.js";
 import { separateStems, stemsReady, stemsMp3Ready, stemMp3Path, transcodeStems, STEMS_DIR, STEM_NAMES, type StemName } from "../lib/stems.js";
 
 const router = Router();
 
-const ID_RE = /^[a-zA-Z0-9_-]{11}$/;
-
-const PostBody = z.object({ url: z.string().url() });
+// Either a YouTube URL to fetch, or the id of a track already on disk — which is what an
+// upload is by the time it gets here.
+const PostBody = z.object({ url: z.string().url().optional(), id: z.string().min(1).optional() })
+  .refine((b) => b.url !== undefined || b.id !== undefined, { message: "url or id required" });
 
 /** POST /api/stems — download WAV (blocking), then separate in background. Returns 202 immediately after download. */
 router.post("/stems", async (req, res) => {
   const parsed = PostBody.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Invalid body" });
 
-  const id = extractVideoId(parsed.data.url);
+  const id = parsed.data.id ?? (parsed.data.url ? extractVideoId(parsed.data.url) : null);
   if (!id) return res.status(400).json({ error: "Could not extract YouTube video ID" });
 
   try {
-    // Download WAV first — demucs needs it on disk before it can start
-    const info = await extractAudio(id);
+    // Download WAV first — demucs needs it on disk before it can start. An uploaded track is
+    // already there, and has no YouTube page to fetch metadata from, so take its title from
+    // history instead of sending yt-dlp after an id that was never a video.
+    const cached = join(CACHE_DIR, `${id}.wav`);
+    const info = parsed.data.id && existsSync(cached)
+      ? (() => {
+          const known = readHistory().find((h) => h.id === id);
+          return { id, title: known?.title ?? id, duration: known?.duration ?? 0, path: cached };
+        })()
+      : await extractAudio(id);
 
     // Already fully done — return 200 immediately
     if (stemsReady(id) && stemsMp3Ready(id)) {
@@ -71,14 +81,14 @@ router.get("/stems/library", (_req, res) => {
 /** GET /api/stems/:id/status — check if stems are already separated (no processing) */
 router.get("/stems/:id/status", (req, res) => {
   const { id } = req.params;
-  if (!ID_RE.test(id)) return res.status(400).json({ error: "Invalid id" });
+  if (!isValidTrackId(id)) return res.status(400).json({ error: "Invalid id" });
   res.json({ ready: stemsReady(id) });
 });
 
 /** GET /api/stems/:id/:stem — stream a stem as MP3 (falls back to WAV if MP3 not ready) */
 router.get("/stems/:id/:stem", (req, res) => {
   const { id, stem } = req.params;
-  if (!ID_RE.test(id)) return res.status(400).json({ error: "Invalid id" });
+  if (!isValidTrackId(id)) return res.status(400).json({ error: "Invalid id" });
   if (!(STEM_NAMES as readonly string[]).includes(stem)) {
     return res.status(400).json({ error: `Invalid stem. Must be one of: ${STEM_NAMES.join(", ")}` });
   }

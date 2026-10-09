@@ -154,17 +154,136 @@ await attempt("muteUnmute", async () => {
   step.unmutedLabels = await page.getByRole("button", { name: /^\W*MUTED?$/i }).allInnerTexts();
 });
 
+// The Fade half of the split mute control. Mute never stops the player, so this is a level
+// ramp — the slot has to still be running (and still in phase) when it comes back.
+await attempt("muteFade", async () => {
+  const slot = page.locator("span").filter({ has: page.getByRole("button", { name: /^\W*MUTED?$/i }) }).nth(1);
+  const fade = slot.getByRole("button", { name: /^Fade$/ });
+  await fade.click({ timeout: 10000 });
+  await page.waitForTimeout(1200);
+  step.mutedAfterFade = await slot.getByRole("button", { name: /^\W*MUTED?$/i }).innerText();
+  if (!/MUTED/i.test(step.mutedAfterFade)) throw new Error(`fade did not mute: ${step.mutedAfterFade}`);
+  await fade.click();
+  await page.waitForTimeout(1200);
+  const back = await slot.getByRole("button", { name: /^\W*MUTED?$/i }).innerText();
+  if (/MUTED/i.test(back)) throw new Error(`fade did not unmute: ${back}`);
+  // The slot must still be running: a faded mute that stopped the player would leave the
+  // rack's loops out of phase with each other, which is the whole reason it is a ramp.
+  const playing = await page.evaluate(() => document.body.innerText.includes("Pause All"));
+  if (!playing) throw new Error("rack stopped during a faded mute");
+});
+
 await attempt("matchTempos", async () => {
   await page.getByRole("button", { name: /Match Tempos/i }).first().click({ timeout: 10000 });
   await page.waitForTimeout(9000);   // stretch is synchronous and slow — one buffer per slot
 });
 await shot("04-matched");
 
+// The merged tempo dropdown — one control per non-anchor slot that sets the relation and,
+// when the delay is already on a division, the delay that shares a pulse with it. Two
+// separate dropdowns used to do this; the count below is what stops them coming back.
+await attempt("tempoDropdown", async () => {
+  const picker = page.locator("select").filter({ hasText: /bpm/ });
+  const n = await picker.count();
+  step.tempoPickers = n;
+  // One slot is the anchor and has no relation to itself, so a two-slot rack has exactly one.
+  if (n !== want - 1) throw new Error(`expected ${want - 1} tempo dropdowns, found ${n}`);
+  const sel = picker.first();
+  const before = await sel.inputValue();
+  const values = await sel.locator("option").evaluateAll((os) =>
+    os.map((o) => o.value).filter((v) => v !== ""));
+  const next = values.find((v) => v !== before);
+  if (!next) throw new Error("dropdown offered no other relation");
+  step.tempoRows = values.length;
+  await sel.selectOption(next);
+  await page.waitForTimeout(6000);   // picking a row re-stretches the slot
+  const after = await sel.inputValue();
+  step.relationBefore = before;
+  step.relationAfter = after;
+  if (after === before) throw new Error(`relation did not change: still ${after}`);
+});
+await shot("05-tempo-row");
+
 // Position readout under each waveform ("0:04/9:16"). Whole seconds only, so this catches a
 // slot that is grossly adrift but NOT a sub-second phase error — read the shots for those.
 step.positions = await page.evaluate(() =>
   [...document.querySelectorAll("canvas")].map(
     (c) => c.closest("div")?.parentElement?.querySelector("div.pointer-events-none")?.textContent?.trim() ?? "?"));
+
+// Record: the only check that the LIVE graph makes sound. Export renders through a separate
+// offline chain, so a live-only fault — a send disconnected from master, a bypass raised
+// without its counterpart lowered — passes every other check here. This taps the live master.
+await attempt("recordLive", async () => {
+  const rec = page.getByRole("button", { name: /● Rec/ }).first();
+  await rec.click({ timeout: 10000 });
+  await page.waitForTimeout(4000);
+  await page.getByRole("button", { name: /■ Stop/ }).first().click({ timeout: 10000 });
+  // Stopping does not download: it encodes, then offers the take with a filename box. The
+  // file only exists once Save is pressed.
+  const save = page.getByRole("button", { name: /^Save$/ }).first();
+  await save.waitFor({ timeout: 120000 });
+  const [download] = await Promise.all([
+    page.waitForEvent("download", { timeout: 60000 }),
+    save.click(),
+  ]);
+  const out = path.join(SHOTS, "take.wav");
+  await download.saveAs(out);
+  const buf = fs.readFileSync(out);
+  let peak = 0;
+  for (let i = 44; i + 1 < buf.length; i += 2) {
+    const v = Math.abs(buf.readInt16LE(i));
+    if (v > peak) peak = v;
+  }
+  step.recBytes = buf.length;
+  step.recPeak = peak;
+  if (buf.length < 50000) throw new Error(`take too small: ${buf.length} bytes`);
+  if (peak < 500) throw new Error(`live output is silent (peak ${peak})`);
+});
+
+// Reverb at 0% — the bypass path. In algorithmic mode Tone.Reverb at wet 0 passes the DRY
+// signal, so the reverb branch is also the slot's only route to the master. Removing it to
+// save convolution silences the slot unless a dry path is raised in the same step. Nothing
+// else here covers it: export renders through a separate offline chain that has no bypass.
+await attempt("recordDry", async () => {
+  // The knob is <div><div><svg/></div><span>Reverb</span><span>value</span></div>, so walk
+  // from the label to its sibling svg — filtering divs matches every ancestor as well.
+  // locator("span") first: getByText can resolve to an ancestor div, which has no preceding
+  // sibling div and so never finds the knob's svg.
+  const labels = page.locator("span").filter({ hasText: /^Reverb$/ });
+  const n = await labels.count();
+  for (let i = 0; i < n; i++) {
+    // The knob's wrapper div, not the <svg> inside it: XPath has no default namespace, so
+    // `//svg` never matches an SVG element. Double-click resets a knob to its default, and
+    // Reverb's default is 0 — which is exactly the bypass path this is here to exercise.
+    await labels.nth(i).locator("xpath=preceding-sibling::div").first().dblclick({ timeout: 10000 });
+  }
+  await page.waitForTimeout(1500);
+  await page.getByRole("button", { name: /● Rec/ }).first().click({ timeout: 10000 });
+  await page.waitForTimeout(3000);
+  await page.getByRole("button", { name: /■ Stop/ }).first().click({ timeout: 10000 });
+  const save = page.getByRole("button", { name: /^Save$/ }).first();
+  await save.waitFor({ timeout: 120000 });
+  const [download] = await Promise.all([
+    page.waitForEvent("download", { timeout: 60000 }),
+    save.click(),
+  ]);
+  const out = path.join(SHOTS, "take-dry.wav");
+  await download.saveAs(out);
+  const buf = fs.readFileSync(out);
+  let peak = 0;
+  for (let i = 44; i + 1 < buf.length; i += 2) {
+    const v = Math.abs(buf.readInt16LE(i));
+    if (v > peak) peak = v;
+  }
+  step.dryPeak = peak;
+  if (peak < 500) throw new Error(`silent with reverb bypassed (peak ${peak})`);
+});
+// A take left pending blocks Export with "Save the current take first", which would report
+// as an export failure rather than as the recording step that actually went wrong.
+await attempt("clearPendingTake", async () => {
+  const discard = page.getByRole("button", { name: /^Discard$/ }).first();
+  if (await discard.count()) await discard.click({ timeout: 5000 });
+});
 
 // Export: the offline render. CLAUDE.md called this out as never actually having been run —
 // tests and reasoning only, no file ever produced. Rendering one here is the cheapest way to

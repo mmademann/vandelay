@@ -30,6 +30,12 @@ function phaseOffsetSec(phase: number, barSec: number, loopDur: number): number 
 interface RuntimeSlot extends MultiSlot {
   /** Anchor bar length in this slot's buffer seconds — set by the UI, used for Phase. */
   phaseBarSec?: number;
+  /** Whether the spring send is currently wired to master — see MultiEngine.setSend. */
+  springLive?: boolean;
+  /** Same, for the throw send's reverb tail. */
+  throwLive?: boolean;
+  /** Pending disconnect of that tail, once the echoes have rung out. */
+  throwTailTimer?: ReturnType<typeof setTimeout> | null;
   player: Tone.Player;
   chain: MultiEffectsChain;
   volume: Tone.Volume;
@@ -115,6 +121,9 @@ class MultiEngine {
   /** Master output node — null until the first slot is added. Used by the recorder to tap output. */
   getMasterNode(): Tone.Volume | null { return this.master; }
 
+  /** Fade length in seconds, so the UI can label it without keeping its own copy. */
+  fadeSeconds(): number { return MultiEngine.FADE_SEC; }
+
   getMasterLoopLength(): number | null {
     if (this.masterSettings.loopLengthOverride != null) {
       return this.masterSettings.loopLengthOverride;
@@ -157,6 +166,9 @@ class MultiEngine {
     const ts = this.masterSettings.throwSettings;
     const throwReverb = new Tone.Reverb({ decay: ts.reverbDecay, wet: ts.reverbWet }).connect(this.master);
     await throwReverb.generate();
+    // Idle until thrown. A Tone.Reverb is a convolver, so leaving one connected per slot
+    // costs full convolution for a send most slots never use.
+    throwReverb.disconnect(this.master);
     const throwDelay = new Tone.FeedbackDelay({
       delayTime: ts.delayTime,
       feedback: ts.delayFeedback,
@@ -187,9 +199,14 @@ class MultiEngine {
     player.playbackRate = slotPlaybackRate(slot, this.masterSettings.masterSpeed);
 
     applyMultiEffectsChain(chain, slot.effects);
+    const springOn = (slot.effects.bigKnobWet ?? 0) > 0;
     springWet.gain.value = slot.effects.bigKnobWet ?? 0;
+    // Built connected, so drop it straight back out when the knob is at zero.
+    if (!springOn) springWet.disconnect(this.master);
     const runtime: RuntimeSlot = {
       ...slot,
+      springLive: springOn,
+      throwLive: false,
       loopStart: safeLoopStart,
       loopEnd: safeLoopEnd,
       player,
@@ -299,6 +316,7 @@ class MultiEngine {
     const slot = this.slots.get(id);
     if (!slot) return;
     if (slot.throwTimer) clearTimeout(slot.throwTimer);
+    if (slot.throwTailTimer) clearTimeout(slot.throwTailTimer);
     try { slot.player.stop(); } catch { /* already stopped */ }
     slot.player.disconnect();
     slot.player.dispose();
@@ -315,6 +333,7 @@ class MultiEngine {
     slot.chain.bass.bassSubGain.disconnect(); slot.chain.bass.bassSubGain.dispose();
     slot.chain.delay.dispose();
     disposeDualReverb(slot.chain.reverbs);
+    slot.chain.reverbBypass.disconnect(); slot.chain.reverbBypass.dispose();
     slot.chain.gain.disconnect(); slot.chain.gain.dispose();
     try { slot.springConvolver.disconnect(); } catch { /* ignore */ }
     slot.springWet.disconnect(); slot.springWet.dispose();
@@ -373,7 +392,7 @@ class MultiEngine {
    * because a player parked outside its loop region plays to the end of the buffer instead
    * of wrapping — that guarantee belongs here rather than at each call site.
    */
-  updateSlot(id: string, patch: Partial<MultiSlot>, opts?: { carryPlayhead?: boolean }): void {
+  updateSlot(id: string, patch: Partial<MultiSlot>, opts?: { carryPlayhead?: boolean; fadeSec?: number }): void {
     const slot = this.slots.get(id);
     if (!slot) return;
 
@@ -381,6 +400,11 @@ class MultiEngine {
     const startDelta = boundsMoved && patch.loopStart !== undefined
       ? patch.loopStart - slot.loopStart
       : 0;
+    // Read the position against the OLD bounds. getSlotPosition folds into whatever loop the
+    // slot currently has, so once the new bounds are assigned it can never report a position
+    // outside them — which is why an earlier "fold the stranded playhead back in" check after
+    // the assignment was dead code that could not fire. The comparison has to happen here.
+    const posBefore = boundsMoved ? this.getSlotPosition(id) : 0;
 
     Object.assign(slot, patch);
 
@@ -406,12 +430,18 @@ class MultiEngine {
       // it outside the loop entirely, which is why Move used to follow every bounds write
       // with its own nudge.
       if (opts?.carryPlayhead && startDelta !== 0) this.nudgeSlot(id, startDelta);
-      // Always, whichever rule applied: a position outside the loop plays on to the end of
-      // the buffer rather than wrapping.
-      this.reseatInLoop(id);
+      // Whichever rule applied: if the slot was sitting outside its new loop — quantize can
+      // shorten one past the playhead — fold it back in. Web Audio plays such a source to the
+      // end of the buffer before it wraps, so it goes quiet and rejoins in the wrong place.
+      // Folding by the loop duration preserves the position within the bar, because a
+      // quantized loop is a whole number of bars.
+      else this.reseatInLoop(id, posBefore);
     }
     if (patch.gain !== undefined || patch.muted !== undefined || patch.soloed !== undefined) {
-      this.recomputeAllVolumes();
+      // A fade is only meaningful for mute/solo. Ramping a gain-knob drag would smear every
+      // frame of the drag into a 10s ramp and the knob would feel disconnected from the sound.
+      const fadeSec = patch.muted !== undefined || patch.soloed !== undefined ? opts?.fadeSec : undefined;
+      this.recomputeAllVolumes(fadeSec);
       // play() skips silent slots, so a slot un-silenced mid-session has to start itself.
       // Solo changes can un-silence any slot, not just this one, so sweep them all.
       if (this.running && (patch.muted !== undefined || patch.soloed !== undefined)) {
@@ -420,7 +450,11 @@ class MultiEngine {
     }
     if (patch.effects !== undefined) {
       applyMultiEffectsChain(slot.chain, slot.effects);
-      slot.springWet.gain.value = slot.effects.bigKnobWet ?? 0;
+      const wet = slot.effects.bigKnobWet ?? 0;
+      slot.springWet.gain.value = wet;
+      if (this.master) {
+        slot.springLive = MultiEngine.setSend(slot.springWet, this.master, wet > 0, slot.springLive ?? true);
+      }
     }
   }
 
@@ -454,6 +488,28 @@ class MultiEngine {
    * `phaseBarSec` is the anchor's bar length in this slot's own buffer seconds, pushed down
    * from the UI whenever the grid changes; the engine has no view of the tempo grid itself.
    */
+  /**
+   * Keep a parallel send out of the render graph while it is silent.
+   *
+   * Web Audio processes every node reachable from the destination, so a convolver at 0% wet
+   * costs exactly as much as one at 100%. Each slot carries a 3-second spring impulse and a
+   * throw reverb it may never use; five slots was enough to blow the audio thread's budget
+   * and the whole rack went silent while the transport kept running.
+   *
+   * The gain is already 0 either side of this, so connecting and disconnecting is inaudible.
+   */
+  private static setSend(
+    node: Tone.ToneAudioNode,
+    output: Tone.ToneAudioNode,
+    live: boolean,
+    was: boolean,
+  ): boolean {
+    if (live === was) return was;
+    if (live) node.connect(output);
+    else node.disconnect(output);
+    return live;
+  }
+
   private phaseOffsetFor(slot: RuntimeSlot): number {
     return phaseOffsetSec(slot.phase ?? 0, slot.phaseBarSec ?? 0, slot.loopEnd - slot.loopStart);
   }
@@ -525,8 +581,13 @@ class MultiEngine {
     const slot = this.slots.get(id);
     if (!slot) return;
     if (slot.throwTimer) clearTimeout(slot.throwTimer);
+    if (slot.throwTailTimer) { clearTimeout(slot.throwTailTimer); slot.throwTailTimer = null; }
     const ts = this.masterSettings.throwSettings;
     const now = Tone.now();
+    // Wire the tail back in before opening the gate.
+    if (this.master) {
+      slot.throwLive = MultiEngine.setSend(slot.throwReverb, this.master, true, slot.throwLive ?? false);
+    }
     // Gate open
     slot.throwSend.gain.cancelScheduledValues(now);
     slot.throwSend.gain.rampTo(1, 0.02);
@@ -540,6 +601,16 @@ class MultiEngine {
       slot.throwSend.gain.rampTo(0, 0.05);
       slot.throwActive = false;
       slot.throwTimer = null;
+      // Let the echoes and the reverb ring out before dropping the branch, or the throw is
+      // cut off at the moment it is supposed to be trailing away. Feedback repeats first,
+      // then the reverb decay, plus a margin.
+      const tailSec = ts.delayTime * 8 + ts.reverbDecay + 1;
+      slot.throwTailTimer = setTimeout(() => {
+        slot.throwTailTimer = null;
+        if (!slot.throwActive && this.master) {
+          slot.throwLive = MultiEngine.setSend(slot.throwReverb, this.master, false, slot.throwLive ?? true);
+        }
+      }, tailSec * 1000);
     }, 400);
   }
 
@@ -765,6 +836,7 @@ class MultiEngine {
     this.stop();
     for (const slot of this.slots.values()) {
       if (slot.throwTimer) clearTimeout(slot.throwTimer);
+      if (slot.throwTailTimer) clearTimeout(slot.throwTailTimer);
       slot.player.disconnect();
       slot.player.dispose();
       slot.chain.distortion.disconnect(); slot.chain.distortion.dispose();
@@ -780,6 +852,7 @@ class MultiEngine {
       slot.chain.bass.bassSubGain.disconnect(); slot.chain.bass.bassSubGain.dispose();
       slot.chain.delay.dispose();
       disposeDualReverb(slot.chain.reverbs);
+      slot.chain.reverbBypass.disconnect(); slot.chain.reverbBypass.dispose();
       slot.chain.gain.disconnect(); slot.chain.gain.dispose();
       try { slot.springConvolver.disconnect(); } catch { /* ignore */ }
       slot.springWet.disconnect(); slot.springWet.dispose();
@@ -862,19 +935,20 @@ class MultiEngine {
    *
    * No-op when the playhead is already inside, so Move and Snap stay silent.
    */
-  reseatInLoop(id: string): void {
+  reseatInLoop(id: string, posBefore: number): void {
     const slot = this.slots.get(id);
-    if (!slot || !slot.playing) return;
+    if (!slot) return;
     const dur = slot.loopEnd - slot.loopStart;
     if (dur <= 0) return;
-    const pos = this.getSlotPosition(id);
-    if (pos >= slot.loopStart && pos < slot.loopEnd) return;
-    const wrapped = this.wrapIntoLoop(slot, pos);
+    if (posBefore >= slot.loopStart && posBefore < slot.loopEnd) return;
+    const wrapped = this.wrapIntoLoop(slot, posBefore);
+    slot.startOffset = wrapped;
+    slot.seekNonce++;
+    // A stopped slot only needs its parked offset corrected; seeking a stopped player throws.
+    if (!slot.playing) return;
     const now = Tone.now();
     slot.player.seek(wrapped, now);
-    slot.startOffset = wrapped;
     slot.startedAt = now;
-    slot.seekNonce++;
   }
 
   /** Fold an absolute position back inside a slot's loop. */
@@ -908,7 +982,7 @@ class MultiEngine {
     }
   }
 
-  private recomputeAllVolumes(): void {
+  private recomputeAllVolumes(fadeSec?: number): void {
     const anySoloed = Array.from(this.slots.values()).some((s) => s.soloed);
     const now = Tone.now();
     for (const slot of this.slots.values()) {
@@ -923,6 +997,14 @@ class MultiEngine {
         if (Math.abs(targetDb - slot.fadeTarget) < 0.01) continue;
         const remaining = slot.fadeUntil - now;
         MultiEngine.rampVolume(slot, targetDb, now, remaining, false);
+        continue;
+      }
+      if (fadeSec && fadeSec > 0) {
+        // Ramp rather than jump. The player keeps running throughout — a faded mute is a
+        // level change, not a stop, so the slot stays on the grid and un-mutes back in phase.
+        const cur = slot.volume.volume.value;
+        const silentNow = !Number.isFinite(cur) || cur <= MultiEngine.GAIN_FLOOR_DB;
+        MultiEngine.rampVolume(slot, targetDb, now, fadeSec, silentNow);
         continue;
       }
       // Writing .value cancels scheduled automation, so only do it once no fade is pending.

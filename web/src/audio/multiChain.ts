@@ -16,10 +16,24 @@ export interface MultiEffectsChain {
   eqHi: Tone.Filter;
   phaser: Tone.Phaser;
   chorus: Tone.Chorus;
+  /** Sweepable resonant lowpass, pre-delay so the echoes inherit the sweep. */
+  filter: Tone.Filter;
   bass: BassChain;
   delay: TapeDelay;
   reverbs: DualReverbNodes;
   gain: Tone.Gain;
+  /**
+   * Dry path around the reverb, so the reverb can be removed from the graph when unused.
+   *
+   * Web Audio renders every node reachable from the destination, so a reverb at 0% wet costs
+   * exactly as much as one at 100% — a 10s decay is the single most expensive node in the
+   * chain, and five slots of it is what silenced the rack. It cannot simply be disconnected:
+   * `Tone.Reverb` at wet 0 passes the dry signal, so that branch is also the slot's only path
+   * to the master. This carries the dry signal instead while the reverb is out.
+   */
+  reverbBypass: Tone.Gain;
+  /** Whether the reverb branch is currently wired in. */
+  reverbLive: boolean;
 }
 
 export async function createMultiEffectsChain(output: Tone.ToneAudioNode): Promise<MultiEffectsChain> {
@@ -29,15 +43,22 @@ export async function createMultiEffectsChain(output: Tone.ToneAudioNode): Promi
   // Also wire delay wet signal to convolution reverb + convDry (mirrors wireDelayToReverbs)
   delay.connect(reverbs.convInput);
   delay.connect(reverbs.convDry);
+  // Silent until the reverb is bypassed; see MultiEffectsChain.reverbBypass.
+  const reverbBypass = new Tone.Gain(0).connect(gain);
+  delay.connect(reverbBypass);
   const bass = await createBassChain(delay.input);
-  const chorus = new Tone.Chorus({ frequency: 1.5, delayTime: 3.5, depth: 0.7, wet: 0 }).connect(bass.input);
+  // Pre-delay, for the same reason the EQ is: an echo of a filtered signal is the dub sound,
+  // and filtering the delay's output instead would dull the repeats uniformly rather than
+  // letting them carry the sweep that was played into them.
+  const filter = new Tone.Filter({ type: "lowpass", frequency: 20000, Q: 0.5 }).connect(bass.input);
+  const chorus = new Tone.Chorus({ frequency: 1.5, delayTime: 3.5, depth: 0.7, wet: 0 }).connect(filter);
   chorus.start();
   const phaser = new Tone.Phaser({ frequency: 0.5, octaves: 3, baseFrequency: 350, wet: 0 }).connect(chorus);
   const eqHi = new Tone.Filter({ type: "highshelf", frequency: 6000, gain: 0 }).connect(phaser);
   const eqMid = new Tone.Filter({ type: "peaking", frequency: 1000, Q: 1.0, gain: 0 }).connect(eqHi);
   const eqLo = new Tone.Filter({ type: "lowshelf", frequency: 100, gain: 0 }).connect(eqMid);
   const distortion = new Tone.Distortion({ distortion: 0.5, wet: 0 }).connect(eqLo);
-  return { distortion, eqLo, eqMid, eqHi, phaser, chorus, bass, delay, reverbs, gain };
+  return { distortion, eqLo, eqMid, eqHi, phaser, chorus, filter, bass, delay, reverbs, gain, reverbBypass, reverbLive: true };
 }
 
 export async function createOfflineMultiEqChain(
@@ -95,7 +116,12 @@ export async function createOfflineMultiEqChain(
   bassInput.connect(bassShelf);
   bassInput.connect(bassSubFilter);
 
-  const chorusOff = new Tone.Chorus({ frequency: 1.5, delayTime: 3.5, depth: 0.7, wet: clamp(effects.chorusWet ?? 0, 0, 1) }).connect(bassInput);
+  const filterOff = new Tone.Filter({
+    type: "lowpass",
+    frequency: clamp(effects.filterFreq ?? EFFECTS_LIMITS.filterFreq.max, EFFECTS_LIMITS.filterFreq.min, EFFECTS_LIMITS.filterFreq.max),
+    Q: clamp(effects.filterQ ?? EFFECTS_LIMITS.filterQ.min, EFFECTS_LIMITS.filterQ.min, EFFECTS_LIMITS.filterQ.max),
+  }).connect(bassInput);
+  const chorusOff = new Tone.Chorus({ frequency: 1.5, delayTime: 3.5, depth: 0.7, wet: clamp(effects.chorusWet ?? 0, 0, 1) }).connect(filterOff);
   chorusOff.start();
   const phaserOff = new Tone.Phaser({ frequency: 0.5, octaves: 3, baseFrequency: 350, wet: clamp(effects.phaserWet ?? 0, 0, 1) }).connect(chorusOff);
   const eqHiOff = new Tone.Filter({ type: "highshelf", frequency: 6000, gain: clamp(effects.eqHigh ?? 0, EFFECTS_LIMITS.eqHigh.min, EFFECTS_LIMITS.eqHigh.max) }).connect(phaserOff);
@@ -110,6 +136,26 @@ export function applyMultiEffectsChain(chain: MultiEffectsChain, e: EffectsState
   const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
   chain.gain.gain.value = e.gain;
   applyDualReverb(chain.reverbs, e);
+
+  // Swap the reverb for a plain dry path when it is contributing nothing. Both sides carry
+  // the same signal at unity, so the crossover is silent; what changes is that an unused
+  // convolver stops being rendered. Any tail still ringing is cut at the moment of switching,
+  // which is why this only triggers at exactly 0 — the point where there is no tail.
+  const reverbNeeded = e.reverbWet > 0;
+  if (reverbNeeded !== chain.reverbLive) {
+    if (reverbNeeded) {
+      chain.reverbBypass.gain.value = 0;
+      chain.reverbs.algorithmicOut.connect(chain.gain);
+      chain.reverbs.convWet.connect(chain.gain);
+      chain.reverbs.convDry.connect(chain.gain);
+    } else {
+      chain.reverbBypass.gain.value = 1;
+      chain.reverbs.algorithmicOut.disconnect(chain.gain);
+      chain.reverbs.convWet.disconnect(chain.gain);
+      chain.reverbs.convDry.disconnect(chain.gain);
+    }
+    chain.reverbLive = reverbNeeded;
+  }
   chain.delay.delayTime.value = clamp(e.delayTime, EFFECTS_LIMITS.delayTime.min, EFFECTS_LIMITS.delayTime.max);
   chain.delay.feedback.value = clamp(e.delayFeedback, EFFECTS_LIMITS.delayFeedback.min, EFFECTS_LIMITS.delayFeedback.max);
   chain.delay.wet.value = clamp(e.delayWet, EFFECTS_LIMITS.delayWet.min, EFFECTS_LIMITS.delayWet.max);
@@ -117,6 +163,8 @@ export function applyMultiEffectsChain(chain: MultiEffectsChain, e: EffectsState
   chain.eqLo.gain.value = clamp(e.eqLow ?? 0, EFFECTS_LIMITS.eqLow.min, EFFECTS_LIMITS.eqLow.max);
   chain.eqMid.gain.value = clamp(e.eqMid ?? 0, EFFECTS_LIMITS.eqMid.min, EFFECTS_LIMITS.eqMid.max);
   chain.eqHi.gain.value = clamp(e.eqHigh ?? 0, EFFECTS_LIMITS.eqHigh.min, EFFECTS_LIMITS.eqHigh.max);
+  chain.filter.frequency.value = clamp(e.filterFreq ?? EFFECTS_LIMITS.filterFreq.max, EFFECTS_LIMITS.filterFreq.min, EFFECTS_LIMITS.filterFreq.max);
+  chain.filter.Q.value = clamp(e.filterQ ?? EFFECTS_LIMITS.filterQ.min, EFFECTS_LIMITS.filterQ.min, EFFECTS_LIMITS.filterQ.max);
   chain.phaser.wet.value = clamp(e.phaserWet ?? 0, 0, 1);
   chain.chorus.wet.value = clamp(e.chorusWet ?? 0, 0, 1);
   applyBassBoost(chain.bass, e.bassBoost);

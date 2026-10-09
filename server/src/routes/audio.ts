@@ -3,12 +3,36 @@ import { existsSync, statSync, createReadStream } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { extractVideoId } from "../lib/youtube.js";
-import { extractAudio, CACHE_DIR } from "../lib/extract.js";
+import { extractAudio, ingestUpload, CACHE_DIR } from "../lib/extract.js";
 import { readHistory, recordHistory, removeHistory } from "../lib/history.js";
+import { isValidTrackId } from "../lib/trackId.js";
 
 const router = Router();
 
 const LoadBody = z.object({ url: z.string().url() });
+
+/**
+ * POST /api/upload — a local file, ingested exactly like a YouTube track.
+ *
+ * Raw body rather than multipart: there is one file and no fields, so a parser dependency
+ * would earn nothing. The filename rides in a header because the body is the file.
+ */
+router.post("/upload", async (req, res) => {
+  const body = req.body;
+  if (!Buffer.isBuffer(body) || body.length === 0) {
+    return res.status(400).json({ error: "Empty upload" });
+  }
+  const raw = req.header("x-filename") ?? "upload";
+  let filename = raw;
+  try { filename = decodeURIComponent(raw); } catch { /* header was not encoded */ }
+  try {
+    const info = await ingestUpload(body, filename);
+    recordHistory({ id: info.id, title: info.title, duration: info.duration });
+    res.json({ id: info.id, title: info.title, duration: info.duration });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : "Upload failed" });
+  }
+});
 
 router.post("/audio", async (req, res) => {
   const parsed = LoadBody.safeParse(req.body);
@@ -35,7 +59,7 @@ router.get("/history", (_req, res) => {
 });
 
 router.delete("/history/:id", (req, res) => {
-  if (!/^[a-zA-Z0-9_-]{11}$/.test(req.params.id)) {
+  if (!isValidTrackId(req.params.id)) {
     return res.status(400).json({ error: "Invalid id" });
   }
   res.json(removeHistory(req.params.id));
@@ -43,7 +67,7 @@ router.delete("/history/:id", (req, res) => {
 
 router.get("/audio/:id", (req, res) => {
   const id = req.params.id;
-  if (!/^[a-zA-Z0-9_-]{11}$/.test(id)) {
+  if (!isValidTrackId(id)) {
     return res.status(400).json({ error: "Invalid id" });
   }
   const path = join(CACHE_DIR, `${id}.wav`);

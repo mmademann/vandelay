@@ -420,7 +420,7 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
     });
   }
 
-  function update(patch: Partial<MultiSlot>, opts?: { carryPlayhead?: boolean }) {
+  function update(patch: Partial<MultiSlot>, opts?: { carryPlayhead?: boolean; fadeSec?: number }) {
     multiEngine.updateSlot(slot.id, patch, opts);
     onChange(patch);
     persistSettings(patch);
@@ -623,27 +623,38 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
    * everything below it in `lockingDelays` also locks, so this is a starting point rather
    * than the only answer.
    */
-  const clickCombos = useMemo(() => {
+  /**
+   * The rows of the tempo control: every relation on the ladder, each carrying the tempo it
+   * produces, how far the audio is stretched to get there, and — where one exists — the delay
+   * that lands on a pulse both this slot's beat grid and the anchor's divide evenly.
+   *
+   * The whole ladder, not just the rows with a delay: this one control replaced a separate
+   * relation picker, so filtering any relation out here would make it unreachable.
+   */
+  const tempoRows = useMemo(() => {
     if (!gridBpm) return [];
     const beatSec = 60 / gridBpm;
     return TEMPO_RELATIONS.map((r) => {
       const fits = lockingDelays(r.value).filter((b) => b * beatSec <= EFFECTS_LIMITS.delayTime.max);
-      if (fits.length === 0) return null;
-      const tick = Math.max(...fits);
+      // Longest that fits: the slowest echo still welded to both grids, which is the one you
+      // can actually hear as a rhythm rather than as a thickening.
+      const tick = fits.length > 0 ? Math.max(...fits) : undefined;
       return {
         value: r.value,
         name: r.name,
+        gridSafe: r.gridSafe,
         bpm: gridBpm * r.value,
         tickBeats: tick,
-        delaySec: tick * beatSec,
+        delaySec: tick !== undefined ? tick * beatSec : undefined,
         meets: coincidenceBeats(r.value),
-        // Same derivation the relation picker uses: stretch is inversely proportional to the
-        // relation, so this needs no tempo at all and cannot drift out of step with the knob.
+        // Derived from the current stretch rather than from BPM: stretch is inversely
+        // proportional to the relation, so this needs no tempo at all and cannot drift out
+        // of step with the knob below.
         stretchPct: stretch > 0 && effectiveRelation > 0
           ? Math.round(stretch * (effectiveRelation / r.value) * 100)
           : null,
       };
-    }).filter((c): c is NonNullable<typeof c> => c !== null);
+    });
   }, [gridBpm, stretch, effectiveRelation]);
 
   /**
@@ -658,8 +669,9 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
    * Both halves are required because they are separately adjustable afterwards, which is the
    * point: pick a row, then move the delay or the relation and the row stops applying.
    */
-  const activeCombo = clickCombos.find(
+  const activeCombo = tempoRows.find(
     (c) =>
+      c.delaySec !== undefined &&
       Math.abs(c.value - effectiveRelation) < 1e-6 &&
       Math.abs(c.delaySec - slot.effects.delayTime) < 0.002,
   );
@@ -830,11 +842,26 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
               slot.soloed ? "bg-yellow-500/25 text-yellow-400 ring-1 ring-yellow-500/40" : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted")}>
             ✦ Solo
           </button>
-          <button type="button" onClick={() => update({ muted: !slot.muted })}
-            className={cn("rounded px-2 py-1 text-xs font-bold uppercase tracking-wide transition",
-              slot.muted ? "bg-red-500/25 text-red-400 ring-1 ring-red-500/40" : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted")}>
-            {slot.muted ? "✕ Muted" : "◎ Mute"}
-          </button>
+          {/* Split control, same shape as the transport's Play All: left half is instant,
+              right half ramps over the transport's fade length. Muting never stops the
+              player, so a faded mute stays on the grid and fades back in still in phase. */}
+          <span className={cn("flex items-center overflow-hidden rounded",
+            slot.muted ? "ring-1 ring-red-500/40" : "")}>
+            <button type="button" onClick={() => update({ muted: !slot.muted })}
+              className={cn("px-2 py-1 text-xs font-bold uppercase tracking-wide transition",
+                slot.muted ? "bg-red-500/25 text-red-400" : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted")}>
+              {slot.muted ? "✕ Muted" : "◎ Mute"}
+            </button>
+            <button type="button"
+              onClick={() => update({ muted: !slot.muted }, { fadeSec: multiEngine.fadeSeconds() })}
+              title={slot.muted ? `Fade in over ${multiEngine.fadeSeconds()}s` : `Fade out over ${multiEngine.fadeSeconds()}s`}
+              className={cn("border-l px-2 py-1 text-[10px] font-bold uppercase tracking-wide transition",
+                slot.muted
+                  ? "border-red-500/30 bg-red-500/15 text-red-400/70 hover:text-red-300"
+                  : "border-border/40 bg-muted/60 text-foreground/35 hover:text-foreground hover:bg-muted")}>
+              Fade
+            </button>
+          </span>
           <button type="button" onClick={() => multiEngine.throwSlot(slot.id)} disabled={!buffer}
             className={cn("rounded px-2 py-1 text-xs font-bold uppercase tracking-wide transition",
               throwActive
@@ -952,51 +979,67 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
                       : "Match Tempo"}
           </button>
 
-          {/* Half/double-time correction. Beat detection lands on the wrong multiple often
-              enough that the automatic answer needs an override — this is the ÷2/×2 button
-              every DJ tool ships, generalised to a short list of relations. Only shown once
-              the slot is matched, since there is nothing to be relative to before that. */}
-          {/* Relation picker — how fast this slot runs against the tempo anchor.
-              One row per option and nothing repeated. There used to be a separate "Auto"
-              entry, which duplicated whichever row was selected and named the mechanism
-              rather than anything the reader wants. The row needing the least stretching is
-              marked "recommended"; choosing it clears the stored choice, choosing any other
-              pins that one. Either way the audio matches what the row says. */}
-          {!isTempoAnchor && hasTempoAnchor && (isTempoMatched || tempoStale) && (
+          {/* One tempo control: how fast this slot runs against the anchor, and — when it
+              applies — the delay that goes with it.
+
+              This was two adjacent dropdowns ("Tempo — change" and "Sweet spots") built from
+              the same seven-relation ladder, in the same orange, with the same "— change…"
+              title row. They read as duplicates because the only difference was invisible
+              with the list closed: one set the relation, the other set the relation AND a
+              delay. Merged, the delay is just another column on the row.
+
+              Rows are the full ladder, not only the ones with a delay, so no relation became
+              unreachable in the merge. ⚡ marks the rows that carry one. */}
+          {!isTempoAnchor && hasTempoAnchor && tempoRows.length > 0 && (
             <select
+              // Always the current relation, so the closed label says where you are. The lit
+              // styling below is what says "and the delay is on its sweet spot".
               value={String(effectiveRelation)}
               disabled={stretching || !buffer}
               onChange={(e) => {
                 // The title row. Number("") is 0, which would pin a relation of zero.
                 if (e.target.value === "") return;
                 const v = Number(e.target.value);
-                // Selecting the recommended row means "stop pinning", not "pin this value",
+                const row = tempoRows.find((r) => r.value === v);
+                // Choosing the recommended row means "stop pinning", not "pin this value",
                 // so a later anchor change is free to move it.
                 onTempoRelationChange(autoRelation !== undefined && v === autoRelation ? null : v);
+                // Move the delay onto the row's pulse only if it is already sitting on a
+                // division — the same rule the tempo re-sync uses. A delay dialed free (or
+                // switched off, where delaySync is null) is left exactly where it is, so
+                // a half/double-time correction never costs you a delay you chose by hand.
+                const delayOnGrid = delaySync !== null
+                  && Math.abs(delaySync.seconds - slot.effects.delayTime) <= 0.005;
+                if (row?.delaySec !== undefined && delayOnGrid) {
+                  update({ effects: { ...slot.effects, delayTime: row.delaySec } });
+                }
               }}
-              title="How fast this slot plays against the tempo anchor. Beat detection often lands on the wrong multiple, which is what the 2x options correct. The two off-grid options are polymetric, so those loops are left unquantized rather than rounded to a bar they do not share."
+              title="How fast this slot plays against the tempo anchor, and the delay that lands on the beat at that speed. The 2x rows correct beat detection landing on the wrong multiple. ⚡ rows also set the delay — but only if your delay is already on a division, so a hand-set one is left alone. Off-grid rows are polymetric, so those loops stay unquantized rather than rounded to a bar they do not share. Everything stays adjustable afterwards: move Phase, the delay, or the relation."
               className={cn(
-                "shrink-0 rounded border border-orange-400/25 bg-orange-500/5 px-1.5 py-1",
-                "text-[10px] font-semibold tracking-wide text-orange-300/80 outline-none",
+                "shrink-0 rounded border px-1.5 py-1",
+                "text-[10px] font-semibold tracking-wide outline-none",
                 "focus:border-orange-400/60 [color-scheme:dark]",
+                // Lit while the relation AND the delay are the pair from one row, the same
+                // way every other engaged control in the rack reads. Same orange, more of it.
+                activeCombo
+                  ? "border-orange-400/50 bg-orange-500/20 text-orange-300"
+                  : "border-orange-400/25 bg-orange-500/5 text-orange-300/80",
                 (stretching || !buffer) && "opacity-30 cursor-not-allowed",
               )}
             >
-              {/* Titles the list the way Sweet spots does — same shape, and not greyed out:
-                  a disabled row reads as something broken rather than as a heading. Picking
-                  it is a no-op, guarded in onChange. */}
-              <option value="">↻ Tempo — change…</option>
-              {TEMPO_RELATIONS.map((r) => {
-                // Three numbers live near this control - the relation, the resulting tempo,
-                // and the Stretch knob - and they were easy to mistake for each other, so
-                // every one carries its unit.
-                const bpm = gridBpm ? ` \u00b7 ${Math.round(gridBpm * r.value)} bpm` : "";
-                // Derived from the current stretch rather than from BPM: stretch is
-                // inversely proportional to the relation, so this needs no tempo at all and
-                // cannot drift out of step with the knob below.
-                const pct = stretch > 0 && effectiveRelation > 0
-                  ? ` \u00b7 ${Math.round(stretch * (effectiveRelation / r.value) * 100)}% stretch`
-                  : "";
+              {/* Not greyed out: a disabled row reads as something broken rather than as a
+                  heading. Picking it is a no-op, guarded in onChange. */}
+              <option value="">{activeCombo ? "⚡ Sweet spot — change…" : "↻ Tempo — change…"}</option>
+              {tempoRows.map((r) => {
+                // Four numbers live near this control — the relation, the resulting tempo,
+                // the delay and the Stretch knob — and they were easy to mistake for each
+                // other, so every one carries its unit. The delay is in milliseconds for the
+                // same reason it is on the D.TIME knob: a beat count would stand alone as
+                // "0.25 of nothing".
+                const bpm = ` \u00b7 ${Math.round(r.bpm)} bpm`;
+                const delay = r.delaySec !== undefined
+                  ? ` \u00b7 \u26a1 delay ${Math.round(r.delaySec * 1000)}ms` : "";
+                const pct = r.stretchPct !== null ? ` \u00b7 ${r.stretchPct}% stretch` : "";
                 // "auto" named the mechanism, not anything the reader is choosing between.
                 // This is simply the row needing the least stretching, which is what the app
                 // settles on when left alone.
@@ -1005,63 +1048,11 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
                   !r.gridSafe ? "off-grid" : null,
                 ].filter(Boolean);
                 return (
-                  <option key={r.label} value={String(r.value)}>
-                    {r.name}{bpm}{pct}{tags.length ? ` \u00b7 ${tags.join(", ")}` : ""}
+                  <option key={r.name} value={String(r.value)}>
+                    {r.name}{bpm}{delay}{pct}{tags.length ? ` \u00b7 ${tags.join(", ")}` : ""}
                   </option>
                 );
               })}
-            </select>
-          )}
-
-          {/* Tempo + delay chosen together. Two knobs that only work as a pair need one
-              control: the delay that welds a slot to the rack is a property of the relation
-              it plays at, and it is different for every anchor and every slot. Applying a row
-              sets both — the phase is then yours to move, which is the point.
-
-              Named for the outcome. "Click in" described the feeling, "lock" was taken (↻
-              Re-lock already means re-stretching a drifted slot) and "shared pulse" names the
-              mechanism, which is the mistake every rejected label here has made. */}
-          {clickCombos.length > 0 && !isTempoAnchor && (
-            <select
-              // Selecting the active row rather than a permanent placeholder: the native
-              // select then shows it in the closed label and ticks it in the open list, which
-              // is the only affordance a <select> has for "you are here".
-              value={activeCombo ? String(activeCombo.value) : ""}
-              disabled={stretching || !buffer}
-              onChange={(e) => {
-                const combo = clickCombos.find((c) => String(c.value) === e.target.value);
-                if (!combo) return;
-                // Same rule as the relation picker: choosing what the app would pick anyway
-                // clears the pin rather than freezing today's answer in place.
-                onTempoRelationChange(autoRelation !== undefined && combo.value === autoRelation ? null : combo.value);
-                update({ effects: { ...slot.effects, delayTime: combo.delaySec } });
-              }}
-              title="Tempo and delay chosen together, so the echoes land on the beat rather than beside it. Each row: how fast this slot plays, the tempo that gives, where to set the delay, and how far the audio is stretched to get there. Pick one, then move Phase if you want it to sit differently."
-              // Tempo family, so orange — teal is the key family. It sets a tempo relation and
-              // a delay, neither of which is a key control.
-              className={cn(
-                "shrink-0 rounded border px-1.5 py-1",
-                "text-[10px] font-semibold tracking-wide outline-none",
-                "focus:border-orange-400/60 [color-scheme:dark]",
-                // Lit while one is in force, the same way every other engaged control in the
-                // rack reads. Same orange, more of it.
-                activeCombo
-                  ? "border-orange-400/50 bg-orange-500/20 text-orange-300"
-                  : "border-orange-400/25 bg-orange-500/5 text-orange-300/80",
-                (stretching || !buffer) && "opacity-30 cursor-not-allowed",
-              )}
-            >
-              <option value="">{activeCombo ? "⚡ Sweet spot — change…" : "⚡ Sweet spots…"}</option>
-              {clickCombos.map((c) => (
-                // Milliseconds, not beats. On the D.TIME knob "0.25" is legible because the
-                // knob names the quantity and the ms sit beside it; here the number would
-                // stand alone as 0.25 of nothing. The beat count and how often the grids meet
-                // are the theory behind the row, and live in the tooltip.
-                <option key={c.name} value={String(c.value)}>
-                  {c.name} · {Math.round(c.bpm)} bpm · delay {Math.round(c.delaySec * 1000)}ms
-                  {c.stretchPct !== null ? ` · ${c.stretchPct}% stretch` : ""}
-                </option>
-              ))}
             </select>
           )}
 
@@ -1361,6 +1352,28 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
           displayValue={`${(slot.effects.eqMid ?? 0) > 0 ? "+" : ""}${(slot.effects.eqMid ?? 0).toFixed(1)}dB`} onChange={(v) => updateEffect({ eqMid: v })} />
         <Knob label="EQ Hi" value={slot.effects.eqHigh ?? 0} min={-12} max={12} step={0.5} defaultValue={0} size={40}
           displayValue={`${(slot.effects.eqHigh ?? 0) > 0 ? "+" : ""}${(slot.effects.eqHigh ?? 0).toFixed(1)}dB`} onChange={(v) => updateEffect({ eqHigh: v })} />
+        {/* Frequency is dragged on a log scale — linear, the whole audible sweep happens in
+            the last eighth of the travel and everything below 2kHz is unreachable. The knob
+            value is the exponent; the readout converts back to Hz. */}
+        <Knob label="Freq"
+          value={Math.log2((slot.effects.filterFreq ?? EFFECTS_LIMITS.filterFreq.max) / EFFECTS_LIMITS.filterFreq.min)}
+          min={0}
+          max={Math.log2(EFFECTS_LIMITS.filterFreq.max / EFFECTS_LIMITS.filterFreq.min)}
+          step={0.01}
+          defaultValue={Math.log2(EFFECTS_LIMITS.filterFreq.max / EFFECTS_LIMITS.filterFreq.min)}
+          size={40}
+          displayValue={(() => {
+            const hz = slot.effects.filterFreq ?? EFFECTS_LIMITS.filterFreq.max;
+            return hz >= EFFECTS_LIMITS.filterFreq.max ? "open"
+              : hz >= 1000 ? `${(hz / 1000).toFixed(1)}k`
+              : `${Math.round(hz)}Hz`;
+          })()}
+          onChange={(v) => updateEffect({ filterFreq: EFFECTS_LIMITS.filterFreq.min * Math.pow(2, v) })} />
+        <Knob label="Res" value={slot.effects.filterQ ?? EFFECTS_LIMITS.filterQ.min}
+          min={EFFECTS_LIMITS.filterQ.min} max={EFFECTS_LIMITS.filterQ.max} step={0.1}
+          defaultValue={EFFECTS_LIMITS.filterQ.min} size={40}
+          displayValue={`${(slot.effects.filterQ ?? EFFECTS_LIMITS.filterQ.min).toFixed(1)}`}
+          onChange={(v) => updateEffect({ filterQ: v })} />
         <Knob label="Phaser" value={slot.effects.phaserWet ?? 0} min={0} max={1} step={0.01} defaultValue={0} size={40}
           displayValue={`${Math.round((slot.effects.phaserWet ?? 0) * 100)}%`} onChange={(v) => updateEffect({ phaserWet: v })} />
         <Knob label="Chorus" value={slot.effects.chorusWet ?? 0} min={0} max={1} step={0.01} defaultValue={0} size={40}

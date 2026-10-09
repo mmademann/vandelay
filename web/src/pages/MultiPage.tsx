@@ -1631,13 +1631,18 @@ export function MultiPage() {
     const next = renameDraft.trim();
     setRenamingSession(null);
     if (!next || next === oldName) return;
-    setNamedSessions(renameNamedSession(oldName, next));
-    // Keep the active-session label in sync if we just renamed the loaded one.
-    setActiveSessionName((cur) => (cur === oldName ? next : cur));
+    const updated = renameNamedSession(oldName, next);
+    setNamedSessions(updated);
+    // The rename is refused when the new name is already taken. Moving the label regardless
+    // left the header naming a different session than the one actually loaded.
+    const refused = updated.some((s) => s.name === oldName);
+    if (!refused) setActiveSessionName((cur) => (cur === oldName ? next : cur));
   }
 
   function handleDeleteSession(name: string) {
     setNamedSessions(deleteNamedSession(name));
+    // The header names the loaded session; deleting it has to drop the label too.
+    setActiveSessionName((cur) => (cur === name ? null : cur));
     saveExportToServer(buildExport(masterSettingsRef.current));
   }
 
@@ -1743,6 +1748,9 @@ export function MultiPage() {
       }
       applyImport(data);
       setNamedSessions(data.namedSessions);
+      // The imported set need not contain the session the header currently names.
+      setActiveSessionName((cur) =>
+        cur && data.namedSessions.some((s) => s.name === cur) ? cur : null);
       setPresets(data.presets);
       setThrowPresets(data.throwPresets);
       // Backups written before master speed existed have no masterSpeed; without this

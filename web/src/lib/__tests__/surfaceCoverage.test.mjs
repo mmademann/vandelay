@@ -34,6 +34,14 @@ const knob      = read("components/multi/Knob.tsx");
 const picker    = read("components/multi/SlotPicker.tsx");
 const render    = read("audio/renderMulti.ts");
 const loopSnap  = read("lib/loopSnap.ts");
+const reverbSlot = read("audio/reverbSlot.ts");
+const multiChain = read("audio/multiChain.ts");
+const SERVER = resolve(SRC, "../../server/src");
+const readServer = (p) => readFileSync(resolve(SERVER, p), "utf8");
+const stemsRoute = readServer("routes/stems.ts");
+const audioRoute = readServer("routes/audio.ts");
+const trackId = readServer("lib/trackId.ts");
+const extract = readServer("lib/extract.ts");
 const transport = read("components/multi/MultiTransport.tsx");
 
 /** Body of a balanced call, e.g. every `saveSlotSettings(...)`. */
@@ -528,31 +536,51 @@ section("12c. Shift escapes the delay ladder");
      "nearest-division labelling would call a deliberately free 210ms delay \"0.5 \u00b7 1/8\"");
 }
 
-section("12d. the sweet-spot picker sets both halves of the pair");
+section("12d. one tempo control, and it sets both halves of the pair");
 {
-  // A tempo relation and a delay only "click" together, so the control has to write both.
-  // Writing the relation alone leaves the delay wherever it was, which is the failure this
-  // picker exists to prevent.
-  ok("SlotStrip offers sweet-spot combos", /const clickCombos = useMemo/.test(slotStrip));
+  // This was two adjacent dropdowns built from the same ladder — one set the relation, the
+  // other set the relation and a delay — and with the list closed the difference was
+  // invisible. Merged. The rules below are what the merge must not lose.
+  ok("there is exactly one tempo dropdown, not two",
+     (slotStrip.match(/onTempoRelationChange\(autoRelation !== undefined/g) ?? []).length === 1,
+     "two controls over the same seven relations read as duplicates — that is why they were merged");
+  ok("SlotStrip builds the tempo rows", /const tempoRows = useMemo/.test(slotStrip));
   // Colour carries meaning in this rack: orange is the tempo family, teal is the key family,
   // and bright pulsing amber means "needs you now". A tempo control in teal reads as a key
   // control at a glance, which is the whole point of having two families.
-  ok("the sweet-spot picker wears the tempo colour, not the key colour",
-     !/border-accent\/25 bg-accent\/5[\s\S]{0,600}⚡ Sweet spots/.test(slotStrip),
+  ok("it wears the tempo colour, not the key colour",
+     !/border-accent\/25 bg-accent\/5[\s\S]{0,600}Tempo — change/.test(slotStrip),
      "it sets a tempo relation and a delay — neither is a key control");
-  ok("the picker does not borrow the word \"lock\"",
-     /⚡ Sweet spots…/.test(slotStrip),
+  ok("it does not borrow the word \"lock\"",
+     /⚡ Sweet spot — change…/.test(slotStrip) && !/Re-lock delay|Lock tempo/.test(slotStrip),
      "↻ Re-lock already means re-stretching a drifted slot; one word, two meanings is how this got confusing");
+  ok("the ladder is offered whole, so the merge made no relation unreachable",
+     /return TEMPO_RELATIONS\.map\(\(r\) => \{/.test(slotStrip)
+       && !/\}\)\.filter\(\(c\): c is NonNullable/.test(slotStrip),
+     "the old sweet-spot list dropped relations with no fitting delay; as the only tempo control it cannot");
   ok("each row carries the relation, its tempo, the delay and the stretch it costs",
-     /\{c\.name\} · \{Math\.round\(c\.bpm\)\} bpm · delay \{Math\.round\(c\.delaySec \* 1000\)\}ms/.test(slotStrip)
+     /\{r\.name\}\{bpm\}\{delay\}\{pct\}/.test(slotStrip)
+       && /delay \$\{Math\.round\(r\.delaySec \* 1000\)\}ms/.test(slotStrip)
        && /stretchPct/.test(slotStrip),
      "a row that names only a tempo is the relation picker again");
   ok("the delay in a row carries a unit",
-     !/delay \{c\.tickBeats/.test(slotStrip),
+     !/delay \{r\.tickBeats/.test(slotStrip),
      "on the knob a bare 0.25 is read against D.TIME and its ms; in a dropdown row it is 0.25 of nothing");
+  ok("rows without a delay are marked as such, so ⚡ means something",
+     /r\.delaySec !== undefined[\s\S]{0,80}\\u26a1 delay/.test(slotStrip),
+     "if every row claimed a delay the marker would carry no information");
   ok("choosing a row writes the relation AND the delay",
-     /onTempoRelationChange\(autoRelation !== undefined && combo\.value === autoRelation \? null : combo\.value\);[\s\S]{0,160}delayTime: combo\.delaySec/.test(slotStrip),
+     /onTempoRelationChange\(autoRelation !== undefined && v === autoRelation \? null : v\);[\s\S]{0,700}delayTime: row\.delaySec/.test(slotStrip),
      "half the pair is worse than neither — the delay would sit on the old relation's grid");
+  // The reason the merge is safe: a half/double-time correction is a CORRECTION, and it must
+  // not cost you a delay you dialed by hand. Same rule the tempo re-sync already uses.
+  ok("a hand-set delay is left alone",
+     /delayOnGrid = delaySync !== null[\s\S]{0,160}<= 0\.005/.test(slotStrip)
+       && /row\?\.delaySec !== undefined && delayOnGrid/.test(slotStrip),
+     "merging the two controls would otherwise make every x2 correction destructive to a free delay");
+  ok("a delay switched off stays off",
+     /slot\.effects\.delayTime > 0\.001[\s\S]{0,120}snapDelayToTempo/.test(slotStrip),
+     "delaySync is null at zero, so the on-a-division test fails and the row cannot switch a delay on");
   ok("offered delays are filtered against the delay ceiling",
      /b \* beatSec <= EFFECTS_LIMITS\.delayTime\.max/.test(slotStrip),
      "a 4x-slower slot's shared tick can exceed 4s, and the knob would clamp it off the grid");
@@ -561,31 +589,31 @@ section("12d. the sweet-spot picker sets both halves of the pair");
   // those already persist (tempoRelation is a PROPERTIES row above; delayTime rides with the
   // effects). A stored third copy could disagree with the two it was derived from.
   ok("the active sweet spot is derived from the two persisted halves, not stored",
-     /const activeCombo = clickCombos\.find\(/.test(slotStrip)
+     /const activeCombo = tempoRows\.find\(/.test(slotStrip)
        && /Math\.abs\(c\.value - effectiveRelation\) < 1e-6/.test(slotStrip)
        && /Math\.abs\(c\.delaySec - slot\.effects\.delayTime\) < 0\.002/.test(slotStrip),
      "storing it would let a reloaded slot claim a sweet spot its delay had been moved off");
   ok("no sweetSpot field was added to the persisted shapes",
      !/sweetSpot/i.test(settings) && !/sweetSpot/i.test(multiPage),
      "it is derived; a persisted copy is a second source of truth");
-  ok("the tempo relation list is titled too",
-     /<option value="">↻ Tempo — change…<\/option>/.test(slotStrip),
+  ok("the list is titled",
+     /<option value="">\{activeCombo \? "⚡ Sweet spot — change…" : "↻ Tempo — change…"\}<\/option>/.test(slotStrip),
      "opened, seven unlabelled rows do not say what they are choosing between");
-  ok("neither title row is disabled",
+  ok("the title row is not disabled",
      !/<option value="" disabled>/.test(slotStrip),
-     "greyed out reads as broken, not as a heading — and the two pickers must match");
-  ok("selecting the tempo title is a no-op",
+     "greyed out reads as broken, not as a heading");
+  ok("selecting the title is a no-op",
      /if \(e\.target\.value === ""\) return;/.test(slotStrip),
      'Number("") is 0, which would pin a relation of zero');
-  ok("the picker shows which row is in force",
-     /value=\{activeCombo \? String\(activeCombo\.value\) : ""\}/.test(slotStrip),
-     "a permanent placeholder cannot say whether you are sitting on one");
-  ok("and reads as engaged while one is",
+  ok("the closed label says which relation is in force",
+     /value=\{String\(effectiveRelation\)\}/.test(slotStrip),
+     "as the only tempo control it has to report the relation even when no sweet spot applies");
+  ok("and reads as engaged while a sweet spot is",
      /activeCombo[\s\S]{0,120}border-orange-400\/50 bg-orange-500\/20/.test(slotStrip),
-     "same lit-orange treatment as every other engaged tempo control");
-  ok("the picker is hidden on the tempo anchor",
-     /clickCombos\.length > 0 && !isTempoAnchor/.test(slotStrip),
-     "the anchor has no relation to the anchor");
+     "same lit-orange treatment as every other engaged tempo control; dimming is how you see you moved off it");
+  ok("it is hidden on the tempo anchor",
+     /!isTempoAnchor && hasTempoAnchor && tempoRows\.length > 0/.test(slotStrip),
+     "the anchor has no relation to the anchor, and there is nothing to be relative to with no anchor at all");
   const lock = fnBody(loopSnap, "export function lockingDelays");
   ok("lockingDelays requires BOTH grids to divide evenly",
      /whole\(1 \/ b\) && whole\(slotBeat \/ b\)/.test(lock ?? ""),
@@ -675,20 +703,32 @@ section("12i. quantizing a running rack does not strand a playhead");
   // updateSlot leaves the playhead alone on purpose (Move must not jump the audio), but
   // quantize can shorten a loop past the current position, and a player sitting outside its
   // loop region plays to the end of the buffer before it ever wraps.
-  const fn = fnBody(engine, "reseatInLoop(id: string)");
+  const fn = fnBody(engine, "reseatInLoop(id: string, posBefore: number)");
   ok("the engine can fold a stranded playhead back in", fn !== null);
   ok("it is a no-op while the playhead is inside",
-     /if \(pos >= slot\.loopStart && pos < slot\.loopEnd\) return;/.test(fn ?? ""),
+     /if \(posBefore >= slot\.loopStart && posBefore < slot\.loopEnd\) return;/.test(fn ?? ""),
      "Move and Snap must stay silent");
+  // The position has to be sampled against the OLD bounds. getSlotPosition folds into the
+  // slot's current loop, so read after the assignment it can never be outside — the first
+  // version of this check was dead code that could not fire.
+  ok("the position is sampled before the new bounds are assigned",
+     /const posBefore = boundsMoved \? this\.getSlotPosition\(id\) : 0;[\s\S]{0,200}Object\.assign\(slot, patch\);/.test(engine),
+     "sampled afterwards it is always inside by construction");
+  ok("a stopped slot has its parked offset corrected, without a seek",
+     /if \(!slot\.playing\) return;[\s\S]{0,120}slot\.player\.seek/.test(fn ?? ""),
+     "seeking a stopped player throws; the offset still has to be inside for the next start");
   ok("it folds by whole loop durations, preserving the bar position",
-     /const wrapped = this\.wrapIntoLoop\(slot, pos\)/.test(fn ?? ""),
+     /const wrapped = this\.wrapIntoLoop\(slot, posBefore\)/.test(fn ?? ""),
      "a post-quantize loop is a whole number of bars, so folding by it keeps the beat");
   // The fold is the engine's job, not each caller's — that was the whole point of moving the
   // rule into updateSlot. Quantize must NOT ask to carry the playhead: rounding the region
   // must not drag the audio with it.
   ok("updateSlot folds a stranded playhead itself",
-     /if \(boundsMoved\)[\s\S]{0,700}this\.reseatInLoop\(id\);/.test(engine),
+     /if \(boundsMoved\)[\s\S]*?this\.reseatInLoop\(id, posBefore\);/.test(engine),
      "leaving it to callers is how quantize came to miss it");
+  ok("carrying the playhead and folding it are exclusive",
+     /this\.nudgeSlot\(id, startDelta\);[\s\S]*?else this\.reseatInLoop\(id, posBefore\);/.test(engine),
+     "a nudge already lands inside the loop; folding on top of it would move the audio twice");
   ok("quantize does not carry the playhead",
      /multiEngine\.updateSlot\(entry\.slot\.id, \{ loopStart: finalStart, loopEnd: finalEnd \}\)/.test(multiPage)
        && !/reseatInLoop\(entry\.slot\.id\)/.test(multiPage),
@@ -711,6 +751,163 @@ section("12j. the sessions panel stays inside the window");
   ok("the save form sits outside the scroller",
      panel.indexOf("overflow-y-auto") < panel.indexOf("Save current session"),
      "it is the one control that must stay reachable at any list length");
+}
+
+section("12k. silent effect branches leave the render graph");
+{
+  // Web Audio renders every node reachable from the destination, so a convolver at 0% wet
+  // costs the same as one at 100%. Each slot carried two reverbs, a 3s spring impulse and a
+  // throw reverb, all live regardless of their knobs — five slots exhausted the audio
+  // thread's budget and the rack went silent while the transport kept running.
+  //
+  // The reverb is the trap: in algorithmic mode Tone.Reverb at wet 0 passes the DRY signal,
+  // so `algorithmic → algorithmicOut → gain` is the slot's only path to the master.
+  // Disconnecting it to save convolution silences the slot. It needs a dry path first.
+  ok("the chain carries a dry path around the reverb",
+     /reverbBypass: Tone\.Gain;/.test(multiChain) && /delay\.connect\(reverbBypass\)/.test(multiChain),
+     "without it, removing the reverb removes the audio");
+  ok("the bypass is raised in the same step the reverb is dropped",
+     /chain\.reverbBypass\.gain\.value = 1;[\s\S]{0,200}algorithmicOut\.disconnect\(chain\.gain\)/.test(multiChain),
+     "one without the other is either silence or a doubled dry signal");
+  ok("and lowered when the reverb comes back",
+     /chain\.reverbBypass\.gain\.value = 0;[\s\S]{0,200}algorithmicOut\.connect\(chain\.gain\)/.test(multiChain));
+  ok("the swap only happens at exactly zero wet",
+     /const reverbNeeded = e\.reverbWet > 0;/.test(multiChain),
+     "anywhere else there is a tail to cut off");
+  ok("applyDualReverb itself no longer disconnects anything",
+     !/setBranch/.test(reverbSlot) && !/algoLive/.test(reverbSlot),
+     "it is shared with single/mix, whose graphs have no bypass path");
+
+  ok("the engine has one helper for parallel sends",
+     /private static setSend\(/.test(engine) && /if \(live === was\) return was;/.test(engine),
+     "redundant connect/disconnect calls on every knob turn are their own bug");
+  ok("the spring send follows Big Knob",
+     /slot\.springLive = MultiEngine\.setSend\(slot\.springWet, this\.master, wet > 0/.test(engine),
+     "a genuinely parallel send, so it is safe to drop — a 3s impulse per slot");
+  ok("the throw tail starts disconnected",
+     /throwReverb\.disconnect\(this\.master\);/.test(engine),
+     "a Tone.Reverb per slot for a send that is idle almost always");
+  ok("and is wired back in before the gate opens",
+     /setSend\(slot\.throwReverb, this\.master, true/.test(engine));
+  ok("and dropped only after the echoes have rung out",
+     /const tailSec = ts\.delayTime \* 8 \+ ts\.reverbDecay \+ 1/.test(engine)
+       && /if \(!slot\.throwActive && this\.master\)/.test(engine),
+     "disconnecting at gate close cuts the throw exactly where it should be trailing away");
+  ok("its pending disconnect is cleared on teardown",
+     (engine.match(/throwTailTimer\) clearTimeout/g) ?? []).length >= 2,
+     "a timer firing after dispose touches a disposed node");
+  ok("the bypass node is disposed with the rest of the chain",
+     (engine.match(/reverbBypass\.disconnect\(\); slot\.chain\.reverbBypass\.dispose\(\)/g) ?? []).length >= 2,
+     "removeSlot and dispose both tear the chain down");
+}
+
+section("12l. an uploaded file is a track like any other");
+{
+  // Demucs reads from disk, so an upload has to become a cached WAV with an id before any of
+  // the existing machinery — separation, the library, sessions, /api/audio — can touch it.
+  ok("uploads are transcoded to the same WAV the YouTube path produces",
+     /audioFrequency\(44100\)[\s\S]{0,200}audioChannels\(2\)[\s\S]{0,200}audioCodec\("pcm_s16le"\)/.test(
+       (extract.match(/export async function ingestUpload[\s\S]*?\n\}/) ?? [""])[0]),
+     "anything else is a second on-disk format the whole pipeline has to learn");
+  ok("the id is content-derived, so re-uploading reuses the existing stems",
+     /createHash\("sha1"\)\.update\(bytes\)/.test(extract),
+     "a random id would re-separate the same file every time");
+  ok("uploads respect the duration cap",
+     /duration > MAX_DURATION_SECONDS/.test(extract),
+     "the cap is about demucs runtime, which does not care where the audio came from");
+  ok("there is one id rule, shared",
+     /YOUTUBE_ID\.test\(id\) \|\| UPLOAD_ID\.test\(id\)/.test(trackId)
+       && /isValidTrackId/.test(audioRoute) && /isValidTrackId/.test(stemsRoute),
+     "the 11-character YouTube check rejected upload ids from /api/audio — stems separated fine and then would not play");
+  ok("it stays an allowlist",
+     /\^up-\[0-9a-f\]\{12\}\$/.test(trackId) && !/replace|sanitiz/i.test(trackId),
+     "these ids are interpolated into filesystem paths");
+  ok("separation accepts an id for audio already on disk",
+     /const id = parsed\.data\.id \?\? \(parsed\.data\.url \? extractVideoId\(parsed\.data\.url\) : null\)/.test(stemsRoute)
+       && /parsed\.data\.id && existsSync\(cached\)/.test(stemsRoute),
+     "an upload has no YouTube page, so sending yt-dlp after its id fails");
+  ok("the picker drives both entry points through one poll",
+     /async function separateAndWait\(/.test(picker)
+       && (picker.match(/separateAndWait\(/g) ?? []).length >= 3,
+     "two copies of the polling loop is how the URL and upload paths would drift apart");
+  ok("the upload sends its filename encoded",
+     /"x-filename": encodeURIComponent\(file\.name\)/.test(picker),
+     "a header cannot carry the non-ASCII characters real filenames have");
+}
+
+section("12m. the sweep filter reaches live AND export");
+{
+  // Every effect has to exist twice — the live chain and the offline render — and the second
+  // one is the copy that gets forgotten. Invariant 2: export matches audible settings.
+  ok("the live chain has the filter, pre-delay like the EQ",
+     /const filter = new Tone\.Filter\(\{ type: "lowpass"/.test(multiChain)
+       && /new Tone\.Chorus\([\s\S]{0,120}\}\)\.connect\(filter\)/.test(multiChain),
+     "after the delay it would dull the repeats instead of letting them carry the sweep");
+  ok("the offline chain has it too",
+     /const filterOff = new Tone\.Filter\(\{[\s\S]{0,60}type: "lowpass"/.test(multiChain)
+       && /connect\(filterOff\)/.test(multiChain),
+     "an export that ignores the filter is the classic half-implemented effect here");
+  ok("both read the same two fields",
+     (multiChain.match(/filterFreq/g) ?? []).length >= 2 && (multiChain.match(/filterQ/g) ?? []).length >= 2);
+  ok("defaults leave it open, so old sessions are unchanged",
+     /filterFreq: 20000/.test(read("store.ts")) && /filterQ: 0\.5/.test(read("store.ts")),
+     "a filter that defaults closed silently dulls every existing session");
+  ok("the frequency knob is logarithmic",
+     /Math\.log2\(\(slot\.effects\.filterFreq/.test(slotStrip)
+       && /EFFECTS_LIMITS\.filterFreq\.min \* Math\.pow\(2, v\)/.test(slotStrip),
+     "linear, the entire usable sweep lives in the last eighth of the travel");
+  ok("the sweep reaches low enough to actually choke",
+     /filterFreq: \{ min: 30, max: 20000 \}/.test(read("store.ts")),
+     "a floor above the bass leaves low end passing at the bottom of the travel");
+  ok("resonance range is the full sweep-to-squeal",
+     /filterQ: \{ min: 0\.5, max: 20 \}/.test(read("store.ts")));
+}
+
+section("12n. the session label names a session that exists");
+{
+  // Three separate paths change the saved-session list, and each one forgot that the header
+  // button is a *copy* of a name in it. A label naming a deleted, renamed-away or
+  // imported-over session is not cosmetic: it is what the export filename is built from.
+  ok("deleting the loaded session drops the label",
+     /deleteNamedSession\(name\)\);[\s\S]{0,200}setActiveSessionName\(\(cur\) => \(cur === name \? null : cur\)\)/.test(multiPage),
+     "the mount-time validation runs once and is guarded by a ref, so nothing else clears it");
+  ok("a refused rename does not move the label",
+     /const refused = updated\.some\(\(s\) => s\.name === oldName\);[\s\S]{0,120}if \(!refused\)/.test(multiPage),
+     "renameNamedSession declines a name that is already taken; relabelling anyway pointed the header at a different session");
+  ok("import re-checks the label against the imported list",
+     /setNamedSessions\(data\.namedSessions\);[\s\S]{0,240}data\.namedSessions\.some\(\(s\) => s\.name === cur\)/.test(multiPage),
+     "import replaces every session, so the name the header holds may no longer exist");
+}
+
+section("12o. a faded mute is a level change, not a stop");
+{
+  // The whole point is that the slot keeps running in time, so it un-mutes back on the grid
+  // rather than restarting. If this ever turns into a stop/start it will silently lose phase.
+  ok("the mute path never stops the player",
+     !/patch\.muted[\s\S]{0,400}player\.stop/.test(engine),
+     "stopping would drop the slot off the grid, which is exactly what the fade exists to avoid");
+  ok("the fade only applies to mute and solo",
+     /patch\.muted !== undefined \|\| patch\.soloed !== undefined \? opts\?\.fadeSec : undefined/.test(engine),
+     "a gain-knob drag ramped per frame makes the knob feel disconnected from the sound");
+  ok("recomputeAllVolumes can ramp instead of jumping",
+     /recomputeAllVolumes\(fadeSec\?: number\)/.test(engine)
+       && /if \(fadeSec && fadeSec > 0\)[\s\S]{0,400}rampVolume\(slot, targetDb, now, fadeSec/.test(engine),
+     "writing .value cancels automation, so the ramp has to replace that write, not follow it");
+  ok("a ramp out of silence starts from the floor, not -Infinity",
+     /silentNow = !Number\.isFinite\(cur\) \|\| cur <= MultiEngine\.GAIN_FLOOR_DB/.test(engine),
+     "dbToGain(-Infinity) poisons the automation curve — the documented reason rampVolume has fromSilence");
+  ok("an in-flight fade is still re-targeted, not restarted",
+     /Math\.abs\(targetDb - slot\.fadeTarget\) < 0\.01/.test(engine),
+     "hitting Fade twice, or muting mid-fade, would otherwise restart the ramp audibly");
+  ok("the UI reads the fade length from the engine",
+     /fadeSeconds\(\): number \{ return MultiEngine\.FADE_SEC; \}/.test(engine)
+       && /multiEngine\.fadeSeconds\(\)/.test(slotStrip)
+       && !/fadeSec: 10/.test(slotStrip),
+     "a second copy of the number drifts from the transport's fade");
+  ok("the instant half still exists",
+     /onClick=\{\(\) => update\(\{ muted: !slot\.muted \}\)\}/.test(slotStrip)
+       && /update\(\{ muted: !slot\.muted \}, \{ fadeSec: multiEngine\.fadeSeconds\(\) \}\)/.test(slotStrip),
+     "the split control is instant on the left, fade on the right — same shape as Play All");
 }
 
 section("13. expensive analysis is memoised");

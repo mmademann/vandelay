@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, statSync, unlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ffmpegPath from "ffmpeg-static";
@@ -67,6 +68,64 @@ function fetchMetadata(url: string): Promise<YtDlpMeta> {
  * (it treats 403 as fatal, not transient), so retry the whole download with a backoff.
  * Observed ~50% failure rate on rapid repeats; a few spaced attempts get through reliably.
  */
+
+/**
+ * Transcode an uploaded file into the same WAV the YouTube path produces.
+ *
+ * Everything downstream — demucs, /api/audio, the browser decode — assumes 44.1k stereo
+ * 16-bit PCM on disk at `cache/<id>.wav`. Uploads have to land in exactly that shape or they
+ * are a second format the whole pipeline has to learn.
+ */
+export async function ingestUpload(bytes: Buffer, filename: string): Promise<TrackInfo> {
+  // Stable id from the content, so re-uploading the same file reuses its cache and its stems
+  // rather than separating it again under a new name. Prefixed to keep it distinguishable
+  // from an 11-character YouTube id at a glance.
+  const hash = createHash("sha1").update(bytes).digest("hex").slice(0, 12);
+  const id = `up-${hash}`;
+  const wavPath = join(CACHE_DIR, `${id}.wav`);
+  const title = filename.replace(/\.[^.]+$/, "").trim() || id;
+
+  if (existsSync(wavPath) && statSync(wavPath).size > 0) {
+    return { id, title, duration: wavDurationSec(wavPath), path: wavPath };
+  }
+
+  const tmpPath = join(CACHE_DIR, `${id}.upload`);
+  writeFileSync(tmpPath, bytes);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      ffmpeg(tmpPath)
+        .audioFrequency(44100)
+        .audioChannels(2)
+        .audioCodec("pcm_s16le")
+        .format("wav")
+        .on("error", (e) => {
+          try { if (existsSync(wavPath)) unlinkSync(wavPath); } catch { /* best effort */ }
+          reject(new Error(`ffmpeg: ${e.message}`));
+        })
+        .on("end", () => resolve())
+        .save(wavPath);
+    });
+  } finally {
+    try { unlinkSync(tmpPath); } catch { /* best effort */ }
+  }
+
+  const duration = wavDurationSec(wavPath);
+  if (duration > MAX_DURATION_SECONDS) {
+    try { unlinkSync(wavPath); } catch { /* best effort */ }
+    throw new Error(`Audio too long (${Math.round(duration)}s). Max ${MAX_DURATION_SECONDS}s.`);
+  }
+  return { id, title, duration, path: wavPath };
+}
+
+/**
+ * Duration from the file size rather than ffprobe — ffmpeg-static ships no ffprobe binary,
+ * and the format above is fixed, so the arithmetic is exact bar the 44-byte header.
+ */
+function wavDurationSec(wavPath: string): number {
+  const bytesPerSecond = 44100 * 2 * 2;
+  return Math.max(0, (statSync(wavPath).size - 44) / bytesPerSecond);
+}
+
 async function downloadAndTranscode(url: string, outPath: string): Promise<void> {
   const MAX_ATTEMPTS = 4;
   let lastErr: Error | undefined;

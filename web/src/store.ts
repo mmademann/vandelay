@@ -23,6 +23,14 @@ export const EFFECTS_LIMITS = {
   eqLow: { min: -12, max: 12 },
   eqMid: { min: -12, max: 12 },
   eqHigh: { min: -12, max: 12 },
+  // Sweepable lowpass. 20k is "open" — the default, so existing sessions sound unchanged.
+  // The floor is 30Hz rather than something politely above the bass: at 80 the bottom of the
+  // travel still passed low end and the sweep never actually choked.
+  //
+  // Q to 20 is a hard squeal at the cutoff. Worth knowing: the resonant peak sits AT the
+  // cutoff, so with Freq open this knob does nothing audible — it only bites on the way down.
+  filterFreq: { min: 30, max: 20000 },
+  filterQ: { min: 0.5, max: 20 },
   phaserWet: { min: 0, max: 1 },
   chorusWet: { min: 0, max: 1 },
 } as const;
@@ -54,6 +62,8 @@ export interface EffectsState {
   eqLow?: number;
   eqMid?: number;
   eqHigh?: number;
+  filterFreq?: number;
+  filterQ?: number;
   phaserWet?: number;
   chorusWet?: number;
 }
@@ -82,6 +92,8 @@ export function sanitizeEffects(e: EffectsState): EffectsState {
     eqLow: clamp(e.eqLow ?? 0, EFFECTS_LIMITS.eqLow.min, EFFECTS_LIMITS.eqLow.max),
     eqMid: clamp(e.eqMid ?? 0, EFFECTS_LIMITS.eqMid.min, EFFECTS_LIMITS.eqMid.max),
     eqHigh: clamp(e.eqHigh ?? 0, EFFECTS_LIMITS.eqHigh.min, EFFECTS_LIMITS.eqHigh.max),
+    filterFreq: clamp(e.filterFreq ?? EFFECTS_LIMITS.filterFreq.max, EFFECTS_LIMITS.filterFreq.min, EFFECTS_LIMITS.filterFreq.max),
+    filterQ: clamp(e.filterQ ?? EFFECTS_LIMITS.filterQ.min, EFFECTS_LIMITS.filterQ.min, EFFECTS_LIMITS.filterQ.max),
     phaserWet: clamp(e.phaserWet ?? 0, EFFECTS_LIMITS.phaserWet.min, EFFECTS_LIMITS.phaserWet.max),
     chorusWet: clamp(e.chorusWet ?? 0, EFFECTS_LIMITS.chorusWet.min, EFFECTS_LIMITS.chorusWet.max),
   };
@@ -105,6 +117,8 @@ export const DEFAULT_EFFECTS: EffectsState = {
   eqLow: 0,
   eqMid: 0,
   eqHigh: 0,
+  filterFreq: 20000,
+  filterQ: 0.5,
   phaserWet: 0,
   chorusWet: 0,
 };
@@ -128,6 +142,8 @@ export const BYPASS_EFFECTS: EffectsState = {
   eqLow: 0,
   eqMid: 0,
   eqHigh: 0,
+  filterFreq: 20000,
+  filterQ: 0.5,
   phaserWet: 0,
   chorusWet: 0,
 };

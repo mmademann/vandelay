@@ -5,6 +5,31 @@ Personal-use "slowed + reverb" web app. Four routes: **`/`** (multi-slot stem la
 **User-facing behavior** (features, defaults, export options): see `README.md`.  
 **Implementation details** (limits, keys, presets): read the source — don't trust hardcoded values in this file.
 
+## Working in this repo
+
+Four rules that are about this app, not about taste. Each one cost real time when ignored.
+
+1. **Confirm before writing any file.** The dev server runs continuously and the user works
+   in the browser. Any save triggers Vite HMR, which reloads the page and destroys the live
+   session — loaded slots, decoded `AudioBuffer`s (in-memory only, never persisted) and
+   unsaved knob positions. Recovering means re-downloading and re-separating tracks, which
+   takes minutes. Reading, searching and hitting the API are free and trigger nothing. Say
+   what you intend to change, wait for a go-ahead, and batch pending edits into one save.
+2. **The user owns the dev server.** Do not start one — check whether `:5173` / `:5174` are
+   already up and use those. A stray `vite` grabbing `[::1]:5174` shadows the API, and audio
+   fetches then return HTML. If you did start something, take it down when you are finished.
+3. **`multi-state.json` is live session data, not code.** It is tracked, so it shows up in
+   every `git status` — never stage or review it without asking. Back it up before running
+   anything that drives the app in a browser: a headless profile has empty localStorage and
+   the app writes a backup on unmount, which can overwrite the real one.
+4. **One number per control.** Every knob displays exactly its own value — no derived,
+   combined or "total" readouts (printing speed x pitch x master on the Speed knob was tried
+   twice and rejected both times; a number that disagrees with the dial beside it reads as a
+   broken app). Where a hidden interaction matters, state it under the control that *causes*
+   it, not the one it affects. Same rule for labels: name the outcome the user hears, never
+   the mechanism — "auto", ratio notation (`3:4`) and musician's jargon ("half time") were
+   all rejected for exactly that.
+
 ## Stack
 
 npm workspaces: **`/web`** (Vite, React, TS, react-router, Zustand, Tailwind, Wavesurfer, Tone.js) and **`/server`** (Express, yt-dlp, ffmpeg-static). Node version in `.nvmrc`.
@@ -115,10 +140,14 @@ web/src/
   components/        UI (mix/ subfolder for mixer, multi/ subfolder for multi)
     multi/
       SlotStrip.tsx       Per-slot UI (waveform, knobs, presets, play/pause/rewind, THROW button, key badge, octave shift, MATCHED badge)
-      SlotStrip: ⚡ Sweet spots — per-slot tempo/delay pairs whose beat grids share a pulse.
-                          `lockingDelays()` in loopSnap.ts computes which delay divisions
-                          divide BOTH the anchor's beat and the slot's; picking a row sets the
-                          relation and the delay together. Phase is left alone deliberately.
+      SlotStrip: one tempo dropdown — the relation ladder, each row carrying the delay whose
+                          pulse both beat grids divide (`lockingDelays()` in loopSnap.ts, marked
+                          ⚡). Picking a row sets the relation always, and the delay **only if
+                          the delay is already on a division** — the same rule the delay re-sync
+                          uses, so an x2 correction never costs you a hand-dialed delay. Phase is
+                          left alone deliberately. This was two adjacent dropdowns over the same
+                          seven relations; merged, because with the list closed nothing
+                          distinguished them.
       SlotPicker.tsx      Inline track+stem picker panel (YouTube URL input above search; youtu.be short-link parsing)
       MultiTransport.tsx Transport bar: Sessions dropdown · Play All · Rewind All · Throw (floating panel) · Match All · Export (floating panel) · Clear
   lib/               Loaders, caches, persistence, format helpers, presets
@@ -136,7 +165,7 @@ web/src/
 **Transport bar** (top): `Session <name>` button (names the active session; falls back to `Sessions (N)`) · `▶ Play All` / `⏸ Pause All` (+ `Fade` half) · `⏮` (Rewind All) · `● Rec` · master speed slider · `↻ Match Tempos` (with an inline result chip after quantizing) · `↻ Re-lock N` (only while slots are stale) · `auto re-lock on/off` · `↻ Match Keys` · `↓ Export` (floating panel) · `⚄ Random` · `↯ Throw` (floating panel) · `Clear`
 
 **Per-slot (SlotStrip)**:
-- Header row: key badge (`C# min`, BPM on hover, `?` if unknown) · tempo anchor button (`⚓ Tempo Anchor` / `Set Tempo Anchor` / `Tempo 1:1 ↻` / `↻ Re-lock Tempo`) · relation select (`1:4 … 4:1`, matched or stale non-anchor slots only) · key anchor button (`⚓ Key Anchor` / `Set Key Anchor` / `Key Matched ↻` / `Match Key`) · semitone interval group (`1 7 12` + `▼▲`) · `⇥ Snap` · `Move ◀ 1/4 | 1/4 ▶` · stem/track label · track title · remove (✕)
+- Header row: key badge (`C# min`, BPM on hover, `?` if unknown) · tempo anchor button (`⚓ Tempo Anchor` / `Set Tempo Anchor` / `Tempo 1:1 ↻` / `↻ Re-lock Tempo`) · tempo dropdown (`↻ Tempo — change…` / `⚡ Sweet spot — change…`; relation + its locking delay, non-anchor slots only) · key anchor button (`⚓ Key Anchor` / `Set Key Anchor` / `Key Matched ↻` / `Match Key`) · semitone interval group (`1 7 12` + `▼▲`) · `⇥ Snap` · `Move ◀ 1/4 | 1/4 ▶` · stem/track label · track title · remove (✕)
 - Knob row 1 (timing + pitch): Pitch (+ `Link`) · Speed (+ `master: on/off`) · Stretch · Phase (`0 1/8 1/4 1/3 3/8 1/2 2/3 3/4`)
 - Knob row 2 (level + tone): Gain · Reverb · Decay · Delay · D.Time · D.Feedbk · Bass · Grit · Phaser · Chorus
 - Waveform with loop region handles

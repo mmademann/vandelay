@@ -48,6 +48,7 @@ export function SlotPicker({ library: libraryProp, onConfirm, onClose, onLibrary
   const [separating, setSeparating] = useState(false);
   const [urlError, setUrlError] = useState("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   function fetchLibrary(signal?: AbortSignal) {
     // no-store: the endpoint sets max-age=10, so a refetch right after separation would
@@ -112,26 +113,24 @@ export function SlotPicker({ library: libraryProp, onConfirm, onClose, onLibrary
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [library]);
 
-  async function handleUrlSubmit() {
-    const trimmed = urlInput.trim();
-    if (!trimmed || separating) return;
-    const id = extractVideoId(trimmed);
-    if (!id) return;
-    setUrlError("");
-    setSeparating(true);
+  /**
+   * Kick off separation and poll until the stems land.
+   *
+   * Shared by both entry points: a YouTube id and an uploaded file differ only in how the
+   * WAV reaches the server's cache. Once it is there the rest is identical, and duplicating
+   * this poll was how the two would drift apart.
+   */
+  async function separateAndWait(body: Record<string, string>, id: string, fallbackTitle: string) {
+    const res = await fetch("/api/stems", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json() as { title?: string; error?: string };
+    if (!res.ok) throw new Error(data.error ?? "Server error");
+    const title = data.title ?? fallbackTitle;
 
-    try {
-      const res = await fetch("/api/stems", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: `https://www.youtube.com/watch?v=${id}` }),
-      });
-      const data = await res.json() as { title?: string; error?: string };
-      if (!res.ok) throw new Error(data.error ?? "Server error");
-
-      const title = data.title ?? id;
-
-      let retries = 0;
+    let retries = 0;
       // 20 min at 2s. Demucs runs roughly 1:3 against track length, plus mp3 transcode after —
       // a 25-min track takes ~8 min, so the old 6-min cap fired while it was still working.
       const MAX_RETRIES = 600;
@@ -162,9 +161,53 @@ export function SlotPicker({ library: libraryProp, onConfirm, onClose, onLibrary
           // poll errors are transient — keep polling
         }
       }, 2000);
+  }
+
+  async function handleUrlSubmit() {
+    const trimmed = urlInput.trim();
+    if (!trimmed || separating) return;
+    const id = extractVideoId(trimmed);
+    if (!id) return;
+    setUrlError("");
+    setSeparating(true);
+    try {
+      await separateAndWait({ url: `https://www.youtube.com/watch?v=${id}` }, id, id);
     } catch (e) {
       setSeparating(false);
       setUrlError(e instanceof Error ? e.message : "Unknown error");
+    }
+  }
+
+  /**
+   * Upload a local file, then separate it exactly like a YouTube track.
+   *
+   * Two steps rather than one: the server needs the audio on disk before demucs can run, and
+   * everything downstream — the library, stem picking, sessions — is keyed on a track id. So
+   * the upload's only job is to become one.
+   */
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || separating) return;
+    setUrlError("");
+    setSeparating(true);
+    try {
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/octet-stream",
+          // encodeURIComponent: a header cannot carry the non-ASCII characters that turn up
+          // in real filenames, and the server decodes it back.
+          "x-filename": encodeURIComponent(file.name),
+        },
+        body: file,
+      });
+      const data = await res.json() as { id?: string; title?: string; error?: string };
+      if (!res.ok || !data.id) throw new Error(data.error ?? "Upload failed");
+      await separateAndWait({ id: data.id }, data.id, data.title ?? file.name);
+    } catch (err) {
+      setSeparating(false);
+      setUrlError(err instanceof Error ? err.message : "Upload failed");
     }
   }
 
@@ -199,6 +242,24 @@ export function SlotPicker({ library: libraryProp, onConfirm, onClose, onLibrary
           >
             {separating ? "…" : "Add"}
           </button>
+          {/* A local file takes the same path once the server has it on disk, so it sits
+              beside the URL box rather than in a mode of its own. */}
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={separating}
+            title="Separate a local audio or video file into stems"
+            className="rounded-md border border-border bg-muted/40 px-3 py-1.5 text-sm text-foreground transition hover:bg-muted/70 disabled:opacity-40"
+          >
+            Upload file
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="audio/*,video/*,.mp4,.m4a,.flac,.wav,.mp3"
+            className="hidden"
+            onChange={handleFile}
+          />
         </div>
         {separating && <div className="text-xs text-foreground/50">Separating… a few min (longer for long tracks)</div>}
         {urlError && <div className="text-xs text-red-400">{urlError}</div>}

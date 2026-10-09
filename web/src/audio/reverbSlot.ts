@@ -8,6 +8,15 @@ export interface DualReverbNodes {
   convolver: ConvolverNode;
   convDry: Tone.Gain;
   convWet: Tone.Gain;
+  /**
+   * The node these branches feed. Kept so a caller can route around them.
+   *
+   * NOT for disconnecting the algorithmic branch: in algorithmic mode `Tone.Reverb` at wet 0
+   * passes the DRY signal, so `algorithmic → algorithmicOut → output` is the slot's only path
+   * to the master. Dropping it to save convolution silences the slot outright. Bypassing the
+   * reverb needs a parallel dry path first — see `reverbBypass` in multiChain.ts.
+   */
+  output?: Tone.ToneAudioNode;
 }
 
 let impulseBuffer: AudioBuffer | null = null;
@@ -132,7 +141,10 @@ export async function createDualReverb(output: Tone.ToneAudioNode): Promise<Dual
   const ir = await getImpulseResponse();
   convolver.buffer = ir;
 
-  return { algorithmic, algorithmicOut, convInput, convolver, convDry, convWet };
+  return {
+    algorithmic, algorithmicOut, convInput, convolver, convDry, convWet,
+    output,
+  };
 }
 
 export function wireDelayToReverbs(delay: Tone.FeedbackDelay, reverbs: DualReverbNodes): void {
