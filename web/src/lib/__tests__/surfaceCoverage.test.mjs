@@ -343,7 +343,9 @@ section("11. relation selection cannot be ambiguous");
   // whatever the anchor currently implies — the opposite of what re-lock is for.
   const relock = fnBody(multiPage, "async function handleRelockStale");
   ok("re-lock re-stretches without overriding the relation",
-     /stretchSlotToTempoAnchor\((?!.*,)/.test(relock ?? "") || /stretchSlotToTempoAnchor\(id\)/.test(relock ?? ""),
+     // `undefined` in the relation slot, never a number: the third argument is the
+     // re-measure flag, which is about WHERE the BPM is read, not which relation is used.
+     /stretchSlotToTempoAnchor\(id, undefined, true\)/.test(relock ?? ""),
      "passing a relation here would drag a deliberately half-speed slot back to the automatic answer");
   // Stale detection and the match must resolve the relation the same way, or a slot is
   // flagged stale, re-stretched, and flagged again — an auto re-lock loop every 600ms.
@@ -552,7 +554,7 @@ section("12d. one tempo control, and it sets both halves of the pair");
      !/border-accent\/25 bg-accent\/5[\s\S]{0,600}Tempo — change/.test(slotStrip),
      "it sets a tempo relation and a delay — neither is a key control");
   ok("it does not borrow the word \"lock\"",
-     /⚡ Sweet spot — change…/.test(slotStrip) && !/Re-lock delay|Lock tempo/.test(slotStrip),
+     /"⚡ Sweet spot" : "↻ Tempo"/.test(slotStrip) && !/Re-lock delay|Lock tempo/.test(slotStrip),
      "↻ Re-lock already means re-stretching a drifted slot; one word, two meanings is how this got confusing");
   ok("the ladder is offered whole, so the merge made no relation unreachable",
      /return TEMPO_RELATIONS\.map\(\(r\) => \{/.test(slotStrip)
@@ -597,7 +599,7 @@ section("12d. one tempo control, and it sets both halves of the pair");
      !/sweetSpot/i.test(settings) && !/sweetSpot/i.test(multiPage),
      "it is derived; a persisted copy is a second source of truth");
   ok("the list is titled",
-     /<option value="">\{activeCombo \? "⚡ Sweet spot — change…" : "↻ Tempo — change…"\}<\/option>/.test(slotStrip),
+     /\{activeCombo \? "⚡ Sweet spot" : "↻ Tempo"\} — \{currentRow\?\.name \?\? "change"\}…/.test(slotStrip),
      "opened, seven unlabelled rows do not say what they are choosing between");
   ok("the title row is not disabled",
      !/<option value="" disabled>/.test(slotStrip),
@@ -605,9 +607,18 @@ section("12d. one tempo control, and it sets both halves of the pair");
   ok("selecting the title is a no-op",
      /if \(e\.target\.value === ""\) return;/.test(slotStrip),
      'Number("") is 0, which would pin a relation of zero');
-  ok("the closed label says which relation is in force",
-     /value=\{String\(effectiveRelation\)\}/.test(slotStrip),
-     "as the only tempo control it has to report the relation even when no sweet spot applies");
+  // Parked on the placeholder ON PURPOSE. A native select fires no change event for the
+  // option already selected, so binding value to the current relation made that row — and
+  // the delay it advertises — unreachable. The current row is named in the placeholder and
+  // ticked in the list instead.
+  ok("the select stays parked on the placeholder",
+     /value=""\n/.test(slotStrip) || /value=""\s/.test(slotStrip),
+     "binding it to the current relation makes that row unselectable, so its delay cannot be applied");
+  ok("the placeholder names the current relation",
+     /currentRow\?\.name \?\? "change"/.test(slotStrip),
+     "the browser's own selection mark no longer says where you are, so the text must");
+  ok("and the current row is ticked explicitly",
+     /const here = Math\.abs\(r\.value - effectiveRelation\) < 1e-6 \? "\\u2713 " : "";/.test(slotStrip));
   ok("and reads as engaged while a sweet spot is",
      /activeCombo[\s\S]{0,120}border-orange-400\/50 bg-orange-500\/20/.test(slotStrip),
      "same lit-orange treatment as every other engaged tempo control; dimming is how you see you moved off it");
@@ -646,7 +657,8 @@ section("12e. an async stretch must not resurrect the slot it captured");
      /Math\.abs\(stretch - currentStretch\) < 0\.005/.test(fn ?? ""),
      "comparing against the stale copy skips a rebuild that is genuinely needed");
   ok("it commits from the updater's prev, not from the captured entry",
-     /slot: \{ \.\.\.e\.slot, loopStart, loopEnd \}/.test(fn ?? "")
+     /slot: \{\s*\.\.\.e\.slot,\s*loopStart,\s*loopEnd,/.test(fn ?? "")
+       && /\.\.\.e\.slot\.effects, \.\.\.matchedDelay\(e\.slot\.effects\)/.test(fn ?? "")
        && !/\.\.\.target\.slot/.test(fn ?? ""),
      "spreading target.slot after an await reverts anything changed during the rebuild");
   ok("and persists that same committed entry",
@@ -1025,6 +1037,388 @@ section("12t. Reset actually resets");
   ok("Reset patches nothing on top of DRY_EFFECTS",
      /effects: \{ \.\.\.DRY_EFFECTS \}, speed: 1, pitch: 0, linkPitch: true, gain: 0/.test(slotStrip),
      "a hand-written field at the call site is how the other knobs got forgotten");
+}
+
+section("12u. Grit drives the shaper, not just its curve");
+{
+  // The knob only widened the clipping curve, which stops getting nastier around 60%. Dirt
+  // comes from how hard the signal hits the shaper, so Grit now also boosts into it.
+  ok("there is a drive before the shaper and a makeup after",
+     /const drive = new Tone\.Gain\(1\)\.connect\(distortion\)/.test(multiChain)
+       && /const makeup = new Tone\.Gain\(1\)\.connect\(eqLo\)/.test(multiChain)
+       && /\.connect\(makeup\)/.test(multiChain));
+  ok("both are driven by grit",
+     /chain\.drive\.gain\.value = Tone\.dbToGain\(GRIT_DRIVE_DB \* grit\)/.test(multiChain)
+       && /chain\.makeup\.gain\.value = Tone\.dbToGain\(-GRIT_MAKEUP_DB \* grit\)/.test(multiChain));
+  ok("and are unity at grit 0",
+     /new Tone\.Gain\(1\)\.connect\(distortion\)/.test(multiChain),
+     "a clean slot must pass through untouched — this node is in every slot's path");
+  ok("makeup gives back less than the drive",
+     /GRIT_DRIVE_DB = 18/.test(multiChain) && /GRIT_MAKEUP_DB = 9/.test(multiChain),
+     "the shaper bounds its own output, so full compensation makes the slot quieter as it dirties");
+  // Invariant 2. The offline chain is the half that gets forgotten, and an export that is
+  // cleaner than what was auditioned is the worst kind of wrong: it sounds fine.
+  ok("the offline render does the same thing",
+     /Tone\.dbToGain\(GRIT_DRIVE_DB \* grit\)/.test(multiChain)
+       && /Tone\.dbToGain\(-GRIT_MAKEUP_DB \* grit\)/.test(multiChain),
+     "export must hit the shaper exactly as hard as playback did");
+  ok("both constants are read twice — live and offline",
+     (multiChain.match(/GRIT_DRIVE_DB/g) ?? []).length >= 3
+       && (multiChain.match(/GRIT_MAKEUP_DB/g) ?? []).length >= 3,
+     "a second hardcoded number is how the two chains drift apart");
+  ok("the player feeds the drive, not the shaper",
+     /new Tone\.Player\(toneBuffer\)\.connect\(chain\.drive\)/.test(engine),
+     "connecting to the distortion would route around the drive and silently restore the old behaviour");
+  ok("the new nodes are disposed with the slot",
+     (engine.match(/chain\.drive\.disconnect\(\); slot\.chain\.drive\.dispose\(\)/g) ?? []).length === 2
+       && (engine.match(/chain\.makeup\.disconnect\(\); slot\.chain\.makeup\.dispose\(\)/g) ?? []).length === 2,
+     "removeSlot and dispose both, or a removed slot leaks two nodes per slot");
+}
+
+section("12v. tempo detection must not fail silently");
+{
+  // It did, for every track in the app. RhythmExtractor2013 was handed the WHOLE file —
+  // thirteen million samples for a five-minute stem — blew the WASM heap, threw, and the
+  // throw went into a bare `catch {}`. Keys kept working (KeyExtractor is far cheaper), so
+  // nothing looked broken: every BPM in the app was quietly the rough onset estimate from
+  // loopSnap instead. Not one of 32 saved sessions had a detectedBpm.
+  const worker = read("workers/audioAnalysisWorker.ts");
+  ok("the rhythm pass runs on a slice, not the whole track",
+     /RHYTHM_WINDOW_SEC/.test(worker) && /mono\.subarray\(start, start \+ want\)/.test(worker),
+     "the whole file is what exhausted the heap; tempo does not change, so more audio buys nothing");
+  ok("the key vector is freed before the rhythm pass allocates",
+     /keyVector\?\.delete\(\);[\s\S]{0,400}estimateTempo\(/.test(worker),
+     "two copies of a multi-minute track in the WASM heap at once is most of the original failure");
+  ok("a failure is reported, never swallowed",
+     !/\} catch \{\s*\/\* rhythm extraction failed/.test(worker)
+       && /bpmError/.test(worker) && /console\.warn\(`\[analysis\] no BPM/.test(worker),
+     "a bare catch here hid a total feature outage for the entire library");
+  ok("there is a cheaper second opinion",
+     /PercivalBpmEstimator\(vector/.test(worker),
+     "one algorithm failing should not mean no tempo at all");
+  ok("both estimators are range-checked",
+     /v >= 40 && v <= 250/.test(worker),
+     "Essentia returns 0 when it finds no pulse, and 0 would be accepted as a tempo");
+  ok("a cached key with no BPM counts as incomplete",
+     /stemAnalysis\.bpm !== undefined/.test(multiPage),
+     "otherwise every already-analysed stem stays BPM-less forever behind a cache HIT");
+}
+
+section("12w. pinning the anchor re-measures its tempo from the loop");
+{
+  // Load-time detection reads the middle of the file, which is a guess about where the beat
+  // lives. By the time a slot is pinned as the anchor the user has chosen a loop, and that
+  // loop is the part being played.
+  const worker = read("workers/audioAnalysisWorker.ts");
+  const analysis = read("lib/audioAnalysis.ts");
+  ok("pinning triggers it",
+     /void redetectAnchorTempo\(entry\.slot\.id\)\.then\(/.test(multiPage));
+  ok("ONLY pinning triggers it",
+     (multiPage.match(/redetectAnchorTempo\(/g) ?? []).length === 2,
+     "re-measuring whenever a loop handle moved would restretch every slave mid-session — "
+     + "the anchor's BPM is the grid the whole rack is built on");
+  ok("loop bounds are divided out of the stretch first",
+     /const ratio = entry\.stretch > 0 \? entry\.stretch : 1;[\s\S]{0,160}loopStart \/ ratio/.test(multiPage),
+     "bounds are in the stretched timebase, sourceBuffer is not — invariant 18");
+  ok("a failed detection keeps the old value",
+     /const key = result\.key \?\? entry\.detectedKey \?\? null;/.test(multiPage)
+       && /const bpm = result\.bpm \?\? entry\.detectedBpm;/.test(multiPage)
+       && /measured \?\? target\.detectedBpm \?\? sourceBpm/.test(multiPage),
+     "no answer is not evidence the previous answer was wrong — each half falls back independently");
+  ok("a relation step does NOT re-measure",
+     /remeasure \? await redetectTempoFromLoop\(targetSlotId\) : undefined/.test(multiPage)
+       && /stretchSlotToTempoAnchor\(slotId, relation\);/.test(multiPage),
+     "an Essentia pass on every sweet-spot pick is a second of lag on the most-used control");
+  ok("but every match path does",
+     (multiPage.match(/stretchSlotToTempoAnchor\([^)]*, undefined, true\)/g) ?? []).length === 3,
+     "per-slot Match Tempo, Match Tempos and re-lock are exactly when a wrong BPM becomes a wrong stretch");
+  ok("the better numbers are persisted",
+     /stemAnalysis: \{ \.\.\.\(fresh\.stemAnalysis \?\? \{\}\), \[role\]: \{ key, bpm \} \}/.test(multiPage),
+     "otherwise the next session re-measures the middle of the file and loses both");
+  // Key and tempo are measured TOGETHER now, in one pass, because both matchers want the
+  // loop and Lock All runs keys then tempos — two passes per slot on identical audio.
+  ok("one pass serves both matchers",
+     /export async function analyzeRegion\(/.test(analysis)
+       && /await analyzeRegion\(entry\.sourceBuffer, startSec, endSec\)/.test(multiPage),
+     "key extraction is the expensive half; running it twice per slot doubles Lock All");
+  ok("and the result is cached per slot AND per loop",
+     /const cacheKey = `\$\{slotId\}\|\$\{startSec\.toFixed\(3\)\}\|\$\{endSec\.toFixed\(3\)\}`/.test(multiPage),
+     "keyed by the loop too, or moving the loop would not re-measure — which is the point");
+  ok("a short loop grows a window instead of failing",
+     /RHYTHM_MIN_SEC = 20/.test(worker)
+       && /Math\.max\(RHYTHM_MIN_SEC \* sampleRate, regionLen\)/.test(worker),
+     "a four-bar loop is ~8s and rhythm extraction returns 0 below roughly 20s");
+  ok("the window stays inside the track",
+     /Math\.max\(0, Math\.min\(mono\.length - want, Math\.floor\(centre - want \/ 2\)\)\)/.test(worker),
+     "a loop near either end would otherwise read past the buffer");
+}
+
+section("12x. the anchor can move without restretching the rack");
+{
+  // Once an anchor existed, every other slot's button became Match Tempo, so the only way
+  // to move the anchor was to unpin the current one — which resets it to its own tempo and
+  // drags every slave with it. A matched slot is already playing at the rack's tempo, so
+  // handing it the anchor should cost nothing.
+  ok("there is a handover path distinct from Set Tempo Anchor",
+     /function handleTakeTempoAnchor\(slotId: string\)/.test(multiPage)
+       && /onTakeTempoAnchor/.test(slotStrip));
+  // Scoped to the function body: handleSetTempoAnchor sits directly below and legitimately
+  // calls both of the things this one must not.
+  const take = fnBody(multiPage, "function handleTakeTempoAnchor(slotId: string)") ?? "";
+  ok("the handover body was found", take.length > 0);
+  // The CALL, not the word: the body's own comment names both of these to explain why they
+  // are absent, and matching the bare identifier made the rule fail on its documentation.
+  ok("it does NOT reset the new anchor's stretch",
+     !/reapplyStretch\(/.test(take),
+     "resetting it to its own tempo is exactly the destruction this path exists to avoid");
+  ok("and does NOT re-measure its tempo",
+     !/redetectTempoFromLoop\(/.test(take),
+     "a new BPM would change the heard tempo, which is the one thing this promises not to do");
+  ok("it still persists the choice",
+     /saveTempoAnchorKey\(entry\.slot\.trackId, entry\.slot\.stemName\)/.test(take),
+     "an anchor that does not survive a reload is not an anchor");
+  ok("the button only appears where the handover is free",
+     /!isTempoAnchor && hasTempoAnchor && isTempoMatched && !tempoStale && \(/.test(slotStrip),
+     "on an unmatched or stale slot the swap is NOT free, and must go through the destructive path");
+  ok("Set Tempo Anchor stays destructive for an unmatched slot",
+     /if \(entry && entry\.sourceBuffer && Math\.abs\(entry\.stretch - 1\) > 0\.005\)[\s\S]{0,120}reapplyStretch/.test(multiPage),
+     "pinning an unmatched slot really is declaring a new tempo; everything else has to follow");
+  ok("the handover button says what it does, and is always visible",
+     /⚓ Make Tempo Anchor<\/button>/.test(slotStrip)
+       && !/opacity-0 transition group-hover:opacity-100/.test(slotStrip),
+     "a bare anchor glyph revealed only on hover was never found — it sits beside two "
+     + "labelled anchor buttons, so unlabelled reads as decoration");
+}
+
+section("12y. key matching compares keys, not letters");
+{
+  // Reading only the letter made C major and A minor look nine semitones apart. They are
+  // the same notes. The A-minor stem was shifted down nine into C minor, clashing on the
+  // third — and roughly half of all pairs are a major against a minor, so about half of
+  // every key match was wrong in exactly that way.
+  const analysis = read("lib/audioAnalysis.ts");
+  ok("a minor key folds to its relative major",
+     /scale\.startsWith\("min"\) \? \(s \+ 3\) % 12 : s/.test(analysis),
+     "the Camelot fold — without it relative keys are transposed apart");
+  ok("a low-confidence key is treated as no key",
+     /if \(scale\.endsWith\("\?"\)\) return null;/.test(analysis),
+     "Essentia marks an unsure detection with ?; the rule was documented but never implemented");
+  ok("the shift takes the shortest way round",
+     /const shortest = \(\(raw \+ 6\) % 12 \+ 12\) % 12 - 6;/.test(multiPage),
+     "an 11-semitone drop to reach a note one semitone up is an octave of artefacts for nothing");
+  ok("and is still applied relative to the reference's own pitch",
+     /pitch = refEntry\.slot\.pitch - shortest;/.test(multiPage),
+     "the reference may itself be shifted; ignoring that matches to the wrong key");
+  // Worked examples, so the fold cannot silently invert.
+  const sem = (key) => {
+    const parts = key.trim().split(/\s+/);
+    const scale = (parts[1] ?? "").toLowerCase();
+    if (scale.endsWith("?")) return null;
+    const table = { C: 0, "C#": 1, Db: 1, D: 2, "D#": 3, Eb: 3, E: 4, F: 5, "F#": 6, Gb: 6, G: 7, "G#": 8, Ab: 8, A: 9, "A#": 10, Bb: 10, B: 11 };
+    const s = table[parts[0]];
+    if (s === undefined) return null;
+    return scale.startsWith("min") ? (s + 3) % 12 : s;
+  };
+  ok("C major and A minor need no shift", sem("C major") === sem("A minor"));
+  ok("G major and E minor need no shift", sem("G major") === sem("E minor"));
+  ok("C major and C minor are NOT the same", sem("C major") !== sem("C minor"),
+     "same letter, different notes — this is the pair the old code got right by accident");
+  ok("an unsure key yields nothing", sem("C major?") === null);
+}
+
+section("12z. key extraction gets the same treatment as tempo");
+{
+  // It did not crash the way rhythm extraction did — it just averaged chroma across the
+  // whole track (intro, breakdown, outro, any key change), returned a strength under the
+  // 0.2 floor, and the result was thrown away. Every stem in a 131-slot library came back
+  // with no key, which is why Match Key appeared to do nothing at all.
+  const worker = read("workers/audioAnalysisWorker.ts");
+  ok("both passes share one windowing rule",
+     /function sliceAround\(/.test(worker)
+       && (worker.match(/sliceAround\(/g) ?? []).length >= 3,
+     "two copies of the window drift apart, and then key and tempo describe different audio");
+  ok("key runs on the slice, not the whole file",
+     /const keySlice = tempoOnly \? null : sliceAround\(mono, sampleRate, region\)/.test(worker));
+  ok("the window is still centred, not taken from the start",
+     /const centre = region \? \(\(region\.startSec \+ region\.endSec\) \/ 2\)/.test(worker),
+     "intros are often sparse or beatless, and for key, often silent");
+}
+
+section("12aa. an unmatched slot is not told a stretch it cannot know");
+{
+  // The merged dropdown is deliberately offered before a slot is matched, because picking a
+  // row performs the match. But the figures beside each row are derived from the relation
+  // alone — current stretch x (current relation / the row's) — and on an unmatched slot
+  // that is 1 x (1/1), so every row advertised a tidy 100% / 200% / 50% no matter how far
+  // apart the tempos really were. The old relation picker was matched-only for this reason.
+  ok("the stretch figure withdraws until matched",
+     /stretchPct: isTempoMatched && stretch > 0 && effectiveRelation > 0/.test(slotStrip),
+     "on an unmatched slot the number is not merely unknown, it is confidently wrong");
+  ok("so does the recommended tag",
+     /isTempoMatched && r\.value === autoRelation \? "recommended" : null/.test(slotStrip),
+     "it names the least-stretch row, which is exactly what is not yet known");
+  ok("off-grid is NOT withheld",
+     /!r\.gridSafe \? "off-grid" : null/.test(slotStrip),
+     "that one is a property of the relation itself and true whether or not anything is matched");
+  ok("the memo recomputes when matched state changes",
+     /\}, \[gridBpm, stretch, effectiveRelation, isTempoMatched\]\);/.test(slotStrip),
+     "otherwise the figures stay hidden through the match that should reveal them");
+}
+
+section("12ab. pinning the anchor locks its own loop in");
+{
+  // The anchor's loop is the bar every other loop is rounded against, so it has to be a
+  // whole number of bars itself. Match Tempos always quantized it; Set Tempo Anchor did
+  // not — so a rack that was pinned and simply played drifted, with a 3.8-bar anchor loop
+  // and nothing on screen to explain it.
+  ok("setting the anchor quantizes its loop",
+     /redetectAnchorTempo\(entry\.slot\.id\)\.then\(\(\) => \{[\s\S]{0,200}quantizeAllToAnchorGrid\(entry\.slot\.id\)/.test(multiPage));
+  ok("and does it AFTER re-reading the tempo",
+     !/quantizeAllToAnchorGrid\(entry\.slot\.id\);[\s\S]{0,160}redetectAnchorTempo/.test(multiPage),
+     "quantize rounds to the detected BPM, so running it first rounds to the number being replaced");
+  ok("only while this slot is still the anchor",
+     /if \(tempoAnchorIdRef\.current === entry\.slot\.id\) quantizeAllToAnchorGrid/.test(multiPage),
+     "detection is async; the anchor may have moved, and quantize has no undo");
+  ok("it quantizes ONLY that slot",
+     /quantizeAllToAnchorGrid\(entry\.slot\.id\)/.test(multiPage),
+     "the bare call rounds every loop in the rack — pinning an anchor must not rewrite slots the user never touched");
+}
+
+section("12ac. the key anchor moves the same way, and touches no audio");
+{
+  ok("there is a key handover distinct from Set Key Anchor",
+     /function handleTakeReference\(slotId: string\)/.test(multiPage)
+       && /⚓ Make Key Anchor<\/button>/.test(slotStrip));
+  const take = fnBody(multiPage, "function handleTakeReference(slotId: string)") ?? "";
+  ok("the key handover body was found", take.length > 0);
+  ok("it does NOT clear everyone's matched flag",
+     !/isMatched: false/.test(take),
+     "handleSetReference drops every badge, which invites a re-match that moves pitches — "
+     + "but a slot already in the anchor's key is already in the right key");
+  ok("it touches no audio at all",
+     !/updateSlot\(/.test(take) && !/reapplyStretch\(/.test(take),
+     "that is what makes the key handover even safer than the tempo one");
+  ok("it persists the choice", /saveAnchorKey\(entry\.slot\.trackId, entry\.slot\.stemName\)/.test(take));
+  ok("the button only appears where the handover is free",
+     /!isReference && hasReference && isMatched && \(/.test(slotStrip),
+     "on an unmatched slot the new anchor is NOT in the rack's key, so the swap is not free");
+  ok("Set Key Anchor still clears the badges",
+     /isMatched: false/.test(fnBody(multiPage, "function handleSetReference(slotId: string)") ?? ""),
+     "pinning an unmatched slot really is declaring a new key; nothing is matched to it yet");
+}
+
+section("12ad. Essentia actually loads in the worker");
+{
+  // THE bug behind "key matching does nothing" and "every BPM is a guess". Emscripten
+  // detects its environment by probing for `importScripts`. A MODULE worker does not have
+  // that — it is a classic-worker API — so Essentia concluded it was running on a page and
+  // reached for `document.currentScript`. A worker has no document either, so it threw on
+  // the first line of loading. A bare `catch` swallowed it, every analysis returned
+  // {key: null, bpm: undefined} in ~50ms, and nothing anywhere said a word. 131 saved slots
+  // across 32 sessions, not one with a key or a tempo.
+  const worker = read("workers/audioAnalysisWorker.ts");
+  ok("the document stub is in place",
+     /if \(typeof g\.document === 'undefined'\) g\.document = \{ currentScript: null \};/.test(worker),
+     "without it Essentia throws before loading and the whole analysis feature is dead");
+  ok("it is set BEFORE the dynamic import",
+     /g\.document = \{ currentScript: null \};[\s\S]{0,200}await Promise\.all\(\[[\s\S]{0,80}import\('essentia/.test(worker),
+     "the throw happens during module evaluation, so a stub set afterwards is too late");
+  ok("a load failure is now loud",
+     /console\.error\('\[analysis\] Essentia failed to load:'/.test(worker),
+     "a silent catch here can hide a total outage of both key and tempo detection");
+  ok("the worker stays a module worker",
+     /type: 'module'/.test(read("lib/audioAnalysis.ts")),
+     "invariant 27: the dynamic import forces a code-split, which an IIFE worker cannot do — "
+     + "becoming a classic worker to dodge the stub would break the production build");
+}
+
+section("12ae. key matching measures the loop too");
+{
+  // Symmetry with tempo, and for the same reason: load-time detection reads the middle of
+  // the file, and the loop is the part actually being played.
+  ok("matching a slot measures both sides first",
+     /await redetectFromLoop\(referenceSlotIdRef\.current\);[\s\S]{0,80}await redetectFromLoop\(targetSlotId\);/.test(multiPage),
+     "comparing a loop-measured key against a file-measured one is a mismatch of its own");
+  ok("setting the key anchor measures it from its loop",
+     /saveAnchorKey\(entry\.slot\.trackId, entry\.slot\.stemName\);[\s\S]{0,200}void redetectFromLoop\(newRefId\)/.test(multiPage),
+     "same moment and same reasoning as Set Tempo Anchor");
+  ok("Match Keys snapshots ids before awaiting",
+     /const ids = entriesRef\.current[\s\S]{0,160}for \(const id of ids\) \{[\s\S]{0,120}await matchSlotToReference\(id\)/.test(multiPage),
+     "matchSlotToReference now awaits an analysis pass, and entriesRef is rebuilt on every render between iterations");
+  ok("and yields so each iteration sees the last one's commit",
+     /await matchSlotToReference\(id\);[\s\S]{0,160}await new Promise\(\(r\) => setTimeout\(r, 0\)\);/.test(multiPage));
+  ok("the handover path still measures nothing",
+     !/redetectFromLoop/.test(fnBody(multiPage, "function handleTakeReference(slotId: string)") ?? ""),
+     "a new key would change what the rack is matched to, which is what that path promises not to do");
+}
+
+section("12af. Throw lands on a hit, not on the click");
+{
+  // Fired the instant a finger lands, a throw catches whatever happened to be sounding,
+  // which is almost never the hit you wanted. Guessing a grid position does not fix it:
+  // "next beat" catches kicks half the time and "next half-bar" assumes a snare on the 3.
+  ok("there is a hit finder",
+     /export function findHits\(buffer: AudioBuffer, startSec: number, endSec: number\)/.test(loopSnap));
+  ok("it high-passes before looking",
+     /const d = data\[i\] - data\[i - 1\];/.test(loopSnap),
+     "a first difference collapses a kick's sub-bass and leaves a snare's body — that is the whole trick");
+  ok("it only keeps local maxima well above average",
+     /if \(flux\[f\] < flux\[f - 1\] \|\| flux\[f\] < flux\[f \+ 1\]\) continue;/.test(loopSnap)
+       && /const threshold = mean \* 3;/.test(loopSnap),
+     "without both, a steady hat pattern qualifies every frame and the throw never waits for anything");
+  ok("and merges hits closer than one attack",
+     /minGapFrames/.test(loopSnap),
+     "a snare's attack spans several frames; each would otherwise count as its own hit");
+  ok("the wait is converted out of buffer seconds",
+     /const aheadFile = next !== undefined[\s\S]{0,200}return aheadFile \/ rate;/.test(engine),
+     "hits and the playhead are in buffer seconds, the scheduler is in wall clock — the gap is "
+     + "wrong by exactly the playback rate without this");
+  ok("it looks past the loop end by wrapping",
+     /loopDur - \(pos - inLoop\[0\]\)/.test(engine),
+     "past the last hit in the loop, the next one to arrive is the first one after the wrap");
+  ok("a sparse stem cannot swallow the gesture",
+     /THROW_MAX_WAIT_SEC = 1\.2/.test(engine)
+       && /wait <= MultiEngine\.THROW_MAX_WAIT_SEC \? wait : 0/.test(engine),
+     "past the cap it fires immediately, which is the behaviour it always had");
+  ok("the gate opens AT the hit, not at the click",
+     /slot\.throwSend\.gain\.rampTo\(1, 0\.02, now\)/.test(engine),
+     "rampTo without an explicit time starts immediately and undoes the whole feature");
+  ok("and stays open for its full length from the hit",
+     /\}, \(lead \+ 0\.4\) \* 1000\);/.test(engine),
+     "measuring the 400ms from the click would cut the burst short by however long it waited");
+  ok("the button shows it is waiting",
+     /throwArmed \? "↯ Waiting…" : "↯ Throw"/.test(slotStrip),
+     "up to 1.2s of nothing after a press reads as a broken button");
+  ok("armed and active are distinguishable",
+     /throwArmed[\s\S]{0,160}animate-pulse/.test(slotStrip));
+  ok("the scan is not in a render path",
+     /useEffect\(\(\) => \{\s*if \(!buffer\) return;\s*multiEngine\.setHits\(slot\.id, findHits\([\s\S]{0,120}\}, \[buffer, slot\.loopStart, slot\.loopEnd, slot\.id\]\);/.test(slotStrip),
+     "it is a full pass over the region; the engine poll next to it runs every 100ms");
+}
+
+section("12ag. the throw's delay follows the tempo");
+{
+  // Throw character was already a proper dub throw — feedback 0.72, fully wet, 3.5s reverb,
+  // a 700Hz filter. The delay TIME was the one value that ignored the music: a fixed 250ms
+  // whatever was playing, so the repeats never sat on the beat.
+  ok("only the delay time is derived",
+     /const delayTime = beats \* beatSec;[\s\S]{0,200}\{ \.\.\.ts, delayTime \}/.test(multiPage),
+     "feedback, wet, decay and filter are character, not length — tempo has no business moving them");
+  ok("the untouched default becomes a dotted eighth",
+     /untouched \? 0\.75 : null/.test(multiPage)
+       && /Math\.abs\(ts\.delayTime - DEFAULT_THROW_SETTINGS\.delayTime\) < 1e-6/.test(multiPage),
+     "the stored 0.25s is not a division of anything, so 'preserve the division' would leave it "
+     + "tempo-blind forever — treat never-set as never-set");
+  ok("a division the user chose is carried across tempo changes",
+     /const beats = onGrid \? atPrev\.beats :/.test(multiPage),
+     "picking a triplet and then changing tempo should still be a triplet");
+  ok("a deliberately free time is left exactly where it is",
+     /if \(beats === null\) return;/.test(multiPage),
+     "same rule as every other delay in this app: off-grid means chosen, not stale");
+  ok("it is debounced",
+     /window\.setTimeout\([\s\S]{0,1400}\}, 400\);[\s\S]{0,120}\[anchorEffectiveBpm\]/.test(multiPage),
+     "master speed and the anchor's Speed move the heard tempo every frame of a drag; "
+     + "rewriting a delay time per frame is audible as warbling (gotcha 32)");
 }
 
 section("13. expensive analysis is memoised");

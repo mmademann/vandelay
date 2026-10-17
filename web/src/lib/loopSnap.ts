@@ -567,3 +567,76 @@ export function stepDelayDivision(
   if (next >= usable.length) return usable[usable.length - 1].beats * beatSec;
   return usable[next].beats * beatSec;
 }
+
+/**
+ * Times of the percussive hits in a region, in buffer seconds.
+ *
+ * For the Throw button: a throw fired the instant you click catches whatever happened to be
+ * sounding, which is almost never the hit you wanted. Dub throws land ON the snare. Rather
+ * than guess a grid position — "the next beat" catches kicks half the time, "the next
+ * half-bar" assumes a snare on the 3 — this finds the hits that are actually there.
+ *
+ * High-passed first, by first-difference. That is a crude +6dB/octave filter, and crude is
+ * exactly right here: it collapses a kick's sub-bass while leaving a snare's noisy body
+ * intact, so the peaks that survive are the bright hits. No FFT, no new dependency, and the
+ * envelope/flux pass is the same one estimateBpm already uses to find the beat.
+ *
+ * Returns times relative to the START OF THE BUFFER, ascending. Empty when nothing stands
+ * out — a pad, a drone — and the caller is expected to fall back to the grid.
+ */
+export function findHits(buffer: AudioBuffer, startSec: number, endSec: number): number[] {
+  const sr = buffer.sampleRate;
+  const data = buffer.getChannelData(0);
+  const from = Math.max(0, Math.floor(startSec * sr));
+  const to = Math.min(data.length, Math.ceil(endSec * sr));
+  if (to - from < sr * 0.1) return [];
+
+  // Same ~172Hz envelope rate as estimateBpm: fine enough to place a hit inside a beat,
+  // coarse enough to stay cheap on a multi-minute stem.
+  const hop = Math.max(1, Math.round(sr / 172));
+  const frames = Math.floor((to - from) / hop);
+  if (frames < 8) return [];
+
+  const env = new Float32Array(frames);
+  for (let f = 0; f < frames; f++) {
+    const s = from + f * hop;
+    let peak = 0;
+    // The first difference IS the high-pass. Taking the peak of the differenced signal
+    // measures how fast the waveform is moving, which is what a snare does and a kick,
+    // being a slow sine sweep, does not.
+    for (let i = s + 1; i < s + hop && i < to; i++) {
+      const d = data[i] - data[i - 1];
+      const v = d < 0 ? -d : d;
+      if (v > peak) peak = v;
+    }
+    env[f] = peak;
+  }
+
+  // Half-wave-rectified difference again: an attack is a rise in that brightness envelope.
+  const flux = new Float32Array(frames);
+  let mean = 0;
+  for (let f = 1; f < frames; f++) {
+    const d = env[f] - env[f - 1];
+    flux[f] = d > 0 ? d : 0;
+    mean += flux[f];
+  }
+  mean /= frames;
+  if (mean <= 0) return [];
+
+  // Peak-pick well above the average, so a steady hat pattern does not qualify every frame.
+  // 3x the mean keeps the hits that stand out from their neighbours.
+  const threshold = mean * 3;
+  // Hits closer together than this are one hit — a snare's attack spans several frames.
+  const minGapFrames = Math.max(1, Math.round(0.05 * (sr / hop)));
+
+  const hits: number[] = [];
+  let lastFrame = -minGapFrames;
+  for (let f = 1; f < frames - 1; f++) {
+    if (flux[f] < threshold) continue;
+    if (flux[f] < flux[f - 1] || flux[f] < flux[f + 1]) continue; // local maximum only
+    if (f - lastFrame < minGapFrames) continue;
+    lastFrame = f;
+    hits.push((from + f * hop) / sr);
+  }
+  return hits;
+}

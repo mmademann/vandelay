@@ -6,10 +6,29 @@ const NOTE_SEMITONES: Record<string, number> = {
   Ab: 8, A: 9, 'A#': 10, Bb: 10, B: 11,
 };
 
+/**
+ * The semitone two keys must share to be in key with each other.
+ *
+ * A minor key is folded to its RELATIVE MAJOR — A minor and C major contain exactly the
+ * same notes, so they need no transposition at all. Reading only the letter, as this used
+ * to, made them look nine semitones apart: the A-minor stem was shifted down nine, landing
+ * in C minor against a C major reference, which clashes on the third. Roughly half of all
+ * pairs are a major against a minor, so half of all key matches were wrong in that way.
+ *
+ * This is the same fold Camelot / Open Key wheels use, for the same reason.
+ *
+ * Returns null for anything unparseable, and for a low-confidence detection — Essentia
+ * marks those with a trailing `?`, and a guess should not drive a real pitch shift. That
+ * rule was written down but never implemented.
+ */
 export function rootSemitone(key: string): number | null {
-  const root = key.trim().split(/\s+/)[0];
+  const parts = key.trim().split(/\s+/);
+  const root = parts[0];
+  const scale = (parts[1] ?? "").toLowerCase();
+  if (scale.endsWith("?")) return null;
   const s = NOTE_SEMITONES[root];
-  return s !== undefined ? s : null;
+  if (s === undefined) return null;
+  return scale.startsWith("min") ? (s + 3) % 12 : s;
 }
 
 let worker: Worker | null = null;
@@ -37,7 +56,31 @@ export async function preloadEssentia(): Promise<void> {
   getWorker();
 }
 
+
+/**
+ * Key AND tempo from one region, in a single pass.
+ *
+ * Both matchers want the loop measured rather than the middle of the file, and running them
+ * separately would analyse every slot twice — Lock All does keys then tempos, so that is two
+ * Essentia passes per slot where one will do. Key extraction is the expensive half, so the
+ * saving is most of the cost.
+ */
+export async function analyzeRegion(
+  buffer: AudioBuffer,
+  startSec: number,
+  endSec: number,
+): Promise<{ key: string | null; bpm: number | undefined } | null> {
+  return runAnalysis(buffer, { region: { startSec, endSec } });
+}
+
 export async function analyzeAudio(buffer: AudioBuffer): Promise<{ key: string | null; bpm: number | undefined } | null> {
+  return runAnalysis(buffer, {});
+}
+
+async function runAnalysis(
+  buffer: AudioBuffer,
+  opts: { region?: { startSec: number; endSec: number }; tempoOnly?: boolean },
+): Promise<{ key: string | null; bpm: number | undefined } | null> {
   const id = crypto.randomUUID();
   const w = getWorker();
 
@@ -60,6 +103,6 @@ export async function analyzeAudio(buffer: AudioBuffer): Promise<{ key: string |
         resolve({ key: result.key, bpm: result.bpm });
       }
     });
-    w.postMessage({ id, channelData, sampleRate: buffer.sampleRate }, transferList);
+    w.postMessage({ id, channelData, sampleRate: buffer.sampleRate, ...opts }, transferList);
   });
 }

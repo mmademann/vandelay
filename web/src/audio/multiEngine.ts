@@ -36,6 +36,10 @@ interface RuntimeSlot extends MultiSlot {
   throwLive?: boolean;
   /** Pending disconnect of that tail, once the echoes have rung out. */
   throwTailTimer?: ReturnType<typeof setTimeout> | null;
+  /** Percussive hit times in buffer seconds, ascending — see setHits. */
+  hits?: number[];
+  /** Tone time an armed throw will fire at, or 0. The UI reads it to light the button. */
+  throwArmedAt?: number;
   player: Tone.Player;
   chain: MultiEffectsChain;
   volume: Tone.Volume;
@@ -81,6 +85,13 @@ class MultiEngine {
   /** Bottom of the gain knob — at or below this a slot is silenced outright. */
   static readonly GAIN_FLOOR_DB = -60;
   private static readonly FADE_STEPS = 60;
+  /**
+   * Longest a throw will wait for a hit before firing anyway.
+   *
+   * A sparse stem — one hit per bar at half time — must not swallow the gesture: past this
+   * the throw behaves the way it always did and fires immediately.
+   */
+  private static readonly THROW_MAX_WAIT_SEC = 1.2;
 
   /**
    * Ramp a slot's volume so the change is spread evenly across the full duration.
@@ -192,7 +203,9 @@ class MultiEngine {
     const safeLoopStart = Math.max(0, Math.min(slot.loopStart, bufDur - 0.01));
     const safeLoopEnd = Math.min(bufDur, slot.loopEnd > 0 ? slot.loopEnd : bufDur);
 
-    const player = new Tone.Player(toneBuffer).connect(chain.distortion);
+    // chain.drive, not chain.distortion: the grit drive sits in front of the shaper, so it
+    // is now the chain's input node.
+    const player = new Tone.Player(toneBuffer).connect(chain.drive);
     player.loop = true;
     player.loopStart = safeLoopStart;
     player.loopEnd = safeLoopEnd;
@@ -326,7 +339,9 @@ class MultiEngine {
     try { slot.player.stop(); } catch { /* already stopped */ }
     slot.player.disconnect();
     slot.player.dispose();
+    slot.chain.drive.disconnect(); slot.chain.drive.dispose();
     slot.chain.distortion.disconnect(); slot.chain.distortion.dispose();
+    slot.chain.makeup.disconnect(); slot.chain.makeup.dispose();
     slot.chain.eqLo.disconnect(); slot.chain.eqLo.dispose();
     slot.chain.eqMid.disconnect(); slot.chain.eqMid.dispose();
     slot.chain.eqHi.disconnect(); slot.chain.eqHi.dispose();
@@ -583,29 +598,77 @@ class MultiEngine {
     return this.slots.get(id)?.throwActive ?? false;
   }
 
+  /**
+   * Percussive hit times for a slot, in buffer seconds. Supplied by the UI, which owns the
+   * analysis; the engine only needs to know when the next one arrives.
+   */
+  setHits(id: string, hits: number[]): void {
+    const slot = this.slots.get(id);
+    if (slot) slot.hits = hits;
+  }
+
+  /** Tone time an armed throw is waiting for, or 0. Lets the UI show the button as armed. */
+  throwArmedAt(id: string): number {
+    return this.slots.get(id)?.throwArmedAt ?? 0;
+  }
+
+  /**
+   * Seconds until this slot's next percussive hit, or null when there is nothing to wait for.
+   *
+   * Three time domains in four lines, so: `hits` and the playhead are in BUFFER seconds,
+   * and the gap between them has to be divided by the playback rate to become the wall-clock
+   * wait the scheduler needs. Getting that wrong is wrong by exactly the rate.
+   */
+  private secondsToNextHit(slot: RuntimeSlot): number | null {
+    if (!slot.playing || !slot.hits || slot.hits.length === 0) return null;
+    const loopDur = slot.loopEnd - slot.loopStart;
+    if (loopDur <= 0) return null;
+    const pos = this.getSlotPosition(slot.id);
+    // Only hits inside the loop can arrive; anything outside it is never played.
+    const inLoop = slot.hits.filter((t) => t >= slot.loopStart && t < slot.loopEnd);
+    if (inLoop.length === 0) return null;
+    const next = inLoop.find((t) => t > pos);
+    // Past the last one, the next is the first after the loop wraps.
+    const aheadFile = next !== undefined ? next - pos : loopDur - (pos - inLoop[0]);
+    const rate = slotPlaybackRate(slot, this.masterSettings.masterSpeed);
+    if (!(rate > 0)) return null;
+    return aheadFile / rate;
+  }
+
   throwSlot(id: string): void {
     const slot = this.slots.get(id);
     if (!slot) return;
     if (slot.throwTimer) clearTimeout(slot.throwTimer);
     if (slot.throwTailTimer) { clearTimeout(slot.throwTailTimer); slot.throwTailTimer = null; }
     const ts = this.masterSettings.throwSettings;
-    const now = Tone.now();
+    // Wait for the hit rather than firing on the click. A throw is supposed to catch the
+    // snare; fired the instant a finger lands it catches whatever was sounding, which is
+    // almost never that. Capped so a stem with sparse hits cannot swallow the gesture — past
+    // that it just fires, which is the old behaviour.
+    const wait = this.secondsToNextHit(slot);
+    const lead = wait !== null && wait <= MultiEngine.THROW_MAX_WAIT_SEC ? wait : 0;
+    const now = Tone.now() + lead;
+    slot.throwArmedAt = lead > 0 ? now : 0;
     // Wire the tail back in before opening the gate.
     if (this.master) {
       slot.throwLive = MultiEngine.setSend(slot.throwReverb, this.master, true, slot.throwLive ?? false);
     }
     // Gate open
     slot.throwSend.gain.cancelScheduledValues(now);
-    slot.throwSend.gain.rampTo(1, 0.02);
+    // rampTo with an explicit start time, not "now" — the whole point is that the gate opens
+    // at the hit, not when the button was pressed.
+    slot.throwSend.gain.rampTo(1, 0.02, now);
     // Filter env: jump to peak then sweep down to resting freq
     const peakFreq = Math.min(16000, ts.filterFreq * 10);
     slot.throwFilter.frequency.cancelScheduledValues(now);
     slot.throwFilter.frequency.setValueAtTime(peakFreq, now);
     slot.throwFilter.frequency.exponentialRampToValueAtTime(ts.filterFreq, now + 0.8);
+    // The gate stays open for a fixed 400ms FROM THE HIT, so the wait is added on top.
     slot.throwActive = true;
     slot.throwTimer = setTimeout(() => {
       slot.throwSend.gain.rampTo(0, 0.05);
       slot.throwActive = false;
+      slot.throwArmedAt = 0;
       slot.throwTimer = null;
       // Let the echoes and the reverb ring out before dropping the branch, or the throw is
       // cut off at the moment it is supposed to be trailing away. Feedback repeats first,
@@ -617,7 +680,7 @@ class MultiEngine {
           slot.throwLive = MultiEngine.setSend(slot.throwReverb, this.master, false, slot.throwLive ?? true);
         }
       }, tailSec * 1000);
-    }, 400);
+    }, (lead + 0.4) * 1000);
   }
 
   setThrowSettings(settings: ThrowSettings): void {
@@ -850,7 +913,9 @@ class MultiEngine {
       if (slot.throwTailTimer) clearTimeout(slot.throwTailTimer);
       slot.player.disconnect();
       slot.player.dispose();
-      slot.chain.distortion.disconnect(); slot.chain.distortion.dispose();
+      slot.chain.drive.disconnect(); slot.chain.drive.dispose();
+    slot.chain.distortion.disconnect(); slot.chain.distortion.dispose();
+    slot.chain.makeup.disconnect(); slot.chain.makeup.dispose();
       slot.chain.eqLo.disconnect(); slot.chain.eqLo.dispose();
       slot.chain.eqMid.disconnect(); slot.chain.eqMid.dispose();
       slot.chain.eqHi.disconnect(); slot.chain.eqHi.dispose();

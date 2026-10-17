@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import { cn } from "../../lib/cn";
-import { snapLoop, estimateBpm, snapDelayToTempo, stepDelayDivision, PHASE_DIVISIONS, tempoRelationLabel, TEMPO_RELATIONS, lockingDelays, coincidenceBeats } from "../../lib/loopSnap";
+import { snapLoop, estimateBpm, findHits, snapDelayToTempo, stepDelayDivision, PHASE_DIVISIONS, tempoRelationLabel, TEMPO_RELATIONS, lockingDelays, coincidenceBeats } from "../../lib/loopSnap";
 import { multiEngine } from "../../audio/multiEngine";
 import type { MultiSlot } from "../../lib/multiSettings";
 import { Knob } from "./Knob";
@@ -299,11 +299,13 @@ interface Props {
   onRemove: () => void;
   onChange: (patch: Partial<MultiSlot>) => void;
   onSetReference: () => void;
+  onTakeReference: () => void;
   onMatch: () => void;
   /** Tempo anchor — separate from the key anchor; drives stretch, not speed/pitch. */
   isTempoAnchor: boolean;
   hasTempoAnchor: boolean;
   onSetTempoAnchor: () => void;
+  onTakeTempoAnchor: () => void;
   onTempoMatch: () => void;
   /** Apply an explicit stretch ratio (1 = original length). Rebuilds the buffer, so it is
    *  driven from the knob's commit rather than its drag. */
@@ -347,10 +349,12 @@ interface Props {
   onApplyPreset: (preset: MultiPreset) => void;
 }
 
-export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedBpm, anchorBpm, gridBpm, rawGridBpm, tempoStale, tempoRelation, effectiveRelation, autoRelation, onTempoRelationChange, isReference, hasReference, isMatched, matchedBasePitch, pitchInterval, onPitchIntervalChange, onRemove, onChange, onSetReference, onMatch, isTempoAnchor, hasTempoAnchor, onSetTempoAnchor, onTempoMatch, onStretchChange, stretch, stretching, onSavePreset, onDeletePreset, onApplyPreset }: Props) {
+export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedBpm, anchorBpm, gridBpm, rawGridBpm, tempoStale, tempoRelation, effectiveRelation, autoRelation, onTempoRelationChange, isReference, hasReference, isMatched, matchedBasePitch, pitchInterval, onPitchIntervalChange, onRemove, onChange, onSetReference, onTakeReference, onMatch, isTempoAnchor, hasTempoAnchor, onSetTempoAnchor, onTakeTempoAnchor, onTempoMatch, onStretchChange, stretch, stretching, onSavePreset, onDeletePreset, onApplyPreset }: Props) {
   const [presetName, setPresetName] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
   const [throwActive, setThrowActive] = useState(false);
+  /** A throw waiting for the next hit. Without this the button looks dead for up to 1.2s. */
+  const [throwArmed, setThrowArmed] = useState(false);
   const [activePreset, setActivePreset] = useState<string | null>(null);
   const [seekRevision, setSeekRevision] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
@@ -363,6 +367,7 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
     const id = setInterval(() => {
       setIsPlaying(multiEngine.isSlotPlaying(slot.id));
       setThrowActive(multiEngine.isThrowActive(slot.id));
+      setThrowArmed(multiEngine.throwArmedAt(slot.id) > 0 && !multiEngine.isThrowActive(slot.id));
       setCurrentTime(multiEngine.getSlotPosition(slot.id));
       // Catches seeks made elsewhere (Rewind All) — a stopped slot has no repaint loop.
       setSeekRevision(multiEngine.getSeekNonce(slot.id));
@@ -597,6 +602,18 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
     multiEngine.setPhaseBarSec(slot.id, phaseBpm ? (60 / phaseBpm) * 4 : 0);
   }, [slot.id, phaseBpm]);
 
+  /**
+   * Percussive hit times, handed to the engine so Throw can land on one instead of firing
+   * the instant the button is pressed.
+   *
+   * Recomputed only when the audio or the loop changes — it is a full pass over the region,
+   * so it has no business anywhere near a render or the 100ms engine poll.
+   */
+  useEffect(() => {
+    if (!buffer) return;
+    multiEngine.setHits(slot.id, findHits(buffer, slot.loopStart, slot.loopEnd));
+  }, [buffer, slot.loopStart, slot.loopEnd, slot.id]);
+
   // Phase is stored as a fraction but driven by a stepped knob, so the UI works in ladder
   // indices. Nearest rather than exact: a restored slot can hold a fraction that predates
   // the current ladder.
@@ -653,12 +670,18 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
         // Derived from the current stretch rather than from BPM: stretch is inversely
         // proportional to the relation, so this needs no tempo at all and cannot drift out
         // of step with the knob below.
-        stretchPct: stretch > 0 && effectiveRelation > 0
+        // Only meaningful once the slot is matched. The figure is derived purely from the
+        // relation — current stretch x (current relation / this row's) — which on an
+        // unmatched slot is 1 x (1/1), so every row claimed a tidy 100% / 200% / 50%
+        // however far apart the two tempos actually are. Matching might really need 118%.
+        // The old relation picker was gated to matched slots for exactly this reason; this
+        // one is deliberately offered earlier, so the number has to withdraw instead.
+        stretchPct: isTempoMatched && stretch > 0 && effectiveRelation > 0
           ? Math.round(stretch * (effectiveRelation / r.value) * 100)
           : null,
       };
     });
-  }, [gridBpm, stretch, effectiveRelation]);
+  }, [gridBpm, stretch, effectiveRelation, isTempoMatched]);
 
   /**
    * The sweet spot currently in force, if any — both halves have to match.
@@ -672,6 +695,9 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
    * Both halves are required because they are separately adjustable afterwards, which is the
    * point: pick a row, then move the delay or the relation and the row stops applying.
    */
+  /** The row the slot is currently on, for the placeholder label. */
+  const currentRow = tempoRows.find((r) => Math.abs(r.value - effectiveRelation) < 1e-6);
+
   const activeCombo = tempoRows.find(
     (c) =>
       c.delaySec !== undefined &&
@@ -769,7 +795,9 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
 
   return (
     <div className={cn(
-      "flex flex-col gap-2 rounded-md border bg-muted/30 p-3 transition",
+      // `group`: the take-anchor button reveals on hovering the slot, not itself — a
+      // control you cannot see until you hover the exact spot is one you never find.
+      "group flex flex-col gap-2 rounded-md border bg-muted/30 p-3 transition",
       slot.muted && "opacity-40",
       isReference ? "border-accent/60 ring-1 ring-accent/20 bg-accent/5" : "border-border",
     )}>
@@ -869,10 +897,14 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
             className={cn("rounded px-2 py-1 text-xs font-bold uppercase tracking-wide transition",
               throwActive
                 ? "bg-teal-500/25 text-teal-400 ring-1 ring-teal-400/60"
-                : "bg-muted/80 text-foreground/50 hover:text-teal-400 hover:bg-muted",
+                // Armed: fired, waiting for the hit. Dimmer and pulsing rather than lit, so
+                // the two states are not mistaken for each other.
+                : throwArmed
+                  ? "bg-teal-500/10 text-teal-400/70 ring-1 ring-teal-400/30 animate-pulse"
+                  : "bg-muted/80 text-foreground/50 hover:text-teal-400 hover:bg-muted",
               !buffer && "opacity-30 cursor-not-allowed")}
-            title="Throw — tape echo burst + spring reverb">
-            ↯ Throw
+            title="Throw — tape echo burst + spring reverb. Waits for the next percussive hit so it lands on the beat rather than on the click.">
+            {throwArmed ? "↯ Waiting…" : "↯ Throw"}
           </button>
           <button type="button"
             onClick={() => update({
@@ -937,6 +969,30 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
               {snapNote.text}
             </span>
           )}
+          {/* Take the anchor, without disturbing anything.
+              Once an anchor exists, every other slot's button becomes Match Tempo, so there
+              was no way to move the anchor except unpinning the current one first — which
+              resets it to its own tempo and restretches the whole rack. A matched slot is
+              already playing at the rack's tempo, so handing it the anchor costs nothing.
+              Only shown when that is true; an unmatched slot still goes through the
+              destructive path, because there it really is a new tempo. */}
+          {!isTempoAnchor && hasTempoAnchor && isTempoMatched && !tempoStale && (
+            <button
+              type="button"
+              onClick={onTakeTempoAnchor}
+              disabled={stretching || !buffer}
+              title="Make this the tempo anchor. It is already at the rack's tempo, so nothing else moves."
+              className={cn(
+                // Spelled out and always visible. A bare anchor glyph that appeared only on
+                // hover was never found — the two anchors already have labelled buttons, so
+                // an unlabelled icon beside them reads as decoration.
+                "shrink-0 rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition",
+                "border-orange-400/25 bg-orange-500/5 text-orange-300/60 hover:border-orange-400/60 hover:text-orange-300",
+                (stretching || !buffer) && "opacity-30 cursor-not-allowed",
+              )}
+            >⚓ Make Tempo Anchor</button>
+          )}
+
           {/* Tempo anchor — same state-driven shape as the key anchor, but drives
               time stretch instead of speed/pitch, so both can be active on one slot. */}
           <button
@@ -995,9 +1051,15 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
               unreachable in the merge. ⚡ marks the rows that carry one. */}
           {!isTempoAnchor && hasTempoAnchor && tempoRows.length > 0 && (
             <select
-              // Always the current relation, so the closed label says where you are. The lit
-              // styling below is what says "and the delay is on its sweet spot".
-              value={String(effectiveRelation)}
+              // Deliberately parked on the placeholder, NOT on the current relation.
+              //
+              // A native select fires no change event when you pick the option already
+              // selected, so binding this to effectiveRelation made the row you are on
+              // unreachable: its delay was described in the list and there was no way to
+              // apply it. Parking on "" means every row is always selectable. Where you are
+              // is shown in the placeholder text and by a tick on the row itself, rather
+              // than by the browser's own selection mark.
+              value=""
               disabled={stretching || !buffer}
               onChange={(e) => {
                 // The title row. Number("") is 0, which would pin a relation of zero.
@@ -1044,7 +1106,10 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
             >
               {/* Not greyed out: a disabled row reads as something broken rather than as a
                   heading. Picking it is a no-op, guarded in onChange. */}
-              <option value="">{activeCombo ? "⚡ Sweet spot — change…" : "↻ Tempo — change…"}</option>
+              {/* Names the current state, since the selection mark no longer can. */}
+              <option value="">
+                {activeCombo ? "⚡ Sweet spot" : "↻ Tempo"} — {currentRow?.name ?? "change"}…
+              </option>
               {tempoRows.map((r) => {
                 // Four numbers live near this control — the relation, the resulting tempo,
                 // the delay and the Stretch knob — and they were easy to mistake for each
@@ -1059,16 +1124,37 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
                 // This is simply the row needing the least stretching, which is what the app
                 // settles on when left alone.
                 const tags = [
-                  r.value === autoRelation ? "recommended" : null,
+                  // Withheld until matched, for the same reason as the percentage: it names
+                  // the row needing the least stretching, and that is not yet known.
+                  isTempoMatched && r.value === autoRelation ? "recommended" : null,
                   !r.gridSafe ? "off-grid" : null,
                 ].filter(Boolean);
+                // Explicit tick: the native one would sit on the placeholder now.
+                const here = Math.abs(r.value - effectiveRelation) < 1e-6 ? "\u2713 " : "";
                 return (
                   <option key={r.name} value={String(r.value)}>
-                    {r.name}{bpm}{delay}{pct}{tags.length ? ` \u00b7 ${tags.join(", ")}` : ""}
+                    {here}{r.name}{bpm}{delay}{pct}{tags.length ? ` \u00b7 ${tags.join(", ")}` : ""}
                   </option>
                 );
               })}
             </select>
+          )}
+
+          {/* Take the key anchor, without disturbing anything. Mirrors the tempo one: once a
+              key anchor exists no other slot offers to become it, so the only way to move it
+              was to unpin the current one — which drops every MATCHED badge and invites a
+              re-match that moves pitches. A slot already in the anchor's key is already in
+              the right key, so handing it the anchor changes nothing. */}
+          {!isReference && hasReference && isMatched && (
+            <button
+              type="button"
+              onClick={onTakeReference}
+              title="Make this the key anchor. It is already in the rack's key, so nothing else moves."
+              className={cn(
+                "shrink-0 rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition",
+                "border-accent/25 bg-accent/5 text-accent/60 hover:border-accent/60 hover:text-accent",
+              )}
+            >⚓ Make Key Anchor</button>
           )}
 
           {/* One control for the whole anchor/match cycle. Label and action follow state:

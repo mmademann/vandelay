@@ -93,9 +93,41 @@ collision made a grep in this area ambiguous. `sanitizeEffects` still reads the 
 
 ### Key detection + auto-match (multi)
 
+- **The worker must stub `document` before importing Essentia.** Emscripten probes for
+  `importScripts` to detect a worker; a *module* worker has no such function, so it decides
+  it is on a page and reads `document.currentScript` — which a worker has no more than the
+  other. It threw on load, a bare `catch` ate the error, and every analysis returned
+  `{key: null, bpm: undefined}` in ~50ms. Key and tempo matching therefore did nothing at
+  all, silently, across 131 saved slots. `{ currentScript: null }` is enough; `locateFile`
+  supplies the wasm path. Do not "fix" this by making it a classic worker — see invariant 27.
 - **Essentia.js** runs in a **Web Worker** (`audioAnalysisWorker.ts`) — offloaded to avoid blocking the audio thread. `audioAnalysis.ts` manages the worker singleton and routes requests/responses via a pending-callback map. WASM loads once in the worker; subsequent calls reuse it. Results cached in `trackMetaCache` (`detectedKey`, `detectedBpm`). Detection is skipped if already cached (`detectedKey !== undefined`). `null` = ran and failed/low confidence.
+- **Tempo detection runs on a 60s slice, not the whole file.** `RhythmExtractor2013` in its
+  default multifeature mode exhausted the WASM heap on a multi-minute stem and threw; the
+  throw went into a bare `catch {}`, so for a long time *every* BPM in the app was silently
+  the rough `estimateBpm()` onset fallback while keys worked fine. The worker now slices,
+  falls back to `PercivalBpmEstimator`, and logs the reason. A cached record holding a key
+  but no BPM counts as incomplete so old tracks heal on load.
+- **Pinning a tempo anchor re-measures its tempo from that slot's loop** (`redetectAnchorTempo`
+  in `MultiPage.tsx`, via `analyzeTempoIn`). Load-time detection reads the middle of the
+  file, which guesses where the beat lives; by the time a slot is pinned, the loop has been
+  chosen deliberately. Only on pinning — the anchor's BPM is the grid the whole rack sits on,
+  so re-measuring it on every loop drag would restretch every slave mid-session. A short loop
+  grows a ≥20s window around its centre rather than failing; a failed detection keeps the
+  existing value.
 - **Confidence threshold**: < 0.5 → show `?` badge, treat as no key for auto-match.
-- **Root-semitone only**: key string (e.g. `"C# major"`) → chromatic semitone 0–11. Major/minor ignored to avoid wrong transposition between relative keys.
+- **Keys fold to their relative major before comparing** (`rootSemitone`). A minor → C, so
+  A minor and C major come out identical and need no shift — they are the same notes. This
+  replaced reading the letter alone, which made that pair look 9 semitones apart and shifted
+  the minor stem into C minor against a C major reference. Roughly half of all pairs are a
+  major against a minor, so about half of every key match was wrong that way. Same fold
+  Camelot / Open Key wheels use.
+- **A `?` key is no key.** Essentia marks a low-confidence detection with a trailing `?`;
+  `rootSemitone` returns null for it, so a guess cannot drive a pitch shift. Documented long
+  before it was implemented.
+- **The shift takes the shortest way round the circle**, wrapped into `[-6, +6]` — an
+  11-semitone drop to reach a note one semitone up is nearly an octave of artefacts, and
+  with `linkPitch` on it drags speed with it. `computeIsMatched` compares modulo 12, so the
+  badge is unaffected.
 - **Auto-match on load**: if a reference slot is pinned, incoming slot gets `speed` + `linkPitch` copied from reference, and `pitch` offset by `refSem - tgtSem`. If either side has no detected key, speed/linkPitch are still copied but pitch stays 0.
 - **`computeIsMatched`**: slot is considered matched if speed matches reference and pitch is within any octave multiple (multiples of 12) of the auto-match target. This keeps the MATCHED badge visible after octave shifts.
 - **Anchor persistence**: reference slot saved to localStorage (`loadAnchorKey`/`saveAnchorKey`). Restored synchronously at the top of the URL reconciler effect (before any `await`) so all async slot loads see it. Named sessions restore reference via `pendingReferenceIdRef` instead.

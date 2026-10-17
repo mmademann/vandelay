@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { multiEngine } from "../audio/multiEngine";
 import { DRY_EFFECTS, type StemName } from "../audio/dubEngine";
-import { sanitizeEffects } from "../store";
+import { sanitizeEffects, EFFECTS_LIMITS } from "../store";
 import type { MultiMasterSettings, MultiSlot, MultiSession, ThrowSettings } from "../lib/multiSettings";
 import { getCachedAudio, putCachedAudio } from "../lib/audioCache";
 import {
@@ -18,6 +18,7 @@ import {
   deleteMultiPreset,
   loadThrowSettings,
   saveThrowSettings,
+  DEFAULT_THROW_SETTINGS,
   loadMasterSpeed,
   saveMasterSpeed,
   loadThrowPresets,
@@ -37,9 +38,9 @@ import {
   clearTempoAnchorKey,
 } from "../lib/multiSettings";
 import { getAllTrackMeta, getTrackMeta, putTrackMeta } from "../lib/trackMetaCache";
-import { analyzeAudio, rootSemitone, preloadEssentia } from "../lib/audioAnalysis";
+import { analyzeAudio, analyzeRegion, rootSemitone, preloadEssentia } from "../lib/audioAnalysis";
 import { stretchBuffer } from "../audio/stretchBuffer";
-import { estimateBpm, quantizeToGrid, autoTempoRelation, stretchForRelation, isGridSafeRelation } from "../lib/loopSnap";
+import { estimateBpm, quantizeToGrid, autoTempoRelation, stretchForRelation, isGridSafeRelation, lockingDelays, snapDelayToTempo } from "../lib/loopSnap";
 import { computeAutoGain, computeStemViability } from "../lib/autoGain";
 import { buildRandomSlots } from "../lib/randomCombinator";
 import { SlotStrip } from "../components/multi/SlotStrip";
@@ -496,14 +497,30 @@ export function MultiPage() {
   }, []);
 
 
-  // Escape collapses the picker and sessions panel
+  // Global keys: Escape collapses the panels, Space is the transport.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") { setShowPicker(false); setSessionsPanelOpen(false); }
+      if (e.key === "Escape") { setShowPicker(false); setSessionsPanelOpen(false); return; }
+      if (e.code !== "Space") return;
+      // Every text field in here legitimately takes a space — session name, rename, the
+      // picker's search and URL boxes. Typing a space must type a space.
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName))) return;
+      // Otherwise it is the transport, so stop the browser doing its two defaults: scrolling
+      // the page, and re-activating whichever button still holds focus from the last click.
+      e.preventDefault();
+      // Read the engine rather than isPlayingAll: that state is polled on a 100ms interval,
+      // so a quick second press would act on a stale value and the toggle would stick.
+      // Instant both ways, matching the plain Play All / Pause All buttons. Note the
+      // defaults invert: handlePlayAll's `instant` is false by default (the 10s fade-in),
+      // while handleStopAll's `fade` is false. Leaving both bare faded in but stopped dead.
+      // The Fade halves of the transport stay the way to get the slow version.
+      if (multiEngine.isRunning()) handleStopAll(false);
+      else void handlePlayAll(true);
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Close sessions panel on outside click
   useEffect(() => {
@@ -1007,6 +1024,26 @@ export function MultiPage() {
     navigate(`/?slots=${param}`);
   }
 
+  /**
+   * Hand the key anchor to a slot that is already in key, without disturbing anything.
+   *
+   * Unlike handleSetReference this does NOT clear every slot's matched flag. A slot that is
+   * already matched is already in the anchor's key, so with it as the reference every other
+   * slot is still exactly where it should be — matchSlotToReference subtracts the
+   * reference's own pitch offset, so re-running it would be a no-op. Dropping the badges
+   * would only invite a re-match that moves pitches for no reason.
+   *
+   * No audio is touched here at all, which is what makes the key handover even safer than
+   * the tempo one.
+   */
+  function handleTakeReference(slotId: string) {
+    const entry = entriesRef.current.find((e) => e.slot.id === slotId);
+    if (!entry) return;
+    setReferenceSlotId(slotId);
+    referenceSlotIdRef.current = slotId;
+    saveAnchorKey(entry.slot.trackId, entry.slot.stemName);
+  }
+
   function handleSetReference(slotId: string) {
     const isAlreadyRef = referenceSlotIdRef.current === slotId;
     const newRefId = isAlreadyRef ? null : slotId;
@@ -1014,7 +1051,12 @@ export function MultiPage() {
     setEntries((prev) => prev.map((e) => ({ ...e, isMatched: false })));
     if (newRefId) {
       const entry = entriesRef.current.find((e) => e.slot.id === newRefId);
-      if (entry) saveAnchorKey(entry.slot.trackId, entry.slot.stemName);
+      if (entry) {
+        saveAnchorKey(entry.slot.trackId, entry.slot.stemName);
+        // Read its key from the loop that was just chosen, not the middle of the file —
+        // the same moment and the same reasoning as Set Tempo Anchor.
+        void redetectFromLoop(newRefId);
+      }
     } else {
       clearAnchorKey();
     }
@@ -1043,10 +1085,18 @@ export function MultiPage() {
     });
   }
 
-  function matchSlotToReference(targetSlotId: string) {
+  async function matchSlotToReference(targetSlotId: string) {
+    if (!referenceSlotIdRef.current || targetSlotId === referenceSlotIdRef.current) return;
+    // Measure both sides from their loops before comparing, for the same reason tempo does:
+    // detection on load reads the middle of the file, and the loop is the part being played.
+    // Both calls are cached per slot+loop, so Lock All does not re-analyse what the tempo
+    // pass already measured.
+    await redetectFromLoop(referenceSlotIdRef.current);
+    await redetectFromLoop(targetSlotId);
+
     const refEntry = entriesRef.current.find((e) => e.slot.id === referenceSlotIdRef.current);
     const targetEntry = entriesRef.current.find((e) => e.slot.id === targetSlotId);
-    if (!refEntry || !targetEntry || targetSlotId === referenceSlotIdRef.current) return;
+    if (!refEntry || !targetEntry) return;
 
     const speed = refEntry.slot.speed;
     const linkPitch = refEntry.slot.linkPitch;
@@ -1058,7 +1108,14 @@ export function MultiPage() {
       const refSem = rootSemitone(refKey);
       const tgtSem = rootSemitone(tgtKey);
       if (refSem !== null && tgtSem !== null) {
-        pitch = refEntry.slot.pitch - (tgtSem - refSem);
+        // Shortest way round the circle. The raw difference can be as much as 11 semitones,
+        // and shifting a stem down eleven to reach a note one semitone up is nearly an
+        // octave of pitch-shifting artefacts for no musical gain — with linkPitch on it
+        // drags the speed with it too. Wrapped into [-6, +6]; computeIsMatched compares
+        // modulo 12, so the badge is unaffected.
+        const raw = tgtSem - refSem;
+        const shortest = ((raw + 6) % 12 + 12) % 12 - 6;
+        pitch = refEntry.slot.pitch - shortest;
       }
     }
 
@@ -1194,9 +1251,42 @@ export function MultiPage() {
    * @param relationOverride tempo relationship to force; omitted means pick automatically.
    *        Stepping passes one so the choice survives the re-stretch it triggers.
    */
+  /**
+   * The delay a relation's dropdown row advertises, as a patch over the slot's effects.
+   *
+   * Mirrors what picking that row does, so matching and picking cannot describe different
+   * things — the row says "delay 1026ms" and after a match that is what the slot has.
+   * Returns null when the relation has no locking delay that fits under the knob's ceiling.
+   */
+  function delayForRelation(relation: number, anchorHeardBpm: number) {
+    if (!Number.isFinite(anchorHeardBpm) || anchorHeardBpm <= 0) return null;
+    const beatSec = 60 / anchorHeardBpm;
+    const fits = lockingDelays(relation).filter(
+      (b) => b * beatSec <= EFFECTS_LIMITS.delayTime.max,
+    );
+    if (fits.length === 0) return null;
+    const delayTime = Math.max(...fits) * beatSec;
+    return (effects: MultiSlot["effects"]) => ({
+      delayTime,
+      // Same rule as the dropdown: switch a silent delay on so the time is audible, but
+      // never overwrite a mix already dialled in.
+      ...(effects.delayWet <= 0.001 ? { delayWet: 0.5, delayFeedback: 0.35 } : {}),
+    });
+  }
+
+  /**
+   * `remeasure` re-reads the slot's tempo from its loop before computing the ratio.
+   *
+   * On for the three paths that mean "match this to the anchor" — the per-slot button,
+   * Match Tempos, re-lock — because that is exactly when a BPM measured from the wrong part
+   * of the file turns into a wrong stretch. Off for a relation step: picking a row from the
+   * tempo dropdown should be immediate, and an Essentia pass on every pick is a second of
+   * lag on the control that gets used most.
+   */
   async function stretchSlotToTempoAnchor(
     targetSlotId: string,
     relationOverride?: number | null,
+    remeasure = false,
   ) {
     const anchorId = tempoAnchorIdRef.current;
     if (!anchorId || anchorId === targetSlotId) return;
@@ -1207,7 +1297,12 @@ export function MultiPage() {
 
     const anchorSrc = anchorEntry.sourceBuffer ?? anchorEntry.buffer;
     const anchorRaw = anchorEntry.detectedBpm ?? (anchorSrc ? sourceBpm(anchorSrc) : undefined);
-    const targetBpm = target.detectedBpm ?? sourceBpm(target.sourceBuffer);
+    // Measured from this slot's own loop, for the same reason the anchor is: load-time
+    // detection reads the middle of the file, and a stretch ratio built on a BPM from some
+    // other section of the track is wrong by exactly that error. Falls back to whatever was
+    // already known, so a failed measurement costs nothing but the time it took.
+    const measured = remeasure ? await redetectTempoFromLoop(targetSlotId) : undefined;
+    const targetBpm = measured ?? target.detectedBpm ?? sourceBpm(target.sourceBuffer);
     if (!anchorRaw || !targetBpm) return;
 
     // Match the tempo the anchor is *heard* at, not its raw detected BPM: Speed, master
@@ -1277,6 +1372,15 @@ export function MultiPage() {
       const loopStart = multiEngine.getLoopStart(targetSlotId);
       const loopEnd = multiEngine.getLoopEnd(targetSlotId);
 
+      // Apply the relation's delay too, when the caller is a match.
+      //
+      // The dropdown row advertises a delay for every relation, and picking the row applies
+      // it — but Match Tempo set only the relation and the stretch. So after matching, the
+      // list described a delay the slot did not have, and because a native select fires no
+      // event for the row already selected, there was no way to ask for it. Matching now
+      // produces the state the row claims.
+      const matchedDelay = remeasure ? delayForRelation(relation, anchorBpm) : undefined;
+
       // Derive the committed slot from the updater's own `prev`, never from `target`.
       // `target` was read before the two awaits above, so anything the user changed while
       // the buffer was rebuilding — a knob, or the delay the Sweet spots picker writes in
@@ -1295,7 +1399,13 @@ export function MultiPage() {
             tempoRelation: chosen,
             effectiveRelation: relation,
             stretching: false,
-            slot: { ...e.slot, loopStart, loopEnd },
+            slot: {
+              ...e.slot,
+              loopStart,
+              loopEnd,
+              // Spread onto the slot's CURRENT effects from `prev`, not the captured copy.
+              ...(matchedDelay ? { effects: { ...e.slot.effects, ...matchedDelay(e.slot.effects) } } : {}),
+            },
           };
           persisted = next;
           return next;
@@ -1314,6 +1424,30 @@ export function MultiPage() {
   // Persisted like the key anchor. Stretched buffers are memory-only, so the saved stretch
   // ratio on each slot is re-applied after decode — otherwise the restored anchor would
   // claim slots are synced to a tempo they had silently reverted from.
+  /**
+   * Hand the anchor to a slot that is already matched, without moving anything.
+   *
+   * A matched slot is, by definition, already playing at the rack's tempo — so declaring it
+   * the reference changes nothing audible. It keeps its stretch rather than being reset to
+   * its own natural tempo, which is what makes this free: `anchorEffectiveBpm` divides
+   * stretch out, so the grid comes out identical and no slave is marked stale.
+   *
+   * The plain Set Tempo Anchor path stays destructive on purpose. Pinning an UNMATCHED slot
+   * really is declaring a new tempo, and everything else does have to follow it.
+   *
+   * Side effect worth knowing: the anchor then reads e.g. 130% stretch instead of 100%.
+   * That is honest — it is the stretch the slot is actually playing at.
+   */
+  function handleTakeTempoAnchor(slotId: string) {
+    const entry = entriesRef.current.find((e) => e.slot.id === slotId);
+    if (!entry) return;
+    setTempoAnchorId(slotId);
+    tempoAnchorIdRef.current = slotId;
+    saveTempoAnchorKey(entry.slot.trackId, entry.slot.stemName);
+    // Deliberately no reapplyStretch and no redetect: both would change the heard tempo,
+    // which is the one thing this path promises not to do.
+  }
+
   function handleSetTempoAnchor(slotId: string) {
     const next = tempoAnchorIdRef.current === slotId ? null : slotId;
     setTempoAnchorId(next);
@@ -1327,6 +1461,108 @@ export function MultiPage() {
     if (entry && entry.sourceBuffer && Math.abs(entry.stretch - 1) > 0.005) {
       void reapplyStretch(entry.slot.id, entry.sourceBuffer, 1, entry.stretch);
     }
+    if (entry) {
+      // Re-read the tempo from the loop, THEN round that loop to whole bars of it. Order
+      // matters: quantize uses the detected BPM, so doing it first rounds to the old number.
+      //
+      // The anchor's loop has to be a whole number of bars or nothing else can hold. Rate
+      // alone is not enough — a 3.8-bar loop and a 4-bar loop pull apart every pass however
+      // well their tempos agree, and the anchor is the one every other loop is rounded
+      // against. Match Tempos already quantized it; setting the anchor and simply playing
+      // did not, so a rack that was never matched drifted with nothing to explain why.
+      void redetectAnchorTempo(entry.slot.id).then(() => {
+        if (tempoAnchorIdRef.current === entry.slot.id) quantizeAllToAnchorGrid(entry.slot.id);
+      });
+    }
+  }
+
+  /**
+   * Re-measure a slot's tempo from its loop, at the moment it becomes the tempo anchor.
+   *
+   * Detection on load reads the middle of the whole file, which is a guess about where the
+   * beat lives — on a track with a sparse or beatless middle it comes back wrong or empty.
+   * By the time a slot is pinned as the anchor its loop has been chosen deliberately, and
+   * that loop is the part being played, so it is the better thing to measure.
+   *
+   * Only here, and only on pinning. The anchor's BPM is the grid the whole rack is built
+   * on: re-measuring it whenever a loop handle moved would restretch every slave and
+   * re-derive every delay, mid-session. At the moment of pinning nothing is matched to it
+   * yet, so the number is free to move.
+   *
+   * A failed detection keeps the existing value rather than clearing it — no answer is not
+   * evidence that the old answer was wrong.
+   */
+  async function redetectAnchorTempo(slotId: string) {
+    await redetectTempoFromLoop(slotId);
+  }
+
+  /**
+   * Re-measure one slot's tempo from its own loop, and return the result.
+   *
+   * Callers are the two deliberate moments a wrong BPM actually costs something: pinning a
+   * tempo anchor, and matching a slot to one. Both already involve a loop the user chose,
+   * and both are the points where that number turns into a stretch ratio.
+   *
+   * Returns the new BPM so a caller mid-stretch can use it immediately rather than waiting
+   * a render for `entries` to catch up.
+   */
+  async function redetectTempoFromLoop(slotId: string): Promise<number | undefined> {
+    return (await redetectFromLoop(slotId))?.bpm;
+  }
+
+  /**
+   * One analysis pass per slot, keyed on the loop it was measured from.
+   *
+   * Key matching and tempo matching both want the loop rather than the middle of the file,
+   * and Lock All runs keys then tempos — so without this, every slot would be analysed
+   * twice in a row on identical audio. Key extraction is the expensive half (seconds per
+   * stem), so sharing the result is most of the saving.
+   *
+   * The cache is deliberately keyed by the loop bounds as well as the slot: move the loop
+   * and the next match genuinely re-measures, which is the whole point of measuring the
+   * loop. Cleared when a slot's buffer is replaced, since the bounds then mean something
+   * different.
+   */
+  const regionAnalysisRef = useRef<Map<string, { key: string | null; bpm: number | undefined }>>(new Map());
+
+  async function redetectFromLoop(
+    slotId: string,
+  ): Promise<{ key: string | null; bpm: number | undefined } | null> {
+    const entry = entriesRef.current.find((e) => e.slot.id === slotId);
+    if (!entry?.sourceBuffer) return null;
+    // Loop bounds live in the STRETCHED timebase; the source buffer is unstretched, so
+    // divide the ratio out before using them as positions in it (invariant 18).
+    const ratio = entry.stretch > 0 ? entry.stretch : 1;
+    const startSec = entry.slot.loopStart / ratio;
+    const endSec = entry.slot.loopEnd / ratio;
+    if (!(endSec > startSec)) return null;
+
+    const cacheKey = `${slotId}|${startSec.toFixed(3)}|${endSec.toFixed(3)}`;
+    let result = regionAnalysisRef.current.get(cacheKey) ?? null;
+    if (!result) {
+      result = await analyzeRegion(entry.sourceBuffer, startSec, endSec);
+      if (!result) return null;
+      regionAnalysisRef.current.set(cacheKey, result);
+    }
+
+    // A failed half keeps what was already known. No answer is not evidence that the
+    // previous answer was wrong.
+    const key = result.key ?? entry.detectedKey ?? null;
+    const bpm = result.bpm ?? entry.detectedBpm;
+    setEntries((prev) =>
+      prev.map((e) => (e.slot.id === slotId ? { ...e, detectedKey: key, detectedBpm: bpm } : e)),
+    );
+    // Persist alongside the load-time result so the next session starts from the better
+    // numbers instead of re-measuring the middle of the file.
+    const fresh = await getTrackMeta(entry.slot.trackId);
+    if (fresh) {
+      const role = entry.slot.stemName ?? "full";
+      await putTrackMeta({
+        ...fresh,
+        stemAnalysis: { ...(fresh.stemAnalysis ?? {}), [role]: { key, bpm } },
+      });
+    }
+    return { key, bpm };
   }
 
   /**
@@ -1370,7 +1606,7 @@ export function MultiPage() {
     try {
     const stale = Array.from(staleTempoIdsRef.current);
     for (const id of stale) {
-      await stretchSlotToTempoAnchor(id);
+      await stretchSlotToTempoAnchor(id, undefined, true);
       // Yield BEFORE quantizing, not after: quantize enumerates slots from entriesRef, and
       // without the commit it works from the pre-stretch entry.
       await new Promise((r) => setTimeout(r, 0));
@@ -1398,7 +1634,7 @@ export function MultiPage() {
       return;
     }
     if (referenceSlotIdRef.current) {
-      handleMatchAll();
+      await handleMatchAll();
       // Let the speed/pitch writes commit before the tempo pass reads them. Without this,
       // stretchSlotToTempoAnchor computes the anchor's heard BPM from pre-match Speed.
       await new Promise((r) => setTimeout(r, 0));
@@ -1424,7 +1660,7 @@ export function MultiPage() {
       .filter((e) => e.slot.id !== anchorId && !e.loading)
       .map((e) => e.slot.id);
     for (const id of ids) {
-      await stretchSlotToTempoAnchor(id);
+      await stretchSlotToTempoAnchor(id, undefined, true);
       // Let React commit so the next iteration reads the updated entries.
       await new Promise((r) => setTimeout(r, 0));
     }
@@ -1564,13 +1800,18 @@ export function MultiPage() {
     );
   }
 
-  function handleMatchAll() {
+  async function handleMatchAll() {
     const refId = referenceSlotIdRef.current;
     if (!refId) return;
-    for (const entry of entriesRef.current) {
-      if (entry.slot.id !== refId && !entry.loading) {
-        matchSlotToReference(entry.slot.id);
-      }
+    // Snapshot the ids: matchSlotToReference awaits an analysis pass, and entriesRef is
+    // rebuilt on every render in between.
+    const ids = entriesRef.current
+      .filter((e) => e.slot.id !== refId && !e.loading)
+      .map((e) => e.slot.id);
+    for (const id of ids) {
+      await matchSlotToReference(id);
+      // Let React commit so the next iteration reads the updated entries.
+      await new Promise((r) => setTimeout(r, 0));
     }
   }
 
@@ -1729,6 +1970,50 @@ export function MultiPage() {
       entriesRef.current.map((e) => [e.slot.id, multiEngine.getPhaseBarSec(e.slot.id)]),
     ),
   }));
+
+  /**
+   * Keep the throw's delay time on the anchor's grid, so a throw lands as a dub echo rather
+   * than at whatever 250ms happened to be the stored default.
+   *
+   * The rest of the throw character — feedback 0.72, fully wet, 3.5s reverb, 700Hz filter —
+   * is already a proper dub throw and has no business changing with tempo. Only the delay
+   * time is a musical length, and it was the one value that ignored the music entirely.
+   *
+   * Dotted eighth (0.75 of a beat) is the default because it is THE dub echo: it lands
+   * between the beats and gallops. Any other division the user has chosen is preserved
+   * across tempo changes rather than dragged back to it.
+   *
+   * Debounced for the same reason the per-slot delay re-sync is: master speed and the
+   * anchor's Speed both move the heard tempo continuously while a knob is dragged, and
+   * rewriting a delay time per frame is audible as warbling.
+   */
+  const lastThrowSyncBpmRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const bpm = anchorEffectiveBpm;
+    if (!bpm || !Number.isFinite(bpm) || bpm <= 0) return;
+    const t = window.setTimeout(() => {
+      const prev = lastThrowSyncBpmRef.current;
+      lastThrowSyncBpmRef.current = bpm;
+      const ts = masterSettingsRef.current.throwSettings;
+      const beatSec = 60 / bpm;
+
+      // Which division is it on NOW, at the tempo it was last set against? That is the
+      // musical intent to carry forward. Untouched, it is still the stored 0.25s default,
+      // which is not a division of anything — treat that as "never set" and give it the
+      // dotted eighth rather than leaving it tempo-blind forever.
+      const atPrev = prev ? snapDelayToTempo(ts.delayTime, prev, 5) : null;
+      const onGrid = atPrev !== null && Math.abs(atPrev.seconds - ts.delayTime) <= 0.005;
+      const untouched = Math.abs(ts.delayTime - DEFAULT_THROW_SETTINGS.delayTime) < 1e-6;
+      const beats = onGrid ? atPrev.beats : untouched ? 0.75 : null;
+      if (beats === null) return;   // deliberately free — leave it exactly where it is
+
+      const delayTime = beats * beatSec;
+      if (Math.abs(delayTime - ts.delayTime) < 0.001) return;
+      handleThrowSettingsChange({ ...ts, delayTime });
+    }, 400);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anchorEffectiveBpm]);
 
   function handleThrowSettingsChange(throwSettings: ThrowSettings) {
     setMasterSettings((prev) => ({ ...prev, throwSettings }));
@@ -2000,7 +2285,7 @@ export function MultiPage() {
           onDeleteThrowPreset={handleDeleteThrowPreset}
           onApplyThrowPreset={handleApplyThrowPreset}
           isPlaying={isPlayingAll}
-          onMatchAll={handleMatchAll}
+          onMatchAll={() => { void handleMatchAll(); }}
           onTempoMatchAll={() => { void handleTempoMatchAll(); }}
           onLockAll={() => { void handleLockAll(); }}
           slotsLoading={entries.some((e) => e.loading)}
@@ -2132,10 +2417,11 @@ export function MultiPage() {
               isTempoAnchor={isTempoAnchor}
               hasTempoAnchor={hasTempoAnchor}
               onSetTempoAnchor={() => handleSetTempoAnchor(entry.slot.id)}
+              onTakeTempoAnchor={() => handleTakeTempoAnchor(entry.slot.id)}
               onTempoMatch={() => {
                 // Stretch then quantize, same as the transport's Match Tempos — rate alone
                 // still drifts if the loop is not a whole number of the anchor's bars.
-                void stretchSlotToTempoAnchor(entry.slot.id).then(() =>
+                void stretchSlotToTempoAnchor(entry.slot.id, undefined, true).then(() =>
                   quantizeAllToAnchorGrid(entry.slot.id),
                 );
               }}
@@ -2150,7 +2436,8 @@ export function MultiPage() {
               onRemove={() => handleRemoveSlot(entry.slot.id)}
               onChange={(patch) => handleSlotChange(entry.slot.id, patch)}
               onSetReference={() => handleSetReference(entry.slot.id)}
-              onMatch={() => matchSlotToReference(entry.slot.id)}
+              onTakeReference={() => handleTakeReference(entry.slot.id)}
+              onMatch={() => { void matchSlotToReference(entry.slot.id); }}
               masterSpeed={masterSettings.masterSpeed}
               detectedBpm={entry.detectedBpm}
               onSavePreset={handleSavePreset}

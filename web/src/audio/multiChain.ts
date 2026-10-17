@@ -9,8 +9,25 @@ import {
 import { applyBassBoost, createBassChain, type BassChain } from "./graph";
 import { TapeDelay } from "./tapeDelay";
 
+/**
+ * Grit drive, in dB at the top of the knob, and how much of it is given back afterwards.
+ *
+ * The knob used to only widen the clipping curve, which saturates around 60% and then stops
+ * getting nastier. Dirt comes from how hard the signal hits the shaper, so Grit now also
+ * drives it. Makeup is deliberately partial: the shaper bounds its own output, so handing
+ * back the full 18dB would make the slot quieter the dirtier it got.
+ *
+ * Tuned by ear — this is the pair to move if the top of the knob is too much or too little.
+ */
+const GRIT_DRIVE_DB = 18;
+const GRIT_MAKEUP_DB = 9;
+
 export interface MultiEffectsChain {
+  /** Pre-distortion boost — the chain's input node, so the player connects HERE. */
+  drive: Tone.Gain;
   distortion: Tone.Distortion;
+  /** Gives back part of the drive so Grit changes character more than loudness. */
+  makeup: Tone.Gain;
   eqLo: Tone.Filter;
   eqMid: Tone.Filter;
   eqHi: Tone.Filter;
@@ -57,14 +74,19 @@ export async function createMultiEffectsChain(output: Tone.ToneAudioNode): Promi
   const eqHi = new Tone.Filter({ type: "highshelf", frequency: 6000, gain: 0 }).connect(phaser);
   const eqMid = new Tone.Filter({ type: "peaking", frequency: 1000, Q: 1.0, gain: 0 }).connect(eqHi);
   const eqLo = new Tone.Filter({ type: "lowshelf", frequency: 100, gain: 0 }).connect(eqMid);
-  const distortion = new Tone.Distortion({ distortion: 0.5, wet: 0 }).connect(eqLo);
-  return { distortion, eqLo, eqMid, eqHi, phaser, chorus, filter, bass, delay, reverbs, gain, reverbBypass, reverbLive: true };
+  const makeup = new Tone.Gain(1).connect(eqLo);
+  const distortion = new Tone.Distortion({ distortion: 0.5, wet: 0 }).connect(makeup);
+  // Input of the whole chain. Invariant 12 put the distortion first so grit hits the raw
+  // stem; the drive sits in front of it for the same reason.
+  const drive = new Tone.Gain(1).connect(distortion);
+  return { drive, distortion, makeup, eqLo, eqMid, eqHi, phaser, chorus, filter, bass, delay, reverbs, gain, reverbBypass, reverbLive: true };
 }
 
+/** Returns the chain's INPUT node — the grit drive, which feeds the shaper. */
 export async function createOfflineMultiEqChain(
   effects: EffectsState,
   output: Tone.ToneAudioNode,
-): Promise<Tone.Distortion> {
+): Promise<Tone.ToneAudioNode> {
   const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
   const gain = new Tone.Gain(effects.gain).connect(output);
   const reverbs = await createDualReverb(gain);
@@ -129,7 +151,10 @@ export async function createOfflineMultiEqChain(
   const eqLoOff = new Tone.Filter({ type: "lowshelf", frequency: 100, gain: clamp(effects.eqLow ?? 0, EFFECTS_LIMITS.eqLow.min, EFFECTS_LIMITS.eqLow.max) }).connect(eqMidOff);
 
   const grit = clamp(effects.grit ?? 0, 0, 1);
-  return new Tone.Distortion({ distortion: Math.pow(grit, 0.5), wet: grit }).connect(eqLoOff);
+  const makeupOff = new Tone.Gain(Tone.dbToGain(-GRIT_MAKEUP_DB * grit)).connect(eqLoOff);
+  const distOff = new Tone.Distortion({ distortion: Math.pow(grit, 0.5), wet: grit }).connect(makeupOff);
+  // Returned as the chain input, so the offline player feeds the drive exactly like live.
+  return new Tone.Gain(Tone.dbToGain(GRIT_DRIVE_DB * grit)).connect(distOff);
 }
 
 export function applyMultiEffectsChain(chain: MultiEffectsChain, e: EffectsState): void {
@@ -171,4 +196,7 @@ export function applyMultiEffectsChain(chain: MultiEffectsChain, e: EffectsState
   const grit = clamp(e.grit ?? 0, 0, 1);
   chain.distortion.wet.value = grit;
   chain.distortion.distortion = Math.pow(grit, 0.5);
+  // Both are unity at grit 0, so a clean slot passes through untouched.
+  chain.drive.gain.value = Tone.dbToGain(GRIT_DRIVE_DB * grit);
+  chain.makeup.gain.value = Tone.dbToGain(-GRIT_MAKEUP_DB * grit);
 }
