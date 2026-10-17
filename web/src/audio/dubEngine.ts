@@ -36,6 +36,21 @@ export const DRY_EFFECTS: EffectsState = {
   grit: 0,
   spaceEchoWow: 0,
   bigKnobWet: 0,
+  // Every remaining EffectsState field, listed even where the value is the obvious zero.
+  //
+  // These were missing, and the field being optional meant TypeScript never said so. The
+  // multi page builds both a new slot's effects AND the per-slot Reset from this object, so
+  // Reset silently left the EQ and the sweep filter wherever they were — someone had already
+  // patched `phaserWet: 0, chorusWet: 0` on at the call site rather than fixing it here.
+  // surfaceCoverage now fails if an EffectsState key is absent from this list.
+  eqLow: 0,
+  eqMid: 0,
+  eqHigh: 0,
+  // Dry for a lowpass is open, not zero — a 0Hz cutoff would mute the slot.
+  sweepFreq: EFFECTS_LIMITS.sweepFreq.max,
+  sweepRes: EFFECTS_LIMITS.sweepRes.min,
+  phaserWet: 0,
+  chorusWet: 0,
 };
 
 interface StemTrack {

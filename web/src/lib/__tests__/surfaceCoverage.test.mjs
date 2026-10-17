@@ -1003,6 +1003,30 @@ section("12s. doc comments sit on the function they describe");
      before("Keep a parallel send out of the render graph", "  private static setSend("));
 }
 
+section("12t. Reset actually resets");
+{
+  // Reset builds its patch from DRY_EFFECTS, which lives on the old dub page and lagged
+  // every knob the multi rack gained. Because each new field was added to EffectsState as
+  // OPTIONAL, the compiler never objected — so EQ and the sweep filter quietly survived a
+  // Reset, and the call site had grown a hand-written `phaserWet: 0, chorusWet: 0` patch
+  // instead. This reads the interface and fails on the next field that goes missing.
+  const dub = read("audio/dubEngine.ts");
+  const iface = /export interface EffectsState \{([\s\S]*?)\n\}/.exec(read("store.ts"))?.[1] ?? "";
+  const keys = [...iface.matchAll(/^\s*(\w+)\??:/gm)].map((m) => m[1]);
+  const dry = /DRY_EFFECTS[^=]*= \{([\s\S]*?)\n\};/.exec(dub)?.[1] ?? "";
+  ok("EffectsState has fields to check", keys.length > 15);
+  for (const k of keys) {
+    ok(`DRY_EFFECTS sets "${k}"`, new RegExp(`^\\s*${k}:`, "m").test(dry),
+       "absent means Reset leaves this knob where it was, and a new slot inherits it by accident");
+  }
+  ok("dry means OPEN for the sweep filter, not zero",
+     /sweepFreq: EFFECTS_LIMITS\.sweepFreq\.max/.test(dub) && /sweepRes: EFFECTS_LIMITS\.sweepRes\.min/.test(dub),
+     "a 0Hz lowpass cutoff mutes the slot outright");
+  ok("Reset patches nothing on top of DRY_EFFECTS",
+     /effects: \{ \.\.\.DRY_EFFECTS \}, speed: 1, pitch: 0, linkPitch: true, gain: 0/.test(slotStrip),
+     "a hand-written field at the call site is how the other knobs got forgotten");
+}
+
 section("13. expensive analysis is memoised");
 {
   ok("estimateBpm results are cached", /WeakMap/.test(multiPage) && /sourceBpm/.test(multiPage),

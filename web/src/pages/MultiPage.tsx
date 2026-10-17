@@ -1817,13 +1817,6 @@ export function MultiPage() {
     multiEngine.stop(fade);
   }
 
-  function handleClear() {
-    // Clearing the rack leaves no loaded session; keeping the label would name a session
-    // whose slots are gone.
-    setActiveSessionName(null);
-    navigate("/");
-  }
-
   const portalTarget = document.getElementById("multi-transport-portal");
   const topBar = (
     <div className="relative flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
@@ -2025,16 +2018,6 @@ export function MultiPage() {
           onRandomSession={handleRandomSession}
           randomDisabled={stemsLibrary.length < 2}
         />
-
-        {entries.length > 0 && (
-          <button
-            type="button"
-            onClick={handleClear}
-            className="shrink-0 rounded border border-border/50 bg-muted/30 px-2.5 py-1 text-xs text-foreground/30 transition hover:border-red-500/30 hover:text-red-400"
-          >
-            Clear
-          </button>
-        )}
     </div>
   );
 

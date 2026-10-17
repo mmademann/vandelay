@@ -173,7 +173,9 @@ web/src/
 
 ## Multi UI layout (current)
 
-**Transport bar** (top): `Session <name>` button (names the active session; falls back to `Sessions (N)`) · `▶ Play All` / `⏸ Pause All` (+ `Fade` half) · `⏮` (Rewind All) · `● Rec` · master speed slider · `⚓ Lock All` (keys then tempos — the order that holds; the two below are the single-dimension fallbacks) · `↻ Match Keys` · `↻ Match Tempos` (with an inline result chip after quantizing) · `↻ Re-lock N` (only while slots are stale) · `auto re-lock on/off` · `↓ Export` (floating panel) · `⚄ Random` · `↯ Throw` (floating panel) · `Clear`
+**Transport bar** (top): `Session <name>` button (names the active session; falls back to `Sessions (N)`) · `▶ Play All` / `⏸ Pause All` (+ `Fade` half) · `⏮` (Rewind All) · `● Rec` · master speed slider · `⚓ Lock All` (keys then tempos — the order that holds; the two below are the single-dimension fallbacks) · `↻ Match Keys` · `↻ Match Tempos` (with an inline result chip after quantizing) · `↻ Re-lock N` (only while slots are stale) · `auto re-lock on/off` · `↓ Export` (floating panel) · `⚄ Random` · `↯ Throw` (floating panel)
+
+The π home link at the far left empties the rack — it navigates to a bare `/`, and the reconciler unloads every slot while an effect clears the session label. A separate `Clear` button did exactly this and was removed as a duplicate.
 
 **Per-slot (SlotStrip)**:
 - Header row: key badge (`C# min`, BPM on hover, `?` if unknown) · tempo anchor button (`⚓ Tempo Anchor` / `Set Tempo Anchor` / `Tempo 1:1 ↻` / `↻ Re-lock Tempo`) · tempo dropdown (`↻ Tempo — change…` / `⚡ Sweet spot — change…`; relation + its locking delay, non-anchor slots only) · key anchor button (`⚓ Key Anchor` / `Set Key Anchor` / `Key Matched ↻` / `Match Key`) · semitone interval group (`1 7 12` + `▼▲`) · `⇥ Snap` · `Move ◀ 1/4 | 1/4 ▶` · stem/track label · track title · remove (✕)

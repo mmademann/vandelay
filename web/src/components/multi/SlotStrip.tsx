@@ -438,7 +438,10 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
   }
 
   function handleReset() {
-    const patch = { effects: { ...DRY_EFFECTS, phaserWet: 0, chorusWet: 0 }, speed: 1, pitch: 0, linkPitch: true, gain: 0 };
+    // DRY_EFFECTS covers every field now, so no knob is patched on by hand here — that is
+    // how the EQ and the sweep filter came to survive a Reset. slot gain is separate from
+    // effects.gain: 0 dB on the slot's volume, unity inside the chain.
+    const patch = { effects: { ...DRY_EFFECTS }, speed: 1, pitch: 0, linkPitch: true, gain: 0 };
     multiEngine.updateSlot(slot.id, patch);
     onChange(patch);
     persistSettings(patch);
