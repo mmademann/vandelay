@@ -8,6 +8,9 @@ import {
   saveThrowSettings,
   saveAnchorKey,
   clearAnchorKey,
+  readAllVersions,
+  writeAllVersions,
+  type MultiVersion,
 } from "./multiSettings";
 
 export interface MultiExportFile {
@@ -19,6 +22,8 @@ export interface MultiExportFile {
   throwPresets: ThrowPreset[];
   masterSettings: MultiMasterSettings;
   anchor: { trackId: string; stemName: StemName | null } | null;
+  /** Optional: backups written before in-session versions existed have none. */
+  versions?: Record<string, MultiVersion[]>;
 }
 
 export function buildExport(masterSettings: MultiMasterSettings): MultiExportFile {
@@ -31,6 +36,9 @@ export function buildExport(masterSettings: MultiMasterSettings): MultiExportFil
     throwPresets: loadThrowPresets(),
     masterSettings,
     anchor: loadAnchorKey(),
+    // In-session versions ride with the backup like everything else; losing the
+    // alternatives you kept would make the feature untrustworthy.
+    versions: readAllVersions(),
   };
 }
 
@@ -60,6 +68,9 @@ export function applyImport(data: MultiExportFile): void {
   localStorage.setItem("vandelay:multi:presets:v1", JSON.stringify(data.presets));
   localStorage.setItem("vandelay:multi:throw-presets:v1", JSON.stringify(data.throwPresets));
   saveThrowSettings(data.masterSettings.throwSettings);
+  // Only when the backup actually carries them. An older file has no `versions` key, and
+  // writing an empty store for it would delete versions the user still has locally.
+  if (data.versions) writeAllVersions(data.versions);
   if (data.anchor) {
     saveAnchorKey(data.anchor.trackId, data.anchor.stemName);
   } else {

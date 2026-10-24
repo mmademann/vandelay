@@ -1421,6 +1421,308 @@ section("12ag. the throw's delay follows the tempo");
      + "rewriting a delay time per frame is audible as warbling (gotcha 32)");
 }
 
+section("12ah. Suggest ranks fit, and is honest that fit is not taste");
+{
+  const sug = read("lib/suggestSetup.ts");
+  ok("key distance is measured in fifths, not semitones",
+     /const fifths = \(s: number\) => \(s \* 7\) % 12;/.test(sug),
+     "C and G are one step apart and sound related; C and C# are one semitone apart and clash");
+  ok("stretch cost is distance from unity, after the relation fold",
+     /Math\.abs\(Math\.log2\(ratio\)\)/.test(sug) && /autoTempoRelation\(fromBpm, toBpm\)/.test(sug),
+     "matching 174 to 87 is free; without the fold it looks like the most expensive pairing there is");
+  ok("off-grid relations are penalised, not excluded",
+     /isGridSafeRelation\(relation\) \? 0 : 0\.25/.test(sug),
+     "polymetric still works, it just should not win by default");
+  ok("spectral masking is part of the score",
+     /masking \* 1\.5/.test(sug) && /spectralOverlap\(/.test(sug),
+     "two stems fighting for one band is the failure a listener notices first");
+  ok("the spectrum filters are 12dB/octave",
+     /lp1\[b\] = \(1 - a\[b\]\) \* x \+ a\[b\] \* lp1\[b\];/.test(sug)
+       && /lp\[b\] = \(1 - a\[b\]\) \* lp1\[b\]/.test(sug),
+     "one pole bled so badly a 60Hz tone and a 1kHz tone measured 40% overlap");
+  ok("loop choice rewards regularity, not just busyness",
+     /evenness = mean > 0 \? 1 \/ \(1 \+ Math\.sqrt\(varc\) \/ mean\) : 0;/.test(sug),
+     "a busy fill is not a better loop than a steady bar — and the coefficient of variation "
+     + "is scale-free, so a half-time groove is not punished for its longer gaps");
+  ok("the key anchor is its own dimension, not derived from the tempo anchor",
+     /for \(const keyAnchor of keyChoices\)/.test(sug),
+     "they are orthogonal; forcing both onto one slot is how a rack ends up stretched AND out of key");
+  ok("a stem with no readable key cannot be the key anchor",
+     /const keyCandidates = usable\.filter\(\(s\) => rootSemitone\(s\.detectedKey \?\? ""\) !== null\)/.test(sug),
+     "zero known distances is not a distance of zero — it would score 0 and win every time");
+  // The search dimensions. One anchor choice gave as many suggestions as there were slots,
+  // which on a two-slot rack is two — thinner than the feature is worth.
+  ok("loop length is searched",
+     /export function barChoicesFor\(/.test(sug) && /const BAR_LADDER = \[2, 3, 4, 6, 8, 12, 16, 24, 32\];/.test(sug),
+     "3, 6, 12 and 24 are in deliberately — dub does not only count in fours");
+  ok("so is loop position",
+     /export function rankLoops\(/.test(sug) && /POSITIONS_PER_LENGTH/.test(sug),
+     "the second-best section of a stem is often the more interesting one to layer");
+  ok("overlapping positions are not offered twice",
+     /Math\.abs\(p\.start - cand\.start\) < len \* 0\.5/.test(sug),
+     "the windows either side of the best one are the same loop nudged a bar");
+  ok("the expensive work is computed once and reused",
+     /const profileCache = new Map<string, number\[\]>\(\);/.test(sug)
+       && /loopOptions\.set\(/.test(sug),
+     "the search re-reads the same stem/loop pairs across hundreds of candidates");
+  ok("the full cross product is deliberately NOT taken",
+     /list\[\(\(idx % list\.length\) \+ list\.length\) % list\.length\]/.test(sug),
+     "five stems of loop options is thousands of racks differing in one stem's loop — "
+     + "the ranking cannot tell them apart in any way a listener would care about");
+  ok("near-twins are dropped and the list is capped",
+     /if \(kept\.some\(\(k\) => k\.why === c\.why\)\) continue;/.test(sug)
+       && /MAX_CANDIDATES = 30/.test(sug),
+     "a long list of indistinguishable racks is worse than a short list of real alternatives");
+  ok("candidates are ranked, not reduced to one",
+     /candidates\.sort\(\(a, b\) => a\.score - b\.score\)/.test(sug)
+       && /suggestions\.map\(\(c, i\) =>/.test(transport),
+     "whether a rack sounds good is not computable — the listener picks, so there must be several");
+  ok("and they are LISTED, not cycled blindly",
+     /onPickSuggestion\(i\)/.test(transport) && !/suggestIndex \+ 1\) %/.test(multiPage),
+     "press-again-for-another gave no way to see the options or go back to one");
+  ok("opening the panel computes without applying",
+     /if \(next\) onComputeSuggestions\(\);/.test(transport)
+       && !/applySuggestion/.test(fnBody(multiPage, "async function handleComputeSuggestions()") ?? ""),
+     "looking at the options must not commit the rack to the first one");
+  ok("applying is reversible",
+     /suggestUndoRef/.test(multiPage) && /function handleUndoSuggest\(\)/.test(multiPage),
+     "it overwrites loops and both anchors; without undo it is a destructive button");
+  ok("the snapshot is taken once, not per pick",
+     /if \(!suggestUndoRef\.current\) \{/.test(multiPage),
+     "re-snapshotting each pick would make undo restore the previous SUGGESTION, not the user's rack");
+  ok("loops are converted out of the stretched timebase",
+     /loopStart: e\.slot\.loopStart \/ \(e\.stretch \|\| 1\)/.test(multiPage)
+       && /loop\.start \* ratio/.test(multiPage),
+     "the ranking works in source seconds, slot bounds are stretched — invariant 18");
+  ok("delays are written after matching",
+     /await handleLockAll\(\);[\s\S]{0,500}const delayTime = c\.delays\.get\(id\);/.test(multiPage),
+     "matching rewrites effects on the slots it touches, so delays written first are lost");
+  ok("changing the keep-loops option discards the ranking",
+     /function handleToggleKeepLoops\(\)[\s\S]{0,200}suggestionsRef\.current = \[\];/.test(multiPage),
+     "it was computed with the other answer, so it no longer describes anything");
+}
+
+section("12ai. versions: a rack state kept inside a session");
+{
+  // A session is WHICH STEMS are loaded. A version is everything else about those same
+  // stems — loops, anchors, matching, effects. One session holds many versions, and
+  // switching between them never reloads or re-separates any audio.
+  ok("versions persist",
+     /const VERSIONS_KEY = "vandelay:multi:versions:v1"/.test(settings));
+  ok("they are filed under the session they belong to",
+     /const bucket = \(sessionName: string \| null\) => sessionName \?\? UNSAVED_BUCKET;/.test(settings),
+     "versions of one rack have no business appearing in another");
+  ok("naming a session carries its versions across",
+     /renameVersionBucket\(activeSessionName, name\)/.test(multiPage),
+     "versions kept before the rack had a name would otherwise be orphaned in the unsaved bucket");
+  ok("they ride along in the backup",
+     /versions: readAllVersions\(\)/.test(read("lib/multiExport.ts"))
+       && /if \(data\.versions\) writeAllVersions\(data\.versions\)/.test(read("lib/multiExport.ts")),
+     "and only when present — an older backup has no versions key, and writing an empty "
+     + "store for it would delete the ones the user still has");
+  ok("restore matches stems by track and stem, not slot id",
+     /e\.slot\.trackId === saved\.trackId && e\.slot\.stemName === saved\.stemName/.test(multiPage),
+     "slot UUIDs are minted fresh on every session load, so a stored id matches nothing tomorrow");
+  ok("and keeps the live slot's id when restoring",
+     /const patch = \{ \.\.\.saved, id: live\.slot\.id \};/.test(multiPage),
+     "writing the saved id would detach the slot from the engine and the UI both");
+  ok("a stem no longer in the rack is skipped, not resurrected",
+     /if \(!live\) continue;/.test(multiPage),
+     "a version can outlive the stems it named");
+}
+
+section("12aj. one verb for the matching family");
+{
+  // Two verbs for one idea — "lock" and "match" — and "lock" also meant a third thing
+  // (re-stretching a drifted slot). The hierarchy now reads itself: Match All does both,
+  // the two below do one each, auto-match keeps it that way on its own.
+  ok("the one-click button is Match All",
+     /⚓ Match All/.test(transport) && !/Lock All/.test(transport));
+  ok("the drift button and toggle match that verb",
+     /↻ Re-match \{staleTempoCount\}/.test(transport)
+       && /auto-match \{autoRelock \? "on" : "off"\}/.test(transport));
+  ok("and so does the per-slot one",
+     /"↻ Re-match Tempo"/.test(slotStrip) && !/"↻ Re-lock Tempo"/.test(slotStrip));
+  ok("no user-facing label still says lock",
+     !/Lock All|Re-lock|re-lock/.test(transport) && !/Re-lock/.test(slotStrip),
+     "a third meaning for one word is what made these hard to remember");
+}
+
+section("12ak. the suggestion list is scannable");
+{
+  // Thirty rows of "4 bar · tempo drums 129bpm · key other · 68% separation" is four facts
+  // written as prose, repeated thirty times, with nothing lining up to compare.
+  const sug = read("lib/suggestSetup.ts");
+  ok("the row's facts are structured, not a sentence",
+     /label: \{[\s\S]{0,500}separation: number;/.test(sug)
+       && /label: \{\n\s*loop: barLabel,/.test(sug),
+     "a prose `why` string cannot be laid out in columns");
+  ok("rows are laid out as columns",
+     /grid-cols-\[4\.5rem_4rem_1fr_auto\]/.test(transport));
+  ok("and grouped under the tempo anchor",
+     /suggestions\[i - 1\]\.label\.tempoGroup !== c\.label\.tempoGroup/.test(transport),
+     "the biggest decision a candidate makes, so you can skip whole blocks instead of reading every row");
+  ok("separation is shown as a meter, not only a number",
+     /"▓"\.repeat\(filled\)/.test(transport) && /\{pct\}%/.test(transport),
+     "a bar reads at a glance; a percentage has to be compared row by row — keep both");
+  ok("the columns are headed",
+     /<span>loop<\/span>/.test(transport) && /<span>key anchor<\/span>/.test(transport)
+       && />clarity<\/span>/.test(transport) && />character<\/span>/.test(transport),
+     "three unlabelled values and a bar is not readable, however well it lines up");
+  ok("the meter is called clarity, not spectral separation",
+     /Clarity is how\n\s*much of the frequency range each stem has to itself/.test(transport),
+     "the jargon sent the reader to a footnote to find out what 74% meant");
+}
+
+section("12al. the loop search must not pick silence, or a two-bar stub");
+{
+  // Both were real and both were systematic. An empty passage won TWICE: two sparse hits
+  // are perfectly evenly spaced, and a section with no energy barely overlaps anything in
+  // the spectrum, so it scored top on clarity as well. And nothing in the score preferred
+  // length, while a short window is inherently easier to be even over — so two bars beat
+  // eight every single time, which kills the dynamics the loop is supposed to carry.
+  const sug = read("lib/suggestSetup.ts");
+  ok("the playing level is a percentile, not a mean",
+     /const loud = sorted\[Math\.min\(sorted\.length - 1, Math\.floor\(sorted\.length \* 0\.8\)\)\] \|\| 0;/.test(sug),
+     "a stem that is half silence has a mean halfway to zero, so a gate set as a fraction "
+     + "of it waves through windows that are themselves half dead");
+  ok("the window is judged by its MEDIAN moment and its dead fraction",
+     /if \(median < MIN_MEDIAN\) continue;/.test(sug) && /if \(dead > MAX_DEAD\) continue;/.test(sug),
+     "a window that is half groove and half silence has a healthy mean and a median down "
+     + "in the silence — that is the window that kept getting picked");
+  ok("loud beats busy beats steady, in that order",
+     /const score = energy \* 3 \+ density \* 2 \+ evenness;/.test(sug),
+     "steadiness used to outweigh everything by two to one, and nothing is steadier than "
+     + "near-silence: eight lonely hits score a flat 1.0 where a real groove scores 0.6");
+  ok("the hit requirement scales with length",
+     /if \(useHits && inWin\.length < bars \* 2\) continue;/.test(sug),
+     "two hits in the window let an eight-bar stretch of near-silence clear the same bar as a busy one");
+  ok("a stem with no hits is a pad, not a failure",
+     /const useHits = hits\.length >= 8;/.test(sug),
+     "the right loop for a pad is simply its loudest stretch — hits should drop out of the "
+     + "score rather than disqualify it");
+  ok("nothing usable means nothing offered, not the intro",
+     /if \(scored\.length === 0\) return \[\];/.test(sug),
+     "falling back to bar 0 hands back the intro — the exact empty section the gate rejected");
+  ok("loop length is chosen in SECONDS, not bars",
+     /const MIN_LOOP_SEC = 10;/.test(sug) && /const MAX_LOOP_SEC = 30;/.test(sug)
+       && /len >= MIN_LOOP_SEC && len <= MAX_LOOP_SEC/.test(sug),
+     "a fixed 2-8 bar ladder is 4.6-18s at 105bpm and 2.7-11s at 175 — the same setting "
+     + "gave a dub loop on one stem and a one-bar stutter on another");
+  ok("and never swallows the whole stem",
+     /const cap = durationSec \* 0\.67;/.test(sug),
+     "a loop that is nearly the whole file is not a loop, it is playback");
+  ok("the frame profile is memoised per buffer",
+     /const frameCache = new WeakMap<AudioBuffer/.test(sug),
+     "every bar length re-scans the same stem; without this the search reads it nine times");
+  ok("the key anchor is reset to its own pitch",
+     /const reset = \{ pitch: 0, linkPitch: true \};/.test(multiPage),
+     "with Link off pitch multiplies playback RATE, and matching copies the anchor's own "
+     + "pitch to every slave — an anchor sitting at +24 handed the whole rack 4x speed");
+}
+
+section("12am. a suggestion decides the tempo relation, and says so");
+{
+  // The reported symptom was "it is always super fast, like chipmunks", and it was not the
+  // ranking: Suggest set loops and anchors and said NOTHING about tempoRelation, so Match
+  // honoured whatever was stored on the slot from an earlier session. A stale "4x faster"
+  // rode through every suggestion untouched, which is also why re-picking never fixed it.
+  const sug = read("lib/suggestSetup.ts");
+  ok("the candidate carries a relation per slot",
+     /relations: Map<string, number>;/.test(sug) && /const relations = new Map<string, number>\(\);/.test(sug));
+  ok("absent means automatic, not untouched",
+     /const want = c\.relations\.get\(x\.slot\.id\);[\s\S]{0,120}x\.tempoRelation === want \? x : \{ \.\.\.x, tempoRelation: want \}/.test(multiPage),
+     "leaving a slot alone is what let a previous session's relation survive the suggestion");
+  ok("and it is written BEFORE matching",
+     /tempoRelation: want[\s\S]{0,2200}await handleLockAll\(\);/.test(multiPage),
+     "matching reads the relation off the entry; writing it afterwards changes a label and "
+     + "nothing a listener can hear");
+  ok("the delay grid follows the relation the flavour chose",
+     /const relation = relations\.get\(s\.id\)\n?\s*\?\? \(s\.id === anchor\.id \? 1 : autoTempoRelation/.test(sug),
+     "a stem put at half speed has half speed's beat — locking its echo to the anchor's "
+     + "would put the repeats between its own hits");
+  ok("a delay shorter than a quarter beat is a flam, not an echo",
+     /const MIN_DELAY_BEATS = 0\.25;/.test(sug));
+}
+
+section("12an. flavours: why two suggestions sound different");
+{
+  // Every candidate used to set the same longest-available delay and no tone at all, so
+  // thirty rows differed only in which stem anchored what and where a loop started — real
+  // on paper, nearly inaudible in the room. "Every suggestion sounds the same almost."
+  const sug = read("lib/suggestSetup.ts");
+  ok("there is a flavour table and it is searched",
+     /const FLAVOURS: Flavour\[\] = \[/.test(sug) && /for \(const flavour of FLAVOURS\)/.test(sug));
+  ok("a flavour writes tone, not just structure",
+     /tone: SuggestEffects;/.test(sug) && /effects\.set\(s\.id, flavour\.tone\);/.test(sug),
+     "reverb and echo are what a listener hears first; a suggestion that sets neither "
+     + "cannot sound different from the one above it");
+  ok("and the tone reaches the slot",
+     /const tone = c\.effects\.get\(id\);/.test(multiPage) && /\.\.\.\(tone \?\? \{\}\)/.test(multiPage));
+  ok("half and double speed land on the LEAST percussive stem",
+     /function pulseRank\(/.test(sug)
+       && /others\.reduce\(\(a, b\) => \(pulseRank\(b\.stemName\) < pulseRank\(a\.stemName\) \? b : a\)\)/.test(sug),
+     "dragging a vocal or a pad behind the beat is the dub move; doing it to the bass just "
+     + "sounds broken against the drums");
+  ok("phase is applied as a DIFFERENCE, after matching",
+     /multiEngine\.nudgeSlot\(e\.slot\.id, \(want - have\) \* barSec\);/.test(multiPage),
+     "the offset lives in the playhead (invariant 20) and is measured in the anchor's bar, "
+     + "which only exists once matching has run");
+  ok("a slot the candidate does not phase is reset, not left",
+     /const want = c\.phases\.get\(e\.slot\.id\) \?\? 0;/.test(multiPage),
+     "otherwise the previous suggestion's offbeat survives into the next suggestion");
+  ok("one idea may not fill the list",
+     /const MAX_PER_IDEA = 2;/.test(sug) && /if \(seen >= MAX_PER_IDEA\) continue;/.test(sug),
+     "sorting by score alone put a dozen variants of one anchor-and-flavour at the top and "
+     + "pushed the genuinely different ones off the bottom");
+  ok("the row names the character",
+     /flavour: string;/.test(sug) && /\{c\.label\.flavour\}/.test(transport),
+     "a difference you can hear but cannot see is indistinguishable from no difference");
+  ok("everything a suggestion wrote is persisted",
+     /for \(const e of entriesRef\.current\) \{\n\s*persistMatchedState\(e, e\.isMatched \?\? false, e\.matchedBasePitch \?\? 0\);/.test(multiPage),
+     "matching persists the slots it stretches; loops, tone and phase have no other writer "
+     + "on this path and would vanish on refresh");
+}
+
+section("12ao. a saved version keeps what the suggestion said");
+{
+  ok("the description is stored with the name",
+     /from\?: \{\n\s*flavour: string;/.test(settings)
+       && /\.\.\.\(applied \? \{ from: \{ \.\.\.applied\.label \} \} : \{\}\)/.test(multiPage),
+     "\"v3\" six sessions later says nothing, and all four facts were on screen when it was saved");
+  ok("and shown on the saved row",
+     /\{v\.from\.flavour\} · \{v\.from\.loop\}/.test(transport));
+  ok("the version saves the live stretch and relation, not the slot's stale copy",
+     /slots: entriesRef\.current\.map\(\(e\) => \(\{\n\s*\.\.\.e\.slot,\n\s*stretch: e\.stretch,\n\s*tempoRelation: e\.tempoRelation,/.test(multiPage),
+     "both live on the ENTRY — spreading the slot alone saved a version that restored at "
+     + "the wrong tempo");
+}
+
+section("12ap. a brick wall between the mix and the speakers");
+{
+  // Five stems summing, plus Grit's +9dB net at full, go past 0dBFS on their own, and the
+  // master was a bare Volume straight to the destination. That arrives as hard digital
+  // clipping in the room and in every take, with nothing on screen to say why.
+  const recorder = read("audio/multiRecorder.ts");
+  ok("the live master ends in a limiter",
+     /this\.masterLimiter = new Tone\.Limiter\(MASTER_CEILING_DB\)\.toDestination\(\);/.test(engine)
+       && /this\.master = new Tone\.Volume\(this\.masterSettings\.gain\)\.connect\(this\.masterLimiter\);/.test(engine));
+  ok("and so does the export, at the same ceiling",
+     /new Tone\.Limiter\(MASTER_CEILING_DB\)\.toDestination\(\)/.test(render)
+       && /import \{ MASTER_CEILING_DB \} from "\.\/multiEngine";/.test(render),
+     "an export that clips where playback does not is not the mix you approved (invariant 2)");
+  ok("the recorder taps POST-limiter",
+     /multiEngine\.getRecordTap\(\)/.test(recorder) && !/getMasterNode\(\)/.test(recorder),
+     "tapping the master Volume records before the limiter, so a loud take clips in the "
+     + "file while the room stays clean — the one failure nothing on screen would explain");
+  ok("it is disposed with the master",
+     /this\.masterLimiter\.dispose\(\); this\.masterLimiter = null;/.test(engine),
+     "a leaked limiter keeps a live node on the destination after teardown");
+  ok("it has no knob",
+     !/masterCeiling|limiterThreshold/.test(read("components/multi/MultiTransport.tsx")),
+     "it is a safety net, not a sound — a control for it would invite using it as one");
+}
+
 section("13. expensive analysis is memoised");
 {
   ok("estimateBpm results are cached", /WeakMap/.test(multiPage) && /sourceBpm/.test(multiPage),

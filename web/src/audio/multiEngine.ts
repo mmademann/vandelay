@@ -9,6 +9,14 @@ import { createMultiEffectsChain, applyMultiEffectsChain, type MultiEffectsChain
 import type { MultiSlot, MultiMasterSettings, ThrowSettings } from "../lib/multiSettings";
 import { DEFAULT_THROW_SETTINGS } from "../lib/multiSettings";
 
+/**
+ * Ceiling on the master bus, in dB.
+ *
+ * Duplicated in renderMulti.ts, like every other number the two share — an export that
+ * limits at a different point from playback is not the same recording (invariant 2).
+ */
+export const MASTER_CEILING_DB = -0.5;
+
 function slotPlaybackRate(slot: MultiSlot, masterSpeed = 1): number {
   const base = slot.linkPitch ? slot.speed : slot.speed * Math.pow(2, slot.pitch / 12);
   // Scaling every slot by the same factor shifts them all by the same interval, so the
@@ -68,6 +76,7 @@ interface RuntimeSlot extends MultiSlot {
 class MultiEngine {
   private slots = new Map<string, RuntimeSlot>();
   private master: Tone.Volume | null = null;
+  private masterLimiter: Tone.Limiter | null = null;
   private masterSettings: MultiMasterSettings = {
     gain: 0,
     loopLengthOverride: null,
@@ -132,6 +141,14 @@ class MultiEngine {
   /** Master output node — null until the first slot is added. Used by the recorder to tap output. */
   getMasterNode(): Tone.Volume | null { return this.master; }
 
+  /**
+   * The last node before the speakers — what a recording must tap.
+   *
+   * Tapping the master Volume instead records PRE-limiter, so a loud take would clip in the
+   * file while playback in the room stayed clean, and nothing on screen would say why.
+   */
+  getRecordTap(): Tone.ToneAudioNode | null { return this.masterLimiter; }
+
   /** Fade length in seconds, so the UI can label it without keeping its own copy. */
   fadeSeconds(): number { return MultiEngine.FADE_SEC; }
 
@@ -151,7 +168,12 @@ class MultiEngine {
     if (this.slots.has(slot.id)) return;
 
     if (!this.master) {
-      this.master = new Tone.Volume(this.masterSettings.gain).toDestination();
+      // Brick wall between the mix and the speakers. Five stems summing, plus Grit's +9dB
+      // net at full, will push past 0dBFS on their own; without this that arrives as hard
+      // digital clipping in the room AND in every take. It is not a sound and has no knob —
+      // at ordinary levels nothing touches it.
+      this.masterLimiter = new Tone.Limiter(MASTER_CEILING_DB).toDestination();
+      this.master = new Tone.Volume(this.masterSettings.gain).connect(this.masterLimiter);
     }
 
     const volume = new Tone.Volume(slot.gain).connect(this.master);
@@ -940,6 +962,7 @@ class MultiEngine {
     }
     this.slots.clear();
     if (this.master) { this.master.disconnect(); this.master.dispose(); this.master = null; }
+    if (this.masterLimiter) { this.masterLimiter.disconnect(); this.masterLimiter.dispose(); this.masterLimiter = null; }
     this.running = false;
   }
 

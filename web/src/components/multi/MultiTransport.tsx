@@ -165,6 +165,30 @@ interface Props {
   onMatchAll: () => void;
   onTempoMatchAll: () => void;
   onLockAll: () => void;
+  /** Compute the ranking WITHOUT applying anything — opening the panel should not commit. */
+  onComputeSuggestions: () => void;
+  onPickSuggestion: (index: number) => void;
+  suggestions: {
+    why: string;
+    score: number;
+    label: { loop: string; tempoGroup: string; keyAnchor: string; separation: number; flavour: string };
+  }[];
+  suggestIndex: number | null;
+  /** Undefined until a suggestion has been applied — there is nothing to undo before that. */
+  onUndoSuggest?: () => void;
+  suggestNote: string | null;
+  suggestKeepLoops: boolean;
+  onToggleKeepLoops: () => void;
+  versions: {
+    id: string;
+    name: string;
+    savedAt: number;
+    /** What the suggestion row said, kept alongside the name. Absent for a hand-built rack. */
+    from?: { flavour: string; loop: string; tempoGroup: string; keyAnchor: string; separation: number };
+  }[];
+  onSaveVersion: (name: string) => void;
+  onRestoreVersion: (id: string) => void;
+  onDeleteVersion: (id: string) => void;
   /** Any slot still decoding. Matching now would quantize against a half-loaded rack. */
   slotsLoading: boolean;
   gridNote: string | null;
@@ -187,7 +211,7 @@ function buildExportFilename(activeSessionName: string | null, slotTitles: strin
   return `${unique.slice(0, 2).join(" × ")} +${unique.length - 2}`;
 }
 
-export function MultiTransport({ masterSettings, slotCount, referenceSlotId, activeSessionName, slotTitles, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, onMasterSpeedChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll, onTempoMatchAll, onLockAll, slotsLoading, gridNote, onDismissGridNote, staleTempoCount, onRelockStale, autoRelock, onToggleAutoRelock, tempoAnchorId, onRandomSession, randomDisabled }: Props) {
+export function MultiTransport({ masterSettings, slotCount, referenceSlotId, activeSessionName, slotTitles, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, onMasterSpeedChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll, onTempoMatchAll, onLockAll, onComputeSuggestions, onPickSuggestion, suggestions, suggestIndex, onUndoSuggest, suggestNote, suggestKeepLoops, onToggleKeepLoops, versions, onSaveVersion, onRestoreVersion, onDeleteVersion, slotsLoading, gridNote, onDismissGridNote, staleTempoCount, onRelockStale, autoRelock, onToggleAutoRelock, tempoAnchorId, onRandomSession, randomDisabled }: Props) {
   const [loopCount, setLoopCount] = useState(1);
   const [recording, setRecording] = useState(false);
   const [recElapsed, setRecElapsed] = useState(0);
@@ -199,6 +223,22 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
   /** Encoded take held pending a filename — set on stop, cleared on save or discard. */
   const [pendingTake, setPendingTake] = useState<{ blob: Blob; ext: string; seconds: number } | null>(null);
   const [takeName, setTakeName] = useState("");
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const [versionName, setVersionName] = useState("");
+  const suggestBtnRef = useRef<HTMLButtonElement>(null);
+  const suggestPanelRef = useRef<HTMLDivElement>(null);
+
+  // Close on an outside click, like the other floating panels here.
+  useEffect(() => {
+    if (!suggestOpen) return;
+    function onDown(e: MouseEvent) {
+      const t = e.target as Node;
+      if (suggestPanelRef.current?.contains(t) || suggestBtnRef.current?.contains(t)) return;
+      setSuggestOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [suggestOpen]);
   /** Filename of the last saved take — drives the transient "saved" confirmation. */
   const [savedTake, setSavedTake] = useState<string | null>(null);
   const [format, setFormat] = useState<ExportFormat>("wav");
@@ -379,8 +419,19 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
   }
 
   return (
-    <div className="relative">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+    // `display: contents` — this div draws nothing and every control below becomes a direct
+    // flex item of the header row, so the π link, the session chip and all of these flow as
+    // ONE line and wrap one button at a time.
+    //
+    // Any real wrapper here is an atomic box: the moment its contents do not fit, the whole
+    // box drops to a line of its own and leaves a hole at the end of the line above. That is
+    // what stranded Export, Random and Throw together on a second row. For the same reason
+    // the buttons below are NOT grouped by subject — grouping is what caused it.
+    //
+    // The price is that a panel can no longer be positioned against this element, since it
+    // has no box. Each button that owns a panel carries its own `relative` wrapper, which
+    // also drops the panel directly under its own button instead of under the whole bar.
+    <div className="contents">
         {/* Play All / Pause All + Rewind All */}
         {isPlaying && slotCount > 0 ? (
           /* Split control: left half stops at once, right half fades all slots out over 10s. */
@@ -561,6 +612,188 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
           </div>
         )}
 
+        {/* One control for the whole feature.
+            It started as three loose buttons — Suggest, a keep-loops toggle, an undo — which
+            sprawled across the transport and said nothing about how they related. They are
+            all the same idea: a complete rack state. A suggestion is one the app proposed,
+            a version is one you kept, and either is applied the same way. So they live in
+            one list, and opening it no longer commits you to anything. */}
+        {slotCount >= 2 && (
+          <div className="relative shrink-0">
+            <button
+              ref={suggestBtnRef}
+              type="button"
+              onClick={() => {
+                const next = !suggestOpen;
+                setSuggestOpen(next);
+                if (next) onComputeSuggestions();
+              }}
+              disabled={slotsLoading}
+              title="Propose a whole rack — loops, both anchors, matching and locked delays — and keep the ones you like"
+              className={`shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition disabled:opacity-30 ${
+                suggestOpen
+                  ? "bg-accent/20 text-accent ring-1 ring-accent/40"
+                  : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted"
+              }`}
+            >
+              ✨ Suggest
+              {suggestNote && (
+                <span
+                  title={suggestNote}
+                  className="ml-1.5 inline-block max-w-[11rem] truncate align-middle rounded bg-foreground/10 px-1.5 py-0.5 text-[9px] font-medium normal-case tracking-normal text-foreground/70"
+                >
+                  {suggestNote}
+                </span>
+              )}
+            </button>
+
+            {suggestOpen && (
+              <div
+                ref={suggestPanelRef}
+                className="absolute left-0 top-full mt-1 z-50 flex w-[28rem] max-h-[min(70vh,34rem)] flex-col gap-2 rounded-md border border-border/40 bg-zinc-900/95 p-3 shadow-xl ring-1 ring-border/30 backdrop-blur-sm"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-semibold uppercase tracking-widest text-foreground/40">Suggestions</span>
+                  <button type="button" onClick={() => setSuggestOpen(false)}
+                    className="px-1 text-sm leading-none text-foreground/30 hover:text-foreground/70">✕</button>
+                </div>
+
+                {/* Columns, not sentences. Thirty rows of "4 bar · tempo drums 129bpm · key
+                    other · 68% separation" is four facts in prose repeated thirty times, and
+                    nothing lines up to compare. Grouped under the tempo anchor because that
+                    is the biggest decision a candidate makes — it lets you skip whole blocks
+                    rather than reading every row. */}
+                {/* Column headers. Without them the row was three unlabelled values and a
+                    bar, and "74%" of what is not a question the reader should have to carry
+                    down to a footnote. */}
+                {suggestions.length > 0 && (
+                  <div className="grid grid-cols-[4.5rem_4rem_1fr_auto] gap-2 border-b border-border/30 px-2 pb-1 text-[9px] font-semibold uppercase tracking-widest text-foreground/30">
+                    {/* Character leads. It is the column that says how two rows differ to
+                        the EAR — everything beside it describes structure, and a list sorted
+                        by structure alone read as thirty copies of one suggestion. */}
+                    <span title="How the rack is dressed: how much echo and space, whether a stem runs at half or double speed or sits off the beat.">character</span>
+                    <span>loop</span>
+                    <span>key anchor</span>
+                    <span title="How much of the frequency range each stem has to itself. Higher means they stay out of each other's way, so you hear all of them.">clarity</span>
+                  </div>
+                )}
+                <div className="-mr-1 flex min-h-0 flex-col overflow-y-auto pr-1">
+                  {suggestions.length === 0 && (
+                    <div className="py-2 text-xs text-foreground/30">Nothing to propose yet.</div>
+                  )}
+                  {suggestions.map((c, i) => {
+                    const newGroup = i === 0 || suggestions[i - 1].label.tempoGroup !== c.label.tempoGroup;
+                    const pct = Math.round(c.label.separation * 100);
+                    const filled = Math.round(c.label.separation * 8);
+                    return (
+                      <div key={c.why}>
+                        {newGroup && (
+                          <div className="mt-2 flex items-center gap-2 px-1 pb-1 first:mt-0">
+                            <span className="text-[9px] font-semibold uppercase tracking-widest text-foreground/35">
+                              tempo {c.label.tempoGroup}
+                            </span>
+                            <span className="h-px flex-1 bg-border/30" />
+                          </div>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => onPickSuggestion(i)}
+                          className={`grid w-full grid-cols-[4.5rem_4rem_1fr_auto] items-center gap-2 rounded px-2 py-1 text-left text-xs transition ${
+                            suggestIndex === i
+                              ? "bg-accent/15 text-accent ring-1 ring-accent/30"
+                              : "text-foreground/60 hover:bg-muted/60 hover:text-foreground"
+                          }`}
+                        >
+                          <span className="truncate font-medium">{c.label.flavour}</span>
+                          <span className="tabular-nums">{c.label.loop}</span>
+                          <span className="truncate text-foreground/40">{c.label.keyAnchor}</span>
+                          {/* A bar reads at a glance; a percentage has to be compared row by
+                              row. The number stays for when you want to be exact. */}
+                          <span className="flex items-center gap-1.5 tabular-nums text-foreground/40">
+                            <span className="tracking-[-0.1em] text-accent/60">
+                              {"▓".repeat(filled)}
+                              <span className="text-foreground/15">{"░".repeat(8 - filled)}</span>
+                            </span>
+                            {pct}%
+                          </span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Ranks fit, not taste. Saying so once, here, is better than a button name
+                    that overclaims every time you look at it. */}
+                <p className="border-t border-border/30 pt-2 text-[10px] leading-snug text-foreground/30">
+                  Ranked by fit — key distance, stretch cost and loop steadiness. Character is
+                  the echo, space and timing each one dresses the rack in. Clarity is how
+                  much of the frequency range each stem has to itself: higher means less mud.
+                  Whether it sounds good is your call.
+                </p>
+
+                <label className="flex cursor-pointer items-center gap-2 text-xs text-foreground/60">
+                  <input type="checkbox" checked={suggestKeepLoops} onChange={onToggleKeepLoops}
+                    className="accent-current" />
+                  Use my existing loop sections
+                </label>
+
+                <div className="flex flex-col gap-1 border-t border-border/30 pt-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-widest text-foreground/40">Saved versions</span>
+                  {versions.length === 0 && (
+                    <div className="py-1 text-xs text-foreground/30">None saved yet.</div>
+                  )}
+                  {/* A saved version keeps the description the suggestion row carried, not
+                      just the name it was given. "v3" six sessions later says nothing, and
+                      all four facts were on screen at the moment it was saved. */}
+                  {versions.map((v) => (
+                    <div key={v.id} className="group flex items-start gap-2 rounded px-2 py-1 hover:bg-muted/50">
+                      <button type="button" onClick={() => onRestoreVersion(v.id)}
+                        className="min-w-0 flex-1 text-left text-xs text-foreground/60 hover:text-foreground">
+                        <span className="block truncate">{v.name}</span>
+                        {v.from && (
+                          <span className="mt-0.5 block truncate text-[10px] text-foreground/30">
+                            {v.from.flavour} · {v.from.loop} · tempo {v.from.tempoGroup} · key {v.from.keyAnchor}
+                            {" · "}{Math.round(v.from.separation * 100)}% clarity
+                          </span>
+                        )}
+                      </button>
+                      <button type="button" onClick={() => onDeleteVersion(v.id)}
+                        title="Delete this version"
+                        className="text-xs leading-none text-foreground/25 opacity-0 transition group-hover:opacity-100 hover:text-red-400">🗑</button>
+                    </div>
+                  ))}
+                  <form
+                    onSubmit={(e) => { e.preventDefault(); onSaveVersion(versionName); setVersionName(""); }}
+                    className="flex items-center gap-1.5 pt-1"
+                  >
+                    <input
+                      type="text"
+                      value={versionName}
+                      onChange={(e) => setVersionName(e.target.value)}
+                      placeholder="Save this setup as…"
+                      className="min-w-0 flex-1 rounded border border-border bg-muted/30 px-2 py-1 text-xs outline-none focus:border-accent/60 placeholder:text-foreground/30"
+                    />
+                    {versionName.trim() && (
+                      <button type="submit"
+                        className="rounded bg-accent/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-accent">Save</button>
+                    )}
+                  </form>
+                </div>
+
+                {onUndoSuggest && (
+                  <button
+                    type="button"
+                    onClick={onUndoSuggest}
+                    className="rounded border border-border/40 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-foreground/40 transition hover:border-red-500/30 hover:text-red-400"
+                  >
+                    ↺ Back to where I started
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Everything, in the one order that works: keys first, then tempos.
             Match Keys writes Speed and tempo matching reads it, so the reverse order leaves
             every slave stale. Set the two anchors, press this, done. The two buttons beside
@@ -577,7 +810,7 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
                 ? "Waiting for every slot to finish loading"
                 : "Match keys, then match tempos — the order that holds. Runs whichever anchors are set."}
           >
-            ⚓ Lock All
+            ⚓ Match All
           </button>
         )}
 
@@ -624,7 +857,7 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
           </button>
         )}
 
-        {/* Re-lock: only the slots that drifted, unlike Match Tempos which rebuilds all of
+        {/* Re-match: only the slots that drifted, unlike Match Tempos which rebuilds all of
             them. Appears only when something is actually stale so it is not one more
             permanent button competing for attention. */}
         {staleTempoCount > 0 && (
@@ -634,7 +867,7 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
             className="shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-amber-500/20 text-amber-300 ring-1 ring-amber-400/40 transition hover:bg-amber-500/30 animate-pulse"
             title={`${staleTempoCount} slot${staleTempoCount === 1 ? "" : "s"} drifted from the tempo anchor — re-stretch just those`}
           >
-            ↻ Re-lock {staleTempoCount}
+            ↻ Re-match {staleTempoCount}
           </button>
         )}
 
@@ -649,31 +882,120 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
                 : "bg-muted/80 text-foreground/40 hover:text-foreground/70",
             )}
             title={autoRelock
-              ? "Auto re-lock is ON — slots re-stretch themselves shortly after the anchor's tempo changes"
-              : "Auto re-lock is OFF — slots go amber when they drift and wait for you to re-lock"}
+              ? "Auto-match is ON — slots re-match themselves shortly after the anchor's tempo changes"
+              : "Auto-match is OFF — slots go amber when they drift and wait for you to re-match"}
           >
-            auto re-lock {autoRelock ? "on" : "off"}
+            auto-match {autoRelock ? "on" : "off"}
           </button>
         )}
 
-
-
-
-        {/* Export dropdown */}
+        {/* Export, Random and Throw are NOT wrapped in a group. Grouping them is what put
+            all three on a second row the moment the first one would not fit: a wrapper is
+            one atomic flex item. Flat, they wrap one at a time and fill the line. */}
         {slotCount > 0 && (
-          <button
-            ref={exportBtnRef}
-            type="button"
-            onClick={() => setExportPanelOpen((o) => !o)}
-            className={cn(
-              "shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
-              exportPanelOpen
-                ? "bg-accent/20 text-accent ring-1 ring-accent/40"
-                : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted",
+          <div className="relative shrink-0">
+            <button
+              ref={exportBtnRef}
+              type="button"
+              onClick={() => setExportPanelOpen((o) => !o)}
+              className={cn(
+                "shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
+                exportPanelOpen
+                  ? "bg-accent/20 text-accent ring-1 ring-accent/40"
+                  : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted",
+              )}
+            >
+              ↓ Export
+            </button>
+
+            {/* Export floating panel */}
+            {exportPanelOpen && (
+              <div
+                ref={exportPanelRef}
+                className="absolute right-0 top-full mt-1 z-50 w-72 rounded-md border border-border/40 bg-zinc-900/95 shadow-xl backdrop-blur-sm ring-1 ring-border/30 p-4 flex flex-col gap-3"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-semibold uppercase tracking-widest text-foreground/40">Export</span>
+                  <button type="button" onClick={() => setExportPanelOpen(false)}
+                    className="text-foreground/30 hover:text-foreground/70 text-sm leading-none px-1">✕</button>
+                </div>
+
+                {/* Filename */}
+                <div className="flex flex-col gap-1">
+                  <span className="text-[10px] uppercase tracking-wide text-foreground/40">Filename</span>
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="text"
+                      value={filenameDraft}
+                      onChange={(e) => setFilenameDraft(e.target.value)}
+                      placeholder={buildExportFilename(activeSessionName, slotTitles)}
+                      className="min-w-0 flex-1 rounded border border-border bg-muted/30 px-2 py-1 text-xs outline-none focus:border-accent/60 placeholder:text-foreground/30"
+                    />
+                    <span className="shrink-0 text-[10px] text-foreground/35">.{exportExtension(format)}</span>
+                  </div>
+                </div>
+
+                {/* Loops */}
+                <div className="flex items-center justify-between">
+                  <label className="text-xs text-foreground/50">Loops</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number" min={1} max={500} value={loopCount}
+                      onChange={(e) => setLoopCount(Math.max(1, Math.min(500, Number(e.target.value) || 1)))}
+                      className="w-16 rounded border border-border bg-muted/50 px-2 py-1 text-xs outline-none focus:border-accent/60"
+                    />
+                    {totalSec > 0 && (
+                      <span className="text-[10px] text-foreground/40">≈ {formatDuration(totalSec)}</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Format */}
+                <div className="flex items-center justify-between">
+                  <label className="text-xs text-foreground/50">Format</label>
+                  <select
+                    value={format}
+                    onChange={(e) => setFormat(e.target.value as ExportFormat)}
+                    className="rounded border border-border bg-muted/50 px-2 py-1 text-xs text-foreground outline-none focus:border-accent/60 [color-scheme:dark]"
+                  >
+                    <option value="wav">WAV</option>
+                    <option value="mp3">MP3</option>
+                  </select>
+                </div>
+
+                {/* Quality */}
+                <div className="flex items-center justify-between">
+                  <label className="text-xs text-foreground/50">Quality</label>
+                  <select
+                    value={quality}
+                    onChange={(e) => setQuality(e.target.value as ExportQuality)}
+                    className="rounded border border-border bg-muted/50 px-2 py-1 text-xs text-foreground outline-none focus:border-accent/60 [color-scheme:dark]"
+                  >
+                    {(Object.entries(EXPORT_PRESETS) as [ExportQuality, typeof preset][]).map(([key, p]) => (
+                      <option key={key} value={key}>
+                        {p.label} ({p.sampleRate / 1000}k{p.channels === 1 ? " mono" : ""})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="text-[10px] text-foreground/30">
+                  ≈ {formatFileSize(estBytes)}{format === "mp3" ? ` · ${preset.mp3Kbps}kbps` : ""}
+                </div>
+
+                {exportError && <span className="text-xs text-red-400">{exportError}</span>}
+
+                <button
+                  type="button"
+                  onClick={handleExport}
+                  disabled={exporting || masterLoopLength <= 0 || slotCount === 0}
+                  className="rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-accent/20 text-accent transition hover:bg-accent/30 disabled:opacity-40"
+                >
+                  {exporting ? "Exporting…" : `Export ${format.toUpperCase()}`}
+                </button>
+              </div>
             )}
-          >
-            ↓ Export
-          </button>
+          </div>
         )}
 
         {/* Random session */}
@@ -687,135 +1009,46 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
           ⚄ Random
         </button>
 
-        {/* Throw character panel toggle */}
         {slotCount > 0 && (
-          <button
-            ref={throwBtnRef}
-            type="button"
-            onClick={() => setThrowPanelOpen((o) => !o)}
-            className={cn(
-              "shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
-              throwPanelOpen
-                ? "bg-teal-500/20 text-teal-400 ring-1 ring-teal-400/40"
-                : "bg-muted/80 text-foreground/50 hover:text-teal-400 hover:bg-muted",
-            )}
-            title="Configure Throw character — delay time, feedback, spring reverb"
-          >
-            ↯ Throw
-          </button>
-        )}
-
-      </div>
-
-      {/* Throw character floating overlay */}
-      {throwPanelOpen && (
-        <div
-          ref={throwPanelRef}
-          className="absolute left-0 top-full mt-1 z-50 w-80 rounded-md border border-teal-500/20 bg-zinc-900/95 shadow-xl backdrop-blur-sm ring-1 ring-border/30"
-        >
-          <div className="flex items-center justify-between px-4 pt-3 pb-0">
-            <span className="text-[10px] font-semibold uppercase tracking-widest text-teal-400">Throw Character</span>
-            <button type="button" onClick={() => setThrowPanelOpen(false)}
-              className="text-foreground/30 hover:text-foreground/70 text-sm leading-none px-1">✕</button>
-          </div>
-          <ThrowPanel
-            settings={masterSettings.throwSettings}
-            onChange={handleThrowChange}
-            presets={throwPresets}
-            onSavePreset={onSaveThrowPreset}
-            onDeletePreset={onDeleteThrowPreset}
-            onApplyPreset={onApplyThrowPreset}
-          />
-        </div>
-      )}
-
-      {/* Export floating panel */}
-      {exportPanelOpen && (
-        <div
-          ref={exportPanelRef}
-          className="absolute right-0 top-full mt-1 z-50 w-72 rounded-md border border-border/40 bg-zinc-900/95 shadow-xl backdrop-blur-sm ring-1 ring-border/30 p-4 flex flex-col gap-3"
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-semibold uppercase tracking-widest text-foreground/40">Export</span>
-            <button type="button" onClick={() => setExportPanelOpen(false)}
-              className="text-foreground/30 hover:text-foreground/70 text-sm leading-none px-1">✕</button>
-          </div>
-
-          {/* Filename */}
-          <div className="flex flex-col gap-1">
-            <span className="text-[10px] uppercase tracking-wide text-foreground/40">Filename</span>
-            <div className="flex items-center gap-1">
-              <input
-                type="text"
-                value={filenameDraft}
-                onChange={(e) => setFilenameDraft(e.target.value)}
-                placeholder={buildExportFilename(activeSessionName, slotTitles)}
-                className="min-w-0 flex-1 rounded border border-border bg-muted/30 px-2 py-1 text-xs outline-none focus:border-accent/60 placeholder:text-foreground/30"
-              />
-              <span className="shrink-0 text-[10px] text-foreground/35">.{exportExtension(format)}</span>
-            </div>
-          </div>
-
-          {/* Loops */}
-          <div className="flex items-center justify-between">
-            <label className="text-xs text-foreground/50">Loops</label>
-            <div className="flex items-center gap-2">
-              <input
-                type="number" min={1} max={500} value={loopCount}
-                onChange={(e) => setLoopCount(Math.max(1, Math.min(500, Number(e.target.value) || 1)))}
-                className="w-16 rounded border border-border bg-muted/50 px-2 py-1 text-xs outline-none focus:border-accent/60"
-              />
-              {totalSec > 0 && (
-                <span className="text-[10px] text-foreground/40">≈ {formatDuration(totalSec)}</span>
+          <div className="relative shrink-0">
+            <button
+              ref={throwBtnRef}
+              type="button"
+              onClick={() => setThrowPanelOpen((o) => !o)}
+              className={cn(
+                "shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
+                throwPanelOpen
+                  ? "bg-teal-500/20 text-teal-400 ring-1 ring-teal-400/40"
+                  : "bg-muted/80 text-foreground/50 hover:text-teal-400 hover:bg-muted",
               )}
-            </div>
-          </div>
-
-          {/* Format */}
-          <div className="flex items-center justify-between">
-            <label className="text-xs text-foreground/50">Format</label>
-            <select
-              value={format}
-              onChange={(e) => setFormat(e.target.value as ExportFormat)}
-              className="rounded border border-border bg-muted/50 px-2 py-1 text-xs text-foreground outline-none focus:border-accent/60 [color-scheme:dark]"
+              title="Configure Throw character — delay time, feedback, spring reverb"
             >
-              <option value="wav">WAV</option>
-              <option value="mp3">MP3</option>
-            </select>
+              ↯ Throw
+            </button>
+
+            {/* Throw character floating overlay */}
+            {throwPanelOpen && (
+              <div
+                ref={throwPanelRef}
+                className="absolute left-0 top-full mt-1 z-50 w-80 rounded-md border border-teal-500/20 bg-zinc-900/95 shadow-xl backdrop-blur-sm ring-1 ring-border/30"
+              >
+                <div className="flex items-center justify-between px-4 pt-3 pb-0">
+                  <span className="text-[10px] font-semibold uppercase tracking-widest text-teal-400">Throw Character</span>
+                  <button type="button" onClick={() => setThrowPanelOpen(false)}
+                    className="text-foreground/30 hover:text-foreground/70 text-sm leading-none px-1">✕</button>
+                </div>
+                <ThrowPanel
+                  settings={masterSettings.throwSettings}
+                  onChange={handleThrowChange}
+                  presets={throwPresets}
+                  onSavePreset={onSaveThrowPreset}
+                  onDeletePreset={onDeleteThrowPreset}
+                  onApplyPreset={onApplyThrowPreset}
+                />
+              </div>
+            )}
           </div>
-
-          {/* Quality */}
-          <div className="flex items-center justify-between">
-            <label className="text-xs text-foreground/50">Quality</label>
-            <select
-              value={quality}
-              onChange={(e) => setQuality(e.target.value as ExportQuality)}
-              className="rounded border border-border bg-muted/50 px-2 py-1 text-xs text-foreground outline-none focus:border-accent/60 [color-scheme:dark]"
-            >
-              {(Object.entries(EXPORT_PRESETS) as [ExportQuality, typeof preset][]).map(([key, p]) => (
-                <option key={key} value={key}>
-                  {p.label} ({p.sampleRate / 1000}k{p.channels === 1 ? " mono" : ""})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="text-[10px] text-foreground/30">
-            ≈ {formatFileSize(estBytes)}{format === "mp3" ? ` · ${preset.mp3Kbps}kbps` : ""}
-          </div>
-
-          {exportError && <span className="text-xs text-red-400">{exportError}</span>}
-
-          <button
-            type="button"
-            onClick={handleExport}
-            disabled={exporting || masterLoopLength <= 0 || slotCount === 0}
-            className="rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-accent/20 text-accent transition hover:bg-accent/30 disabled:opacity-40"
-          >
-            {exporting ? "Exporting…" : `Export ${format.toUpperCase()}`}
-          </button>
-        </div>
-      )}
+        )}
     </div>
   );
 }

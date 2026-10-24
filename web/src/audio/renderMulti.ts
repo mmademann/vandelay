@@ -3,6 +3,7 @@ import type { MultiSlot, MultiMasterSettings } from "../lib/multiSettings";
 import { encodeExport } from "./encodeExport";
 import { reverbExportTailSec } from "./reverbSlot";
 import { createOfflineMultiEqChain } from "./multiChain";
+import { MASTER_CEILING_DB } from "./multiEngine";
 import type { ExportEncodeOptions } from "./exportOptions";
 
 function slotPlaybackRate(slot: MultiSlot, masterSpeed = 1): number {
@@ -78,7 +79,10 @@ export async function renderMulti(opts: RenderMultiOptions): Promise<Blob> {
   );
 
   const rendered = await Tone.Offline(async ({ transport }) => {
-    const master = new Tone.Volume(masterSettings.gain).toDestination();
+    // Same brick wall as the live master, at the same ceiling — an export that clips where
+    // playback does not is not the mix you approved (invariant 2).
+    const masterLimiter = new Tone.Limiter(MASTER_CEILING_DB).toDestination();
+    const master = new Tone.Volume(masterSettings.gain).connect(masterLimiter);
 
     for (const slot of activeSlots) {
       const src = buffers.get(slot.id)!;

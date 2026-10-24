@@ -993,251 +993,260 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
             >⚓ Make Tempo Anchor</button>
           )}
 
-          {/* Tempo anchor — same state-driven shape as the key anchor, but drives
-              time stretch instead of speed/pitch, so both can be active on one slot. */}
-          <button
-            type="button"
-            onClick={isTempoAnchor || !hasTempoAnchor ? onSetTempoAnchor : onTempoMatch}
-            disabled={stretching || !buffer}
-            title={
-              isTempoAnchor
-                ? "This slot is the tempo anchor — click to unpin"
-                : !hasTempoAnchor
-                  ? "Set as the tempo anchor"
-                  : tempoStale
-                    ? "Out of sync with the tempo anchor — the anchor's tempo changed after this slot was matched. Click to re-match."
-                    : isTempoMatched
-                      ? `Tempo matched at ${tempoRelationLabel(effectiveRelation)} (${Math.round(stretch * 100)}% stretch) — click to re-match`
-                      : "Match to the tempo anchor (pitch unchanged)"
-            }
-            className={cn(
-              "shrink-0 rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition",
-              stretching && "opacity-60",
-              !buffer && "opacity-30 cursor-not-allowed",
-              isTempoAnchor
-                ? "border-orange-400/50 bg-orange-500/20 text-orange-300"
-                : tempoStale
-                  ? "border-amber-400/60 bg-amber-500/20 text-amber-300 animate-pulse"
-                  : isTempoMatched
-                    ? "border-orange-400/30 bg-orange-500/10 text-orange-300/70 hover:bg-orange-500/20 hover:text-orange-300"
-                    : "border-border/60 bg-muted/60 text-foreground/40 hover:border-orange-400/40 hover:text-orange-300",
-            )}
-          >
-            {stretching
-              ? "Stretching…"
-              : isTempoAnchor
-                ? "⚓ Tempo Anchor"
-                : !hasTempoAnchor
-                  ? "Set Tempo Anchor"
-                  : tempoStale
-                    ? "↻ Re-lock Tempo"
-                    : isTempoMatched
-                      ? effectiveRelation === 1
-                        ? "Tempo Matched \u21bb"
-                        : `Tempo ${tempoRelationLabel(effectiveRelation)} \u21bb`
-                      : "Match Tempo"}
-          </button>
-
-          {/* One tempo control: how fast this slot runs against the anchor, and — when it
-              applies — the delay that goes with it.
-
-              This was two adjacent dropdowns ("Tempo — change" and "Sweet spots") built from
-              the same seven-relation ladder, in the same orange, with the same "— change…"
-              title row. They read as duplicates because the only difference was invisible
-              with the list closed: one set the relation, the other set the relation AND a
-              delay. Merged, the delay is just another column on the row.
-
-              Rows are the full ladder, not only the ones with a delay, so no relation became
-              unreachable in the merge. ⚡ marks the rows that carry one. */}
-          {!isTempoAnchor && hasTempoAnchor && tempoRows.length > 0 && (
-            <select
-              // Deliberately parked on the placeholder, NOT on the current relation.
-              //
-              // A native select fires no change event when you pick the option already
-              // selected, so binding this to effectiveRelation made the row you are on
-              // unreachable: its delay was described in the list and there was no way to
-              // apply it. Parking on "" means every row is always selectable. Where you are
-              // is shown in the placeholder text and by a tick on the row itself, rather
-              // than by the browser's own selection mark.
-              value=""
-              disabled={stretching || !buffer}
-              onChange={(e) => {
-                // The title row. Number("") is 0, which would pin a relation of zero.
-                if (e.target.value === "") return;
-                const v = Number(e.target.value);
-                const row = tempoRows.find((r) => r.value === v);
-                // Choosing the recommended row means "stop pinning", not "pin this value",
-                // so a later anchor change is free to move it.
-                onTempoRelationChange(autoRelation !== undefined && v === autoRelation ? null : v);
-                // Always move the delay onto the row's pulse. This was once gated on "only
-                // if the delay is already within 5ms of a division", to protect a delay
-                // dialed by hand — but snapDelayToTempo returns the nearest division however
-                // far away it is, so in practice the delay is either off (0) or reads `free`
-                // and the gate declined every time. The feature did nothing. Writing it
-                // always costs one drag to undo, and the lit state already says when the
-                // relation and the delay are a matched pair.
-                if (row?.delaySec !== undefined) {
-                  // A delay time is inaudible on a silent delay, and both Delay and D.Feedbk
-                  // default to 0 — so on a fresh slot the row moved D.Time and nothing could
-                  // be heard. Switch the delay on, but only from zero: a mix already dialled
-                  // in is the user's, and overwriting it is worse than doing nothing.
-                  //
-                  // Feedback stays well under the wet level deliberately. The slow rows now
-                  // hand out bar-length delays (2857ms at 84bpm), and 60% feedback on one of
-                  // those is a 20-second tail that smears the whole rack.
-                  const wake = slot.effects.delayWet <= 0.001
-                    ? { delayWet: 0.5, delayFeedback: 0.35 }
-                    : null;
-                  update({ effects: { ...slot.effects, delayTime: row.delaySec, ...wake } });
-                }
-              }}
-              title="How fast this slot plays against the tempo anchor, and the delay that lands on the beat at that speed. The 2x rows correct beat detection landing on the wrong multiple. ⚡ rows also set the delay — but only if your delay is already on a division, so a hand-set one is left alone. Off-grid rows are polymetric, so those loops stay unquantized rather than rounded to a bar they do not share. Everything stays adjustable afterwards: move Phase, the delay, or the relation."
-              className={cn(
-                "shrink-0 rounded border px-1.5 py-1",
-                "text-[10px] font-semibold tracking-wide outline-none",
-                "focus:border-orange-400/60 [color-scheme:dark]",
-                // Lit while the relation AND the delay are the pair from one row, the same
-                // way every other engaged control in the rack reads. Same orange, more of it.
-                activeCombo
-                  ? "border-orange-400/50 bg-orange-500/20 text-orange-300"
-                  : "border-orange-400/25 bg-orange-500/5 text-orange-300/80",
-                (stretching || !buffer) && "opacity-30 cursor-not-allowed",
-              )}
-            >
-              {/* Not greyed out: a disabled row reads as something broken rather than as a
-                  heading. Picking it is a no-op, guarded in onChange. */}
-              {/* Names the current state, since the selection mark no longer can. */}
-              <option value="">
-                {activeCombo ? "⚡ Sweet spot" : "↻ Tempo"} — {currentRow?.name ?? "change"}…
-              </option>
-              {tempoRows.map((r) => {
-                // Four numbers live near this control — the relation, the resulting tempo,
-                // the delay and the Stretch knob — and they were easy to mistake for each
-                // other, so every one carries its unit. The delay is in milliseconds for the
-                // same reason it is on the D.TIME knob: a beat count would stand alone as
-                // "0.25 of nothing".
-                const bpm = ` \u00b7 ${Math.round(r.bpm)} bpm`;
-                const delay = r.delaySec !== undefined
-                  ? ` \u00b7 \u26a1 delay ${Math.round(r.delaySec * 1000)}ms` : "";
-                const pct = r.stretchPct !== null ? ` \u00b7 ${r.stretchPct}% stretch` : "";
-                // "auto" named the mechanism, not anything the reader is choosing between.
-                // This is simply the row needing the least stretching, which is what the app
-                // settles on when left alone.
-                const tags = [
-                  // Withheld until matched, for the same reason as the percentage: it names
-                  // the row needing the least stretching, and that is not yet known.
-                  isTempoMatched && r.value === autoRelation ? "recommended" : null,
-                  !r.gridSafe ? "off-grid" : null,
-                ].filter(Boolean);
-                // Explicit tick: the native one would sit on the placeholder now.
-                const here = Math.abs(r.value - effectiveRelation) < 1e-6 ? "\u2713 " : "";
-                return (
-                  <option key={r.name} value={String(r.value)}>
-                    {here}{r.name}{bpm}{delay}{pct}{tags.length ? ` \u00b7 ${tags.join(", ")}` : ""}
-                  </option>
-                );
-              })}
-            </select>
-          )}
-
-          {/* Take the key anchor, without disturbing anything. Mirrors the tempo one: once a
-              key anchor exists no other slot offers to become it, so the only way to move it
-              was to unpin the current one — which drops every MATCHED badge and invites a
-              re-match that moves pitches. A slot already in the anchor's key is already in
-              the right key, so handing it the anchor changes nothing. */}
-          {!isReference && hasReference && isMatched && (
+          {/* Everything about TEMPO, grouped for the same reason as the key cluster
+              below: the row should break between the two subjects, not inside one. */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {/* Tempo anchor — same state-driven shape as the key anchor, but drives
+                time stretch instead of speed/pitch, so both can be active on one slot. */}
             <button
               type="button"
-              onClick={onTakeReference}
-              title="Make this the key anchor. It is already in the rack's key, so nothing else moves."
+              onClick={isTempoAnchor || !hasTempoAnchor ? onSetTempoAnchor : onTempoMatch}
+              disabled={stretching || !buffer}
+              title={
+                isTempoAnchor
+                  ? "This slot is the tempo anchor — click to unpin"
+                  : !hasTempoAnchor
+                    ? "Set as the tempo anchor"
+                    : tempoStale
+                      ? "Out of sync with the tempo anchor — the anchor's tempo changed after this slot was matched. Click to re-match."
+                      : isTempoMatched
+                        ? `Tempo matched at ${tempoRelationLabel(effectiveRelation)} (${Math.round(stretch * 100)}% stretch) — click to re-match`
+                        : "Match to the tempo anchor (pitch unchanged)"
+              }
               className={cn(
                 "shrink-0 rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition",
-                "border-accent/25 bg-accent/5 text-accent/60 hover:border-accent/60 hover:text-accent",
+                stretching && "opacity-60",
+                !buffer && "opacity-30 cursor-not-allowed",
+                isTempoAnchor
+                  ? "border-orange-400/50 bg-orange-500/20 text-orange-300"
+                  : tempoStale
+                    ? "border-amber-400/60 bg-amber-500/20 text-amber-300 animate-pulse"
+                    : isTempoMatched
+                      ? "border-orange-400/30 bg-orange-500/10 text-orange-300/70 hover:bg-orange-500/20 hover:text-orange-300"
+                      : "border-border/60 bg-muted/60 text-foreground/40 hover:border-orange-400/40 hover:text-orange-300",
               )}
-            >⚓ Make Key Anchor</button>
-          )}
+            >
+              {stretching
+                ? "Stretching…"
+                : isTempoAnchor
+                  ? "⚓ Tempo Anchor"
+                  : !hasTempoAnchor
+                    ? "Set Tempo Anchor"
+                    : tempoStale
+                      ? "↻ Re-match Tempo"
+                      : isTempoMatched
+                        ? effectiveRelation === 1
+                          ? "Tempo Matched \u21bb"
+                          : `Tempo ${tempoRelationLabel(effectiveRelation)} \u21bb`
+                        : "Match Tempo"}
+            </button>
 
-          {/* One control for the whole anchor/match cycle. Label and action follow state:
-              no anchor anywhere -> pin this slot; anchor elsewhere -> match to it;
-              already matched -> re-match (it can drift when speed/pitch are nudged). */}
-          <button
-            type="button"
-            onClick={isReference || !hasReference ? onSetReference : onMatch}
-            title={
-              isReference
-                ? "This slot is the key anchor — click to unpin"
-                : !hasReference
-                  ? "Set as the key anchor"
-                  : isMatched
-                    ? "Already key matched — click to re-match"
-                    : "Match to the key anchor"
-            }
-            className={cn(
-              "shrink-0 rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition",
-              isReference
-                ? "border-accent/50 bg-accent/20 text-accent"
-                : isMatched
-                  ? "border-accent/30 bg-accent/10 text-accent/70 hover:bg-accent/20 hover:text-accent"
-                  : "border-border/60 bg-muted/60 text-foreground/40 hover:border-accent/40 hover:text-accent",
-            )}
-          >
-            {isReference
-              ? "⚓ Key Anchor"
-              : !hasReference
-                ? "Set Key Anchor"
-                : isMatched
-                  ? "Key Matched ↻"
-                  : "Match Key"}
-          </button>
+            {/* One tempo control: how fast this slot runs against the anchor, and — when it
+                applies — the delay that goes with it.
 
+                This was two adjacent dropdowns ("Tempo — change" and "Sweet spots") built from
+                the same seven-relation ladder, in the same orange, with the same "— change…"
+                title row. They read as duplicates because the only difference was invisible
+                with the list closed: one set the relation, the other set the relation AND a
+                delay. Merged, the delay is just another column on the row.
 
-
-          {/* Semitone shift — always live, independent of match state. */}
-          <span className="shrink-0 flex items-center gap-0 overflow-hidden rounded border border-border/50 bg-muted/40">
-            {([1, 7, 12] as const).map((n) => (
-              <button
-                key={n}
-                type="button"
-                onClick={() => { onPitchIntervalChange(n); persistSettings({}, n); }}
-                title={`Step by ${n} semitone${n > 1 ? "s" : ""}`}
+                Rows are the full ladder, not only the ones with a delay, so no relation became
+                unreachable in the merge. ⚡ marks the rows that carry one. */}
+            {!isTempoAnchor && hasTempoAnchor && tempoRows.length > 0 && (
+              <select
+                // Deliberately parked on the placeholder, NOT on the current relation.
+                //
+                // A native select fires no change event when you pick the option already
+                // selected, so binding this to effectiveRelation made the row you are on
+                // unreachable: its delay was described in the list and there was no way to
+                // apply it. Parking on "" means every row is always selectable. Where you are
+                // is shown in the placeholder text and by a tick on the row itself, rather
+                // than by the browser's own selection mark.
+                value=""
+                disabled={stretching || !buffer}
+                onChange={(e) => {
+                  // The title row. Number("") is 0, which would pin a relation of zero.
+                  if (e.target.value === "") return;
+                  const v = Number(e.target.value);
+                  const row = tempoRows.find((r) => r.value === v);
+                  // Choosing the recommended row means "stop pinning", not "pin this value",
+                  // so a later anchor change is free to move it.
+                  onTempoRelationChange(autoRelation !== undefined && v === autoRelation ? null : v);
+                  // Always move the delay onto the row's pulse. This was once gated on "only
+                  // if the delay is already within 5ms of a division", to protect a delay
+                  // dialed by hand — but snapDelayToTempo returns the nearest division however
+                  // far away it is, so in practice the delay is either off (0) or reads `free`
+                  // and the gate declined every time. The feature did nothing. Writing it
+                  // always costs one drag to undo, and the lit state already says when the
+                  // relation and the delay are a matched pair.
+                  if (row?.delaySec !== undefined) {
+                    // A delay time is inaudible on a silent delay, and both Delay and D.Feedbk
+                    // default to 0 — so on a fresh slot the row moved D.Time and nothing could
+                    // be heard. Switch the delay on, but only from zero: a mix already dialled
+                    // in is the user's, and overwriting it is worse than doing nothing.
+                    //
+                    // Feedback stays well under the wet level deliberately. The slow rows now
+                    // hand out bar-length delays (2857ms at 84bpm), and 60% feedback on one of
+                    // those is a 20-second tail that smears the whole rack.
+                    const wake = slot.effects.delayWet <= 0.001
+                      ? { delayWet: 0.5, delayFeedback: 0.35 }
+                      : null;
+                    update({ effects: { ...slot.effects, delayTime: row.delaySec, ...wake } });
+                  }
+                }}
+                title="How fast this slot plays against the tempo anchor, and the delay that lands on the beat at that speed. The 2x rows correct beat detection landing on the wrong multiple. ⚡ rows also set the delay — but only if your delay is already on a division, so a hand-set one is left alone. Off-grid rows are polymetric, so those loops stay unquantized rather than rounded to a bar they do not share. Everything stays adjustable afterwards: move Phase, the delay, or the relation."
                 className={cn(
-                  "px-1.5 py-0.5 text-[10px] font-semibold transition",
-                  n !== 1 && "border-l border-border/40",
-                  pitchInterval === n
-                    ? "bg-accent/20 text-accent"
-                    : "text-foreground/30 hover:text-foreground/60 hover:bg-muted/60",
+                  "shrink-0 rounded border px-1.5 py-1",
+                  "text-[10px] font-semibold tracking-wide outline-none",
+                  "focus:border-orange-400/60 [color-scheme:dark]",
+                  // Lit while the relation AND the delay are the pair from one row, the same
+                  // way every other engaged control in the rack reads. Same orange, more of it.
+                  activeCombo
+                    ? "border-orange-400/50 bg-orange-500/20 text-orange-300"
+                    : "border-orange-400/25 bg-orange-500/5 text-orange-300/80",
+                  (stretching || !buffer) && "opacity-30 cursor-not-allowed",
                 )}
-              >{n}</button>
-            ))}
+              >
+                {/* Not greyed out: a disabled row reads as something broken rather than as a
+                    heading. Picking it is a no-op, guarded in onChange. */}
+                {/* Names the current state, since the selection mark no longer can. */}
+                <option value="">
+                  {activeCombo ? "⚡ Sweet spot" : "↻ Tempo"} — {currentRow?.name ?? "change"}…
+                </option>
+                {tempoRows.map((r) => {
+                  // Four numbers live near this control — the relation, the resulting tempo,
+                  // the delay and the Stretch knob — and they were easy to mistake for each
+                  // other, so every one carries its unit. The delay is in milliseconds for the
+                  // same reason it is on the D.TIME knob: a beat count would stand alone as
+                  // "0.25 of nothing".
+                  const bpm = ` \u00b7 ${Math.round(r.bpm)} bpm`;
+                  const delay = r.delaySec !== undefined
+                    ? ` \u00b7 \u26a1 delay ${Math.round(r.delaySec * 1000)}ms` : "";
+                  const pct = r.stretchPct !== null ? ` \u00b7 ${r.stretchPct}% stretch` : "";
+                  // "auto" named the mechanism, not anything the reader is choosing between.
+                  // This is simply the row needing the least stretching, which is what the app
+                  // settles on when left alone.
+                  const tags = [
+                    // Withheld until matched, for the same reason as the percentage: it names
+                    // the row needing the least stretching, and that is not yet known.
+                    isTempoMatched && r.value === autoRelation ? "recommended" : null,
+                    !r.gridSafe ? "off-grid" : null,
+                  ].filter(Boolean);
+                  // Explicit tick: the native one would sit on the placeholder now.
+                  const here = Math.abs(r.value - effectiveRelation) < 1e-6 ? "\u2713 " : "";
+                  return (
+                    <option key={r.name} value={String(r.value)}>
+                      {here}{r.name}{bpm}{delay}{pct}{tags.length ? ` \u00b7 ${tags.join(", ")}` : ""}
+                    </option>
+                  );
+                })}
+              </select>
+            )}
+          </div>
+
+          {/* Everything about KEY, kept together so a narrow slot breaks between the
+              tempo controls and these rather than orphaning the semitone buttons on a
+              row of their own. */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {/* Take the key anchor, without disturbing anything. Mirrors the tempo one: once a
+                key anchor exists no other slot offers to become it, so the only way to move it
+                was to unpin the current one — which drops every MATCHED badge and invites a
+                re-match that moves pitches. A slot already in the anchor's key is already in
+                the right key, so handing it the anchor changes nothing. */}
+            {!isReference && hasReference && isMatched && (
+              <button
+                type="button"
+                onClick={onTakeReference}
+                title="Make this the key anchor. It is already in the rack's key, so nothing else moves."
+                className={cn(
+                  "shrink-0 rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition",
+                  "border-accent/25 bg-accent/5 text-accent/60 hover:border-accent/60 hover:text-accent",
+                )}
+              >⚓ Make Key Anchor</button>
+            )}
+
+            {/* One control for the whole anchor/match cycle. Label and action follow state:
+                no anchor anywhere -> pin this slot; anchor elsewhere -> match to it;
+                already matched -> re-match (it can drift when speed/pitch are nudged). */}
             <button
               type="button"
-              title={`Down ${pitchInterval} semitone${pitchInterval > 1 ? "s" : ""}`}
-              onClick={() => {
-                // Matched slots step on a grid anchored at their match pitch so repeated
-                // shifts stay musically related to the anchor; unmatched slots step freely.
-                const base = isMatched ? matchedBasePitch : slot.pitch;
-                const diff = slot.pitch - base;
-                const step = Math.floor(diff / pitchInterval);
-                const snapped = base + step * pitchInterval;
-                const next = Math.max(-24, Math.abs(snapped - slot.pitch) < 0.01 ? snapped - pitchInterval : snapped);
-                update({ pitch: next, linkPitch: false });
-              }}
-              className="border-l border-border/40 px-1.5 py-0.5 text-[11px] text-foreground/40 transition hover:bg-muted/60 hover:text-foreground"
-            >▼</button>
-            <button
-              type="button"
-              title={`Up ${pitchInterval} semitone${pitchInterval > 1 ? "s" : ""}`}
-              onClick={() => {
-                const base = isMatched ? matchedBasePitch : slot.pitch;
-                const diff = slot.pitch - base;
-                const step = Math.ceil(diff / pitchInterval);
-                const snapped = base + step * pitchInterval;
-                const next = Math.min(24, Math.abs(snapped - slot.pitch) < 0.01 ? snapped + pitchInterval : snapped);
-                update({ pitch: next, linkPitch: false });
-              }}
-              className="border-l border-border/40 px-1.5 py-0.5 text-[11px] text-foreground/40 transition hover:bg-muted/60 hover:text-foreground"
-            >▲</button>
-          </span>
+              onClick={isReference || !hasReference ? onSetReference : onMatch}
+              title={
+                isReference
+                  ? "This slot is the key anchor — click to unpin"
+                  : !hasReference
+                    ? "Set as the key anchor"
+                    : isMatched
+                      ? "Already key matched — click to re-match"
+                      : "Match to the key anchor"
+              }
+              className={cn(
+                "shrink-0 rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition",
+                isReference
+                  ? "border-accent/50 bg-accent/20 text-accent"
+                  : isMatched
+                    ? "border-accent/30 bg-accent/10 text-accent/70 hover:bg-accent/20 hover:text-accent"
+                    : "border-border/60 bg-muted/60 text-foreground/40 hover:border-accent/40 hover:text-accent",
+              )}
+            >
+              {isReference
+                ? "⚓ Key Anchor"
+                : !hasReference
+                  ? "Set Key Anchor"
+                  : isMatched
+                    ? "Key Matched ↻"
+                    : "Match Key"}
+            </button>
+
+
+
+            {/* Semitone shift — always live, independent of match state. */}
+            <span className="shrink-0 flex items-center gap-0 overflow-hidden rounded border border-border/50 bg-muted/40">
+              {([1, 7, 12] as const).map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => { onPitchIntervalChange(n); persistSettings({}, n); }}
+                  title={`Step by ${n} semitone${n > 1 ? "s" : ""}`}
+                  className={cn(
+                    "px-1.5 py-0.5 text-[10px] font-semibold transition",
+                    n !== 1 && "border-l border-border/40",
+                    pitchInterval === n
+                      ? "bg-accent/20 text-accent"
+                      : "text-foreground/30 hover:text-foreground/60 hover:bg-muted/60",
+                  )}
+                >{n}</button>
+              ))}
+              <button
+                type="button"
+                title={`Down ${pitchInterval} semitone${pitchInterval > 1 ? "s" : ""}`}
+                onClick={() => {
+                  // Matched slots step on a grid anchored at their match pitch so repeated
+                  // shifts stay musically related to the anchor; unmatched slots step freely.
+                  const base = isMatched ? matchedBasePitch : slot.pitch;
+                  const diff = slot.pitch - base;
+                  const step = Math.floor(diff / pitchInterval);
+                  const snapped = base + step * pitchInterval;
+                  const next = Math.max(-24, Math.abs(snapped - slot.pitch) < 0.01 ? snapped - pitchInterval : snapped);
+                  update({ pitch: next, linkPitch: false });
+                }}
+                className="border-l border-border/40 px-1.5 py-0.5 text-[11px] text-foreground/40 transition hover:bg-muted/60 hover:text-foreground"
+              >▼</button>
+              <button
+                type="button"
+                title={`Up ${pitchInterval} semitone${pitchInterval > 1 ? "s" : ""}`}
+                onClick={() => {
+                  const base = isMatched ? matchedBasePitch : slot.pitch;
+                  const diff = slot.pitch - base;
+                  const step = Math.ceil(diff / pitchInterval);
+                  const snapped = base + step * pitchInterval;
+                  const next = Math.min(24, Math.abs(snapped - slot.pitch) < 0.01 ? snapped + pitchInterval : snapped);
+                  update({ pitch: next, linkPitch: false });
+                }}
+                className="border-l border-border/40 px-1.5 py-0.5 text-[11px] text-foreground/40 transition hover:bg-muted/60 hover:text-foreground"
+              >▲</button>
+            </span>
+          </div>
 
 
         </div>

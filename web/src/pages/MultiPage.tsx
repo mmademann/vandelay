@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { multiEngine } from "../audio/multiEngine";
 import { DRY_EFFECTS, type StemName } from "../audio/dubEngine";
 import { sanitizeEffects, EFFECTS_LIMITS } from "../store";
+import { suggestSetups, type SuggestCandidate } from "../lib/suggestSetup";
 import type { MultiMasterSettings, MultiSlot, MultiSession, ThrowSettings } from "../lib/multiSettings";
 import { getCachedAudio, putCachedAudio } from "../lib/audioCache";
 import {
@@ -19,6 +20,11 @@ import {
   loadThrowSettings,
   saveThrowSettings,
   DEFAULT_THROW_SETTINGS,
+  loadVersions,
+  saveVersion,
+  deleteVersion,
+  renameVersionBucket,
+  type MultiVersion,
   loadMasterSpeed,
   saveMasterSpeed,
   loadThrowPresets,
@@ -408,6 +414,9 @@ export function MultiPage() {
   useEffect(() => {
     if ((searchParams.get("slots") ?? "").trim() === "") setActiveSessionName(null);
   }, [searchParams]);
+
+  // Versions belong to a session, so the list follows whichever one is loaded.
+  useEffect(() => { setVersions(loadVersions(activeSessionName)); }, [activeSessionName]);
 
   // Mirror the active session name to localStorage. Done as an effect rather than at each
   // setter so every path that changes it — save, resave, load, rename, clear — persists.
@@ -1858,7 +1867,11 @@ export function MultiPage() {
     if (!name || entries.length === 0) return;
     setNamedSessions(saveNamedSession(name, buildSessionSlots(), masterSettings));
     setSessionName("");
+    // Versions saved before the rack had a name live in the "(unsaved)" bucket; move them
+    // across, or naming a session silently orphans everything kept up to that point.
+    renameVersionBucket(activeSessionName, name);
     setActiveSessionName(name);
+    setVersions(loadVersions(name));
     setSavedFlash(name);
     setTimeout(() => setSavedFlash((n) => (n === name ? null : n)), 2000);
     saveExportToServer(buildExport(masterSettingsRef.current));
@@ -2015,6 +2028,276 @@ export function MultiPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [anchorEffectiveBpm]);
 
+  /**
+   * Ranked whole-rack setups, and the one currently applied.
+   *
+   * Recomputed on demand rather than per render: the ranking scans every stem's spectrum
+   * and hit pattern, which is far too expensive to sit anywhere near a render path.
+   */
+  const suggestionsRef = useRef<SuggestCandidate[]>([]);
+  /** Ranked proposals, surfaced so the dropdown can list them rather than cycling blind. */
+  const [suggestions, setSuggestions] = useState<SuggestCandidate[]>([]);
+  const [versions, setVersions] = useState<MultiVersion[]>(() => loadVersions(loadActiveSessionName()));
+  /** Keep the loops the user drew and let the app decide only the rest. */
+  const [suggestKeepLoops, setSuggestKeepLoops] = useState(false);
+  const [suggestIndex, setSuggestIndex] = useState<number | null>(null);
+  const [suggestNote, setSuggestNote] = useState<string | null>(null);
+  /** Everything the last suggestion overwrote, so one click puts it all back. */
+  const suggestUndoRef = useRef<{ slots: MultiSlot[]; refId: string | null; tempoId: string | null } | null>(null);
+
+  async function applySuggestion(c: SuggestCandidate) {
+    // Loops first: everything downstream (quantize, the delay grid, the hit scan) reads
+    // them, and matching will rescale them into whatever timebase it produces.
+    for (const e of entriesRef.current) {
+      const loop = c.loops.get(e.slot.id);
+      if (!loop || !(loop.end > loop.start)) continue;
+      const ratio = e.stretch || 1;
+      const patch = { loopStart: loop.start * ratio, loopEnd: loop.end * ratio };
+      multiEngine.updateSlot(e.slot.id, patch);
+      setEntries((prev) =>
+        prev.map((x) => (x.slot.id === e.slot.id ? { ...x, slot: { ...x.slot, ...patch } } : x)),
+      );
+    }
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Tempo relations BEFORE matching, because matching reads them off the entry.
+    //
+    // A slot absent from the map is set back to automatic, not left alone — and that is
+    // the whole fix for racks coming out at two and four times the anchor's tempo with
+    // nothing in the suggestion asking for it. Suggest decided loops and anchors and said
+    // nothing at all about this field, so Match honoured whatever relation happened to be
+    // stored on the slot from an earlier session, and a stale "4x faster" rode straight
+    // through every suggestion. Deciding the whole rack means deciding this too.
+    setEntries((prev) =>
+      prev.map((x) => {
+        const want = c.relations.get(x.slot.id);
+        return x.tempoRelation === want ? x : { ...x, tempoRelation: want };
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Anchors next, so the matching below has something to match to. Set directly rather
+    // than through the handlers: those re-measure and re-quantize, which this has already
+    // decided for itself.
+    setReferenceSlotId(c.keyAnchorId);
+    referenceSlotIdRef.current = c.keyAnchorId;
+    setTempoAnchorId(c.tempoAnchorId);
+    tempoAnchorIdRef.current = c.tempoAnchorId;
+    const ke = entriesRef.current.find((e) => e.slot.id === c.keyAnchorId);
+    if (ke) {
+      saveAnchorKey(ke.slot.trackId, ke.slot.stemName);
+      // Reset the key anchor to its own pitch, exactly as pinning a tempo anchor resets it
+      // to its own tempo. The anchor DEFINES the key, so it must not itself be transposed.
+      //
+      // This is what produced chipmunks. With Link off, pitch multiplies playback RATE —
+      // +24 semitones is 4x speed — and matchSlotToReference copies the anchor's own pitch
+      // onto every slave. Picking an anchor that happened to be sitting at +24 handed the
+      // whole rack a 4x speed-up that no knob in the suggestion had asked for.
+      const reset = { pitch: 0, linkPitch: true };
+      multiEngine.updateSlot(ke.slot.id, reset);
+      setEntries((prev) =>
+        prev.map((x) => (x.slot.id === ke.slot.id ? { ...x, slot: { ...x.slot, ...reset } } : x)),
+      );
+    }
+    const te = entriesRef.current.find((e) => e.slot.id === c.tempoAnchorId);
+    if (te) saveTempoAnchorKey(te.slot.trackId, te.slot.stemName);
+    await new Promise((r) => setTimeout(r, 0));
+
+    await handleLockAll();
+
+    // Echo and space last: matching rewrites effects on the slots it touches, so writing
+    // these first would lose them. The flavour sets them outright rather than only filling
+    // in zeros — two suggestions that leave the tone alone sound like the same suggestion,
+    // which is exactly what the list felt like. Undo puts the old values back.
+    for (const e of entriesRef.current) {
+      const id = e.slot.id;
+      const delayTime = c.delays.get(id);
+      const tone = c.effects.get(id);
+      if (delayTime === undefined && !tone) continue;
+      const effects = {
+        ...e.slot.effects,
+        ...(delayTime !== undefined ? { delayTime } : {}),
+        ...(tone ?? {}),
+      };
+      multiEngine.updateSlot(id, { effects });
+      setEntries((prev) =>
+        prev.map((x) => (x.slot.id === id ? { ...x, slot: { ...x.slot, effects } } : x)),
+      );
+    }
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Phase after everything else: it is a playhead offset measured in the ANCHOR's bar,
+    // so it needs the matched timebase the steps above have just produced (invariants
+    // 19/20). A slot the candidate does not phase is reset to the downbeat, not left where
+    // a previous suggestion put it.
+    const pa = entriesRef.current.find((e) => e.slot.id === c.tempoAnchorId);
+    const paBpm = pa?.detectedBpm;
+    if (paBpm && paBpm > 0) {
+      const ms = masterSettingsRef.current.masterSpeed ?? 1;
+      for (const e of entriesRef.current) {
+        const want = c.phases.get(e.slot.id) ?? 0;
+        const have = e.slot.phase ?? 0;
+        const barSec = (60 / anchorBarGridBpm(paBpm, pa?.slot, e.slot, ms)) * 4;
+        multiEngine.setPhaseBarSec(e.slot.id, barSec);
+        if (Math.abs(want - have) < 1e-6) continue;
+        // Move by the DIFFERENCE, exactly as the Phase control does. The offset lives in
+        // the playhead, so writing the number without nudging changes the label and
+        // nothing a listener can hear.
+        multiEngine.nudgeSlot(e.slot.id, (want - have) * barSec);
+        setEntries((prev) =>
+          prev.map((x) => (x.slot.id === e.slot.id ? { ...x, slot: { ...x.slot, phase: want } } : x)),
+        );
+      }
+      await new Promise((r) => setTimeout(r, 0));
+    }
+
+    // None of the above survives a refresh until it is written down. Matching persists the
+    // slots it stretches, but loops, tone and phase have no other writer on this path.
+    for (const e of entriesRef.current) {
+      persistMatchedState(e, e.isMatched ?? false, e.matchedBasePitch ?? 0);
+    }
+  }
+
+  /**
+   * Compute the ranking without applying anything, so the dropdown can show the options
+   * before the user commits to one. Pressing Suggest used to BE the commitment.
+   */
+  async function handleComputeSuggestions() {
+    const loaded = entriesRef.current.filter((e) => !e.loading && e.sourceBuffer);
+    if (loaded.length < 2) { setSuggestNote("needs at least two loaded slots"); return; }
+    const missing = loaded.filter((e) => !e.detectedBpm);
+    if (missing.length > 0) {
+      setSuggestNote("analysing…");
+      for (const e of missing) await redetectFromLoop(e.slot.id);
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    const fresh = entriesRef.current.filter((e) => !e.loading && e.sourceBuffer);
+    const ranked = suggestSetups(
+      fresh.map((e) => ({
+        id: e.slot.id,
+        sourceBuffer: e.sourceBuffer,
+        detectedKey: e.detectedKey,
+        detectedBpm: e.detectedBpm,
+        loopStart: e.slot.loopStart / (e.stretch || 1),
+        loopEnd: e.slot.loopEnd / (e.stretch || 1),
+        stemName: e.slot.stemName,
+      })),
+      { keepLoops: suggestKeepLoops, maxDelaySec: EFFECTS_LIMITS.delayTime.max },
+    );
+    suggestionsRef.current = ranked;
+    setSuggestions(ranked);
+    setSuggestNote(ranked.length === 0 ? "could not read enough tempos" : null);
+  }
+
+  /** Apply one proposal by index, snapshotting the user's own rack the first time. */
+  async function handlePickSuggestion(i: number) {
+    const c = suggestionsRef.current[i];
+    if (!c) return;
+    if (!suggestUndoRef.current) {
+      suggestUndoRef.current = {
+        slots: entriesRef.current.map((e) => ({ ...e.slot })),
+        refId: referenceSlotIdRef.current,
+        tempoId: tempoAnchorIdRef.current,
+      };
+    }
+    setSuggestIndex(i);
+    await applySuggestion(c);
+    setSuggestNote(`${i + 1}/${suggestionsRef.current.length} — ${c.why}`);
+  }
+
+  /** Keep the rack exactly as it stands right now, under a name. */
+  function handleSaveVersion(name: string) {
+    const trimmed = name.trim();
+    if (!trimmed || entriesRef.current.length === 0) return;
+    const keyOf = (id: string | null) => {
+      const e = id ? entriesRef.current.find((x) => x.slot.id === id) : null;
+      return e ? { trackId: e.slot.trackId, stemName: e.slot.stemName } : null;
+    };
+    // Carry the suggestion's own description along with the name, so the saved row still
+    // says what it is months later rather than just "v3".
+    const applied = suggestIndex !== null ? suggestionsRef.current[suggestIndex] : undefined;
+    setVersions(saveVersion(activeSessionName, {
+      id: crypto.randomUUID(),
+      name: trimmed,
+      savedAt: Date.now(),
+      // `tempoRelation` and `stretch` live on the ENTRY, not the slot — spreading the slot
+      // alone saved a version that restored at the wrong tempo.
+      slots: entriesRef.current.map((e) => ({
+        ...e.slot,
+        stretch: e.stretch,
+        tempoRelation: e.tempoRelation,
+      })),
+      referenceKey: keyOf(referenceSlotIdRef.current),
+      tempoAnchorKey: keyOf(tempoAnchorIdRef.current),
+      ...(applied ? { from: { ...applied.label } } : {}),
+    }));
+    saveExportToServer(buildExport(masterSettingsRef.current)).catch(() => {});
+  }
+
+  /**
+   * Restore a saved version onto the stems already loaded.
+   *
+   * Matched by trackId+stem rather than slot id: a version outlives the UUIDs it was saved
+   * with, since those are minted fresh on every session load.
+   */
+  function handleRestoreVersion(v: MultiVersion) {
+    const find = (k: { trackId: string; stemName: StemName | null } | null) =>
+      k ? entriesRef.current.find(
+        (e) => e.slot.trackId === k.trackId && e.slot.stemName === k.stemName,
+      ) ?? null : null;
+
+    for (const saved of v.slots) {
+      const live = entriesRef.current.find(
+        (e) => e.slot.trackId === saved.trackId && e.slot.stemName === saved.stemName,
+      );
+      if (!live) continue;   // that stem is not in the rack any more
+      const patch = { ...saved, id: live.slot.id };
+      multiEngine.updateSlot(live.slot.id, patch);
+      setEntries((prev) =>
+        prev.map((x) => (x.slot.id === live.slot.id ? { ...x, slot: patch } : x)),
+      );
+    }
+    const ref = find(v.referenceKey);
+    setReferenceSlotId(ref?.slot.id ?? null);
+    referenceSlotIdRef.current = ref?.slot.id ?? null;
+    const tempo = find(v.tempoAnchorKey);
+    setTempoAnchorId(tempo?.slot.id ?? null);
+    tempoAnchorIdRef.current = tempo?.slot.id ?? null;
+    setSuggestNote(`restored “${v.name}”`);
+  }
+
+  function handleDeleteVersion(id: string) {
+    setVersions(deleteVersion(activeSessionName, id));
+    saveExportToServer(buildExport(masterSettingsRef.current)).catch(() => {});
+  }
+
+  function handleToggleKeepLoops() {
+    setSuggestKeepLoops((v) => !v);
+    // The ranking was computed with the other answer, so it no longer describes anything.
+    suggestionsRef.current = [];
+    setSuggestIndex(null);
+  }
+
+  /** Put back exactly what the first suggestion overwrote. */
+  function handleUndoSuggest() {
+    const undo = suggestUndoRef.current;
+    if (!undo) return;
+    for (const saved of undo.slots) {
+      multiEngine.updateSlot(saved.id, saved);
+      setEntries((prev) =>
+        prev.map((x) => (x.slot.id === saved.id ? { ...x, slot: { ...saved } } : x)),
+      );
+    }
+    setReferenceSlotId(undo.refId);
+    referenceSlotIdRef.current = undo.refId;
+    setTempoAnchorId(undo.tempoId);
+    tempoAnchorIdRef.current = undo.tempoId;
+    suggestUndoRef.current = null;
+    suggestionsRef.current = [];
+    setSuggestIndex(null);
+    setSuggestNote(null);
+  }
+
   function handleThrowSettingsChange(throwSettings: ThrowSettings) {
     setMasterSettings((prev) => ({ ...prev, throwSettings }));
     saveThrowSettings(throwSettings);
@@ -2104,168 +2387,175 @@ export function MultiPage() {
 
   const portalTarget = document.getElementById("multi-transport-portal");
   const topBar = (
-    <div className="relative flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-        {/* Sessions dropdown button */}
-        <button
-          ref={sessionsBtnRef}
-          type="button"
-          onClick={() => setSessionsPanelOpen((o) => !o)}
-          className={`shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition ${sessionsPanelOpen ? "bg-accent/20 text-accent ring-1 ring-accent/40" : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted"}`}
-        >
-          {/* Name the loaded session rather than just counting saved ones — with a dozen
-              similarly-named sessions, knowing which is live matters more than the total. */}
-          {activeSessionName ? (
-            <span className="flex items-center gap-1.5">
-              <span className="text-foreground/40">Session</span>
-              <span className="text-accent normal-case tracking-normal">{activeSessionName}</span>
-            </span>
-          ) : (
-            `Sessions${namedSessions.length > 0 ? ` (${namedSessions.length})` : ""}`
-          )}
-        </button>
-
-        {/* Sessions panel */}
-        {sessionsPanelOpen && (
-          <div
-            ref={sessionsPanelRef}
-            // Capped and scrollable: the list grows with every saved session, and past a
-            // dozen the panel ran off the bottom of the window with the save box — the only
-            // way to add another — pushed out of reach. The header and the actions stay
-            // pinned; only the list between them scrolls.
-            className="absolute left-0 top-full mt-1 z-50 flex w-72 max-h-[min(70vh,32rem)] flex-col gap-2 rounded-md border border-border/40 bg-zinc-900/95 p-3 shadow-xl ring-1 ring-border/30 backdrop-blur-sm"
+    // `contents`, so the session chip and the transport are siblings of the π link in the
+    // header's single flex row rather than a box of their own — see the comment there.
+    <div className="contents">
+      {/* Its own `relative` wrapper: with no box on the parent, the panel below needs
+          something to hang from, and this drops it under the chip rather than under the
+          whole bar. */}
+      <div className="relative shrink-0">
+          {/* Sessions dropdown button */}
+          <button
+            ref={sessionsBtnRef}
+            type="button"
+            onClick={() => setSessionsPanelOpen((o) => !o)}
+            className={`shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition ${sessionsPanelOpen ? "bg-accent/20 text-accent ring-1 ring-accent/40" : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted"}`}
           >
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] font-semibold uppercase tracking-widest text-foreground/40">Sessions</span>
-              <button type="button" onClick={() => setSessionsPanelOpen(false)}
-                className="text-foreground/30 hover:text-foreground/70 text-sm leading-none px-1">✕</button>
-            </div>
-
-            {namedSessions.length === 0 && (
-              <div className="py-2 text-xs text-foreground/30">No saved sessions yet.</div>
+            {/* Name the loaded session rather than just counting saved ones — with a dozen
+                similarly-named sessions, knowing which is live matters more than the total. */}
+            {activeSessionName ? (
+              <span className="flex items-center gap-1.5">
+                <span className="text-foreground/40">Session</span>
+                <span className="text-accent normal-case tracking-normal">{activeSessionName}</span>
+              </span>
+            ) : (
+              `Sessions${namedSessions.length > 0 ? ` (${namedSessions.length})` : ""}`
             )}
+          </button>
 
-            <div className="-mr-1 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-1">
-            {namedSessions.map((s) => (
-              <div key={s.name} className="group flex items-center rounded border border-border bg-muted/40 px-3 py-2">
-                {renamingSession === s.name ? (
-                  <form
-                    className="flex-1"
-                    onSubmit={(e) => { e.preventDefault(); commitRename(s.name); }}
-                  >
-                    <input
-                      autoFocus
-                      value={renameDraft}
-                      onChange={(e) => setRenameDraft(e.target.value)}
-                      onBlur={() => commitRename(s.name)}
-                      onKeyDown={(e) => { if (e.key === "Escape") setRenamingSession(null); }}
-                      className="w-full rounded border border-accent/50 bg-background px-1.5 py-0.5 text-sm outline-none"
-                    />
-                  </form>
-                ) : (
-                <button
-                  type="button"
-                  onClick={() => { handleLoadSession(s); setSessionsPanelOpen(false); }}
-                  className="truncate text-left text-sm font-medium text-foreground/70 transition hover:text-foreground"
-                >
-                  {s.name}
-                </button>
-                )}
-                {renamingSession !== s.name && (
-                <button
-                  type="button"
-                  onClick={() => { setRenamingSession(s.name); setRenameDraft(s.name); }}
-                  className="text-xs leading-none text-foreground/30 opacity-0 group-hover:opacity-100 transition hover:text-accent pl-3"
-                  aria-label="Rename session" title="Rename"
-                >✎</button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (entriesRef.current.length > 0) {
-                      setNamedSessions(saveNamedSession(s.name, buildSessionSlots(), masterSettings));
-                      // Resaving makes this the session the rack belongs to; without this the
-                      // header button kept naming whichever session was loaded before.
-                      setActiveSessionName(s.name);
-                      setSavedFlash(s.name);
-                      setTimeout(() => setSavedFlash((n) => (n === s.name ? null : n)), 2000);
-                    }
-                  }}
-                  className={`text-base leading-none transition pl-3 ${
-                    savedFlash === s.name
-                      ? "text-accent opacity-100"
-                      : "text-foreground/30 opacity-0 group-hover:opacity-100 hover:text-accent"
-                  }`}
-                  aria-label="Resave session" title="Resave with current slots"
-                >{savedFlash === s.name ? "✓" : "💾"}</button>
-                <span className="flex-1" />
-                <button
-                  type="button"
-                  onClick={() => handleDeleteSession(s.name)}
-                  className="text-base leading-none text-foreground/30 opacity-0 group-hover:opacity-100 transition hover:text-red-400"
-                  aria-label="Delete session" title="Delete session"
-                >🗑</button>
-              </div>
-            ))}
-            </div>
-
-            <form
-              onSubmit={(e) => { e.preventDefault(); handleSaveSession(); }}
-              className="flex items-center gap-1.5 border-t border-border/30 pt-2 mt-1"
+          {/* Sessions panel */}
+          {sessionsPanelOpen && (
+            <div
+              ref={sessionsPanelRef}
+              // Capped and scrollable: the list grows with every saved session, and past a
+              // dozen the panel ran off the bottom of the window with the save box — the only
+              // way to add another — pushed out of reach. The header and the actions stay
+              // pinned; only the list between them scrolls.
+              className="absolute left-0 top-full mt-1 z-50 flex w-72 max-h-[min(70vh,32rem)] flex-col gap-2 rounded-md border border-border/40 bg-zinc-900/95 p-3 shadow-xl ring-1 ring-border/30 backdrop-blur-sm"
             >
-              <input
-                type="text"
-                value={sessionName}
-                onChange={(e) => setSessionName(e.target.value)}
-                placeholder="Save current session…"
-                className="min-w-0 flex-1 rounded border border-border bg-muted/30 px-2 py-1.5 text-xs outline-none focus:border-accent/60 placeholder:text-foreground/30"
-              />
-              {/* Saving clears the input, so keep the button mounted through the flash to show ✓. */}
-              {(sessionName.trim() || savedFlash !== null) && (
-                <button
-                  type="submit"
-                  disabled={savedFlash !== null}
-                  className={`rounded border px-2 py-1.5 text-xs transition ${
-                    savedFlash !== null
-                      ? "border-accent/50 bg-accent/10 text-accent"
-                      : "border-border bg-muted/50 text-foreground/50 hover:text-foreground"
-                  }`}
-                >
-                  {savedFlash !== null ? "Saved ✓" : "Save"}
-                </button>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-semibold uppercase tracking-widest text-foreground/40">Sessions</span>
+                <button type="button" onClick={() => setSessionsPanelOpen(false)}
+                  className="text-foreground/30 hover:text-foreground/70 text-sm leading-none px-1">✕</button>
+              </div>
+
+              {namedSessions.length === 0 && (
+                <div className="py-2 text-xs text-foreground/30">No saved sessions yet.</div>
               )}
-            </form>
 
-            <div className="flex items-center gap-2 border-t border-border/30 pt-2 mt-1">
-              <button
-                type="button"
-                onClick={handleImport}
-                disabled={importStatus === "importing"}
-                className="flex-1 rounded border border-border bg-muted/40 px-2 py-1.5 text-xs text-foreground/50 transition hover:text-foreground disabled:opacity-50"
+              <div className="-mr-1 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-1">
+              {namedSessions.map((s) => (
+                <div key={s.name} className="group flex items-center rounded border border-border bg-muted/40 px-3 py-2">
+                  {renamingSession === s.name ? (
+                    <form
+                      className="flex-1"
+                      onSubmit={(e) => { e.preventDefault(); commitRename(s.name); }}
+                    >
+                      <input
+                        autoFocus
+                        value={renameDraft}
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        onBlur={() => commitRename(s.name)}
+                        onKeyDown={(e) => { if (e.key === "Escape") setRenamingSession(null); }}
+                        className="w-full rounded border border-accent/50 bg-background px-1.5 py-0.5 text-sm outline-none"
+                      />
+                    </form>
+                  ) : (
+                  <button
+                    type="button"
+                    onClick={() => { handleLoadSession(s); setSessionsPanelOpen(false); }}
+                    className="truncate text-left text-sm font-medium text-foreground/70 transition hover:text-foreground"
+                  >
+                    {s.name}
+                  </button>
+                  )}
+                  {renamingSession !== s.name && (
+                  <button
+                    type="button"
+                    onClick={() => { setRenamingSession(s.name); setRenameDraft(s.name); }}
+                    className="text-xs leading-none text-foreground/30 opacity-0 group-hover:opacity-100 transition hover:text-accent pl-3"
+                    aria-label="Rename session" title="Rename"
+                  >✎</button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (entriesRef.current.length > 0) {
+                        setNamedSessions(saveNamedSession(s.name, buildSessionSlots(), masterSettings));
+                        // Resaving makes this the session the rack belongs to; without this the
+                        // header button kept naming whichever session was loaded before.
+                        setActiveSessionName(s.name);
+                        setSavedFlash(s.name);
+                        setTimeout(() => setSavedFlash((n) => (n === s.name ? null : n)), 2000);
+                      }
+                    }}
+                    className={`text-base leading-none transition pl-3 ${
+                      savedFlash === s.name
+                        ? "text-accent opacity-100"
+                        : "text-foreground/30 opacity-0 group-hover:opacity-100 hover:text-accent"
+                    }`}
+                    aria-label="Resave session" title="Resave with current slots"
+                  >{savedFlash === s.name ? "✓" : "💾"}</button>
+                  <span className="flex-1" />
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteSession(s.name)}
+                    className="text-base leading-none text-foreground/30 opacity-0 group-hover:opacity-100 transition hover:text-red-400"
+                    aria-label="Delete session" title="Delete session"
+                  >🗑</button>
+                </div>
+              ))}
+              </div>
+
+              <form
+                onSubmit={(e) => { e.preventDefault(); handleSaveSession(); }}
+                className="flex items-center gap-1.5 border-t border-border/30 pt-2 mt-1"
               >
-                {importStatus === "importing" ? "…"
-                  : importStatus === "imported" ? "Restored ✓"
-                  : importStatus === "none" ? "No backup found"
-                  : importStatus === "error" ? "Error"
-                  : "↑ Restore"}
-              </button>
-              <button
-                type="button"
-                onClick={handleExport}
-                disabled={exportStatus === "saving"}
-                className="flex-1 rounded border border-border bg-muted/40 px-2 py-1.5 text-xs text-foreground/50 transition hover:text-foreground disabled:opacity-50"
-              >
-                {exportStatus === "saving" ? "…"
-                  : exportStatus === "saved" ? "Backed up ✓"
-                  : exportStatus === "error" ? "Error"
-                  : "↓ Backup"}
-              </button>
+                <input
+                  type="text"
+                  value={sessionName}
+                  onChange={(e) => setSessionName(e.target.value)}
+                  placeholder="Save current session…"
+                  className="min-w-0 flex-1 rounded border border-border bg-muted/30 px-2 py-1.5 text-xs outline-none focus:border-accent/60 placeholder:text-foreground/30"
+                />
+                {/* Saving clears the input, so keep the button mounted through the flash to show ✓. */}
+                {(sessionName.trim() || savedFlash !== null) && (
+                  <button
+                    type="submit"
+                    disabled={savedFlash !== null}
+                    className={`rounded border px-2 py-1.5 text-xs transition ${
+                      savedFlash !== null
+                        ? "border-accent/50 bg-accent/10 text-accent"
+                        : "border-border bg-muted/50 text-foreground/50 hover:text-foreground"
+                    }`}
+                  >
+                    {savedFlash !== null ? "Saved ✓" : "Save"}
+                  </button>
+                )}
+              </form>
+
+              <div className="flex items-center gap-2 border-t border-border/30 pt-2 mt-1">
+                <button
+                  type="button"
+                  onClick={handleImport}
+                  disabled={importStatus === "importing"}
+                  className="flex-1 rounded border border-border bg-muted/40 px-2 py-1.5 text-xs text-foreground/50 transition hover:text-foreground disabled:opacity-50"
+                >
+                  {importStatus === "importing" ? "…"
+                    : importStatus === "imported" ? "Restored ✓"
+                    : importStatus === "none" ? "No backup found"
+                    : importStatus === "error" ? "Error"
+                    : "↑ Restore"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExport}
+                  disabled={exportStatus === "saving"}
+                  className="flex-1 rounded border border-border bg-muted/40 px-2 py-1.5 text-xs text-foreground/50 transition hover:text-foreground disabled:opacity-50"
+                >
+                  {exportStatus === "saving" ? "…"
+                    : exportStatus === "saved" ? "Backed up ✓"
+                    : exportStatus === "error" ? "Error"
+                    : "↓ Backup"}
+                </button>
+              </div>
             </div>
-          </div>
-        )}
+          )}
+      </div>
 
-        <div className="h-4 w-px shrink-0 bg-border/50" />
+      <div className="h-4 w-px shrink-0 bg-border/50" />
 
-        <MultiTransport
+      <MultiTransport
           masterSettings={masterSettings}
           onMasterSpeedChange={handleMasterSpeedChange}
           slotCount={entries.length}
@@ -2288,6 +2578,21 @@ export function MultiPage() {
           onMatchAll={() => { void handleMatchAll(); }}
           onTempoMatchAll={() => { void handleTempoMatchAll(); }}
           onLockAll={() => { void handleLockAll(); }}
+          onComputeSuggestions={() => { void handleComputeSuggestions(); }}
+          onPickSuggestion={(i) => { void handlePickSuggestion(i); }}
+          suggestions={suggestions}
+          suggestIndex={suggestIndex}
+          onUndoSuggest={suggestUndoRef.current ? handleUndoSuggest : undefined}
+          suggestNote={suggestNote}
+          suggestKeepLoops={suggestKeepLoops}
+          onToggleKeepLoops={handleToggleKeepLoops}
+          versions={versions}
+          onSaveVersion={handleSaveVersion}
+          onRestoreVersion={(id) => {
+            const v = versions.find((x) => x.id === id);
+            if (v) handleRestoreVersion(v);
+          }}
+          onDeleteVersion={handleDeleteVersion}
           slotsLoading={entries.some((e) => e.loading)}
           staleTempoCount={staleTempoIds.size}
           onRelockStale={() => { void handleRelockStale(); }}

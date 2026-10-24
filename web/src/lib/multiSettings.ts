@@ -361,3 +361,99 @@ export function deleteNamedSession(name: string): MultiSession[] {
   return updated;
 }
 
+
+/**
+ * A saved rack state WITHIN a session: loops, anchors, matching and effects, for the stems
+ * already loaded.
+ *
+ * Distinct from a session, and the distinction is the whole point. A session is *which
+ * stems are loaded*. A version is everything else about those same stems — so one session
+ * holds many versions, and switching between them never reloads or re-separates audio.
+ *
+ * Suggestions and hand-saved states are the same shape deliberately: a suggestion is one
+ * the app proposed, a version is one you kept, and either can be restored the same way.
+ */
+export interface MultiVersion {
+  id: string;
+  name: string;
+  savedAt: number;
+  slots: MultiSlot[];
+  /** Anchors by trackId+stem, not slot UUID — UUIDs are minted fresh on every load. */
+  referenceKey: { trackId: string; stemName: StemName | null } | null;
+  tempoAnchorKey: { trackId: string; stemName: StemName | null } | null;
+  /**
+   * The suggestion this version was saved from, if it came from one.
+   *
+   * The same four facts the suggestion row showed — character, loop length, key anchor,
+   * clarity. A name alone ages badly: "v3" six sessions later says nothing about what was
+   * in it, and the information was on screen when it was saved. Absent for a version saved
+   * from a hand-built rack, which genuinely has none of this to report.
+   */
+  from?: {
+    flavour: string;
+    loop: string;
+    tempoGroup: string;
+    keyAnchor: string;
+    separation: number;
+  };
+}
+
+const VERSIONS_KEY = "vandelay:multi:versions:v1";
+
+/**
+ * Versions are filed under the session they belong to; an unsaved rack gets its own
+ * bucket so the feature still works before anything has been named.
+ */
+const UNSAVED_BUCKET = "(unsaved)";
+const bucket = (sessionName: string | null) => sessionName ?? UNSAVED_BUCKET;
+
+type VersionStore = Record<string, MultiVersion[]>;
+
+function readVersions(): VersionStore {
+  try {
+    const raw = localStorage.getItem(VERSIONS_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? (parsed as VersionStore) : {};
+  } catch { return {}; }
+}
+
+function writeVersions(store: VersionStore): void {
+  try { localStorage.setItem(VERSIONS_KEY, JSON.stringify(store)); } catch { /* quota */ }
+}
+
+export function loadVersions(sessionName: string | null): MultiVersion[] {
+  const list = readVersions()[bucket(sessionName)] ?? [];
+  return Array.isArray(list) ? list.filter((v) => v && typeof v.name === "string" && Array.isArray(v.slots)) : [];
+}
+
+export function saveVersion(sessionName: string | null, version: MultiVersion): MultiVersion[] {
+  const store = readVersions();
+  const key = bucket(sessionName);
+  // Newest first, and a repeated name replaces rather than accumulating near-identical rows.
+  const kept = (store[key] ?? []).filter((v) => v.name !== version.name);
+  store[key] = [version, ...kept];
+  writeVersions(store);
+  return store[key];
+}
+
+export function deleteVersion(sessionName: string | null, id: string): MultiVersion[] {
+  const store = readVersions();
+  const key = bucket(sessionName);
+  store[key] = (store[key] ?? []).filter((v) => v.id !== id);
+  writeVersions(store);
+  return store[key];
+}
+
+/** Carry a bucket across a rename, so naming a session does not orphan its versions. */
+export function renameVersionBucket(from: string | null, to: string | null): void {
+  const store = readVersions();
+  const a = bucket(from);
+  const b = bucket(to);
+  if (a === b || !store[a]) return;
+  store[b] = [...(store[a] ?? []), ...(store[b] ?? [])];
+  delete store[a];
+  writeVersions(store);
+}
+
+export function readAllVersions(): VersionStore { return readVersions(); }
+export function writeAllVersions(store: VersionStore): void { writeVersions(store); }

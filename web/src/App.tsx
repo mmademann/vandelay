@@ -23,8 +23,17 @@ export default function App() {
   return (
     <BrowserRouter>
       <div className="flex h-dvh w-full flex-col gap-4 overflow-hidden px-4 py-4 sm:px-6">
-        <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1.5">
-          <nav className="flex shrink-0 items-center gap-4 text-xs uppercase tracking-widest">
+        {/* THE row. Every control on this page — the π link, the session chip and the whole
+            transport — is a direct child of this one flex container, so they flow as a single
+            line and wrap one item at a time. The page used to nest them three containers
+            deep, and a nested flex container is one atomic item: it cannot share a line with
+            its neighbours, it can only drop below them. Everything between here and the
+            buttons is `display: contents` to keep it that way. */}
+        <header className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+          {/* `self-start` with a nudge: once the row wraps, `items-center` floats the π
+              between the lines. It belongs on the first one, optically centred on the
+              buttons beside it. */}
+          <nav className="mt-1 flex shrink-0 items-center gap-4 self-start text-xs uppercase tracking-widest">
             {/* Multi does everything Single/Mix/Stems do, including separation via
                 SlotPicker. Routes stay live so existing links keep working. */}
             {/* <NavLink
@@ -82,7 +91,7 @@ export default function App() {
               </svg>
             </NavLink>
           </nav>
-          <div id="multi-transport-portal" className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1.5" />
+          <div id="multi-transport-portal" className="contents" />
         </header>
 
         <main className="flex min-h-0 flex-1 flex-col">

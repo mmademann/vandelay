@@ -70,7 +70,7 @@ Decoded `AudioBuffer`s are **in-memory only** (per session). WAV bytes and metad
 | `engine` | Single track | `Player → Distortion → EQ → Delay → Reverb → Gain → destination` |
 | `mixEngine` | Per audio strip | Same chain → `Volume → PauseGain → master` |
 | `drumEngine` | Drums | Synths → separate kick/hat effect chains → master |
-| `multiEngine` | Per slot | `Player → Distortion → EqLo → EqMid → EqHi → Bass → TapeDelay → DualReverb → Gain → Volume → master` (+ parallel: `springConvolver → springWet → master`; `throwSend → throwFilter → throwDelay → throwReverb → master`) |
+| `multiEngine` | Per slot | `Player → Drive → Distortion → Makeup → EqLo → EqMid → EqHi → Bass → TapeDelay → DualReverb → Gain → Volume → master → Limiter → destination` (+ parallel: `springConvolver → springWet → master`; `throwSend → throwFilter → throwDelay → throwReverb → master`) |
 
 Loop regions are managed in engine code, not via the player's native loop points. Pitch/speed go through **`playbackRateForEffects`** on `Tone.Player`.
 
@@ -147,7 +147,7 @@ Separate from key matching and deliberately orthogonal to it: **key matching mov
 - **Effective (heard) tempo**: `anchorEffectiveBpm = rawBpm × rate / stretch`, where `rate` folds in Speed, pitch-when-unlinked, and master speed. This — not the raw detected BPM — is what slaves match to and what the delay grid uses. Riding the anchor's Speed knob changes it, which is why that now marks slaves stale.
 - **Tempo relation** (`slot.tempoRelation`, persisted): the slot's tempo as a multiple of the anchor's heard tempo — `TEMPO_RELATIONS` in `loopSnap.ts` is the ladder, ordered slow→fast: `Slower 4× / 2× / a bit (¾)` · `Same as anchor` · `Faster a bit (1⅓) / 2× / 4×`. Labels lead with the direction and carry the resulting BPM; ratio notation (`3:4`) and musician's terms (`half time`) were both tried and both make you stop and decode. **`tempoRelation` undefined means "auto", which is NOT the same as `1`** — a stored 1 reads as "always play at the anchor's tempo" and suppresses the octave fold, so a ratio of 1.86 that should fold to 0.93 ships as 1.86 (audibly double speed). `effectiveRelation` on the entry is the resolved value for display; only `tempoRelation` persists. Auto is what Match Tempos picks; a select beside the tempo button chooses it directly (arrows were tried and read as a mystery — you cannot see the next value, and half the ladder is polymetric). This exists because beat detection routinely lands on the wrong multiple — it is the ÷2/×2 button every DJ tool ships. A stepped slot keeps its relation across re-matches and re-locks; stale detection compares against the *chosen* relation, so half-time is not instantly dragged back to `1:1`. `gridSafe` marks the relations whose bar stays a whole multiple of the anchor's. `3:4` and `4:3` are polymetric, so `quantizeAllToAnchorGrid` **skips them** (`isGridSafeRelation`) and names them in the grid chip as `off-grid by choice` — rounding a slot to a bar it does not share produces a loop that is not a whole number of *its* bars and never repeats cleanly.
 - **Stale detection**: `staleTempoIds` compares each stretched slot's ratio against what the anchor's *current* BPM implies. Mismatch → amber `↻ Re-lock Tempo`. Shares `tempoStretchRatio()` with the stretch itself so the two cannot disagree.
-- **Re-lock**: the transport shows `↻ Re-lock N` only while slots are stale, and re-stretches just those (unlike Match Tempos, which rebuilds every slot). An `auto re-lock on/off` toggle, persisted, does it automatically 600ms after the anchor settles — debounced because dragging a knob would otherwise fire a cascade of buffer rebuilds per frame.
+- **Re-match**: the transport shows `↻ Re-match N` only while slots are stale, and re-stretches just those (unlike Match Tempos, which rebuilds every slot). An `auto-match on/off` toggle, persisted, does it automatically 600ms after the anchor settles — debounced because dragging a knob would otherwise fire a cascade of buffer rebuilds per frame.
 - **Phase** (`slot.phase`) is a pure *playhead* offset — it shifts **when** a slot lands against the anchor by a fraction of the anchor's bar, and never touches the loop bounds. The engine owns one implementation (`phaseOffsetFor`), exposed as `startPositionFor()` / `setPhaseBarSec()`; `applyPhase` in `SlotStrip` moves by the *difference* from the current phase via `multiEngine.nudgeSlot`.
 - **Move** is the counterpart: it slides the loop **region** by ¼ bar at a time, length unchanged — so Move changes *what* is looped, Phase changes *when* it lands. It carries the playhead with the region (`updateSlot` preserves absolute position, so a bare bounds change would strand it).
 - **`estimateBpm()`** (`loopSnap.ts`) measures tempo by onset autocorrelation when Essentia has no cached BPM. Costs ~30ms on a 3-minute stem, so results are memoised per buffer in a `WeakMap` (`sourceBpm`) — never call it in a render path.
@@ -205,7 +205,7 @@ web/src/
 
 ## Multi UI layout (current)
 
-**Transport bar** (top): `Session <name>` button (names the active session; falls back to `Sessions (N)`) · `▶ Play All` / `⏸ Pause All` (+ `Fade` half) · `⏮` (Rewind All) · `● Rec` · master speed slider · `⚓ Lock All` (keys then tempos — the order that holds; the two below are the single-dimension fallbacks) · `↻ Match Keys` · `↻ Match Tempos` (with an inline result chip after quantizing) · `↻ Re-lock N` (only while slots are stale) · `auto re-lock on/off` · `↓ Export` (floating panel) · `⚄ Random` · `↯ Throw` (floating panel)
+**Transport bar** (top): `Session <name>` button (names the active session; falls back to `Sessions (N)`) · `▶ Play All` / `⏸ Pause All` (+ `Fade` half) · `⏮` (Rewind All) · `● Rec` · master speed slider · `✨ Suggest` (floating panel: ranked whole-rack proposals, saved versions, undo) · `⚓ Match All` (keys then tempos — the order that holds; the two below are the single-dimension fallbacks) · `↻ Match Keys` · `↻ Match Tempos` (with an inline result chip after quantizing) · `↻ Re-match N` (only while slots are stale) · `auto-match on/off` · `↓ Export` (floating panel) · `⚄ Random` · `↯ Throw` (floating panel)
 
 The π home link at the far left empties the rack — it navigates to a bare `/`, and the reconciler unloads every slot while an effect clears the session label. A separate `Clear` button did exactly this and was removed as a duplicate.
 
@@ -404,6 +404,14 @@ Traps that have each actually bitten:
 33. **The anchor's grid applies to every slot, matched or not** — a shared grid is the point
     of a tempo anchor. Giving an unmatched slot its own delay grid was tried and reverted: it
     made that slot's echoes sound isolated from the rest of the rack.
+
+34. **The master ends in a limiter, and the recorder taps AFTER it** — `MASTER_CEILING_DB`
+    (-0.5dB) in `multiEngine.ts`, mirrored in `renderMulti.ts` so an export cannot clip where
+    playback does not. Five stems summing plus Grit's +9dB net at full go past 0dBFS on their
+    own; the master used to be a bare `Volume` straight to the destination. `getRecordTap()`
+    returns the limiter — `getMasterNode()` returns the Volume, and tapping that records
+    PRE-limiter, so a loud take clips in the file while the room stays clean. It has no
+    control and is not a sound.
 
 ## Known gotchas
 

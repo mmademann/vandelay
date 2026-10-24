@@ -33,7 +33,7 @@ class MultiRecorder {
   async start(): Promise<void> {
     if (this.recording) return;
 
-    const master = multiEngine.getMasterNode();
+    const master = multiEngine.getRecordTap();
     if (!master) throw new Error("Nothing to record — load a slot first.");
 
     await Tone.start();
@@ -85,7 +85,7 @@ class MultiRecorder {
 
     this.node.port.postMessage("stop");
     const node = this.node;
-    const master = multiEngine.getMasterNode();
+    const master = multiEngine.getRecordTap();
     try { (master?.output as unknown as AudioNode | undefined)?.disconnect(node); }
     catch { /* master may be gone */ }
     node.port.onmessage = null;
@@ -120,7 +120,7 @@ class MultiRecorder {
   cancel(): void {
     if (!this.node) return;
     this.node.port.postMessage("stop");
-    const master = multiEngine.getMasterNode();
+    const master = multiEngine.getRecordTap();
     try { (master?.output as unknown as AudioNode | undefined)?.disconnect(this.node); }
     catch { /* master may be gone */ }
     this.node.port.onmessage = null;
