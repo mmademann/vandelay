@@ -43,9 +43,26 @@ interface YtDlpMeta {
   duration: number;
 }
 
+/**
+ * Borrow the browser's YouTube cookies.
+ *
+ * YouTube now answers an anonymous request with "Sign in to confirm you're not a bot" for
+ * a growing share of videos, and no amount of retrying gets past it — it is an auth check,
+ * not a rate limit. Upgrading yt-dlp is the first thing to try when downloads start failing
+ * (the extractors are patched within days of each change), but once YouTube asks for a
+ * session, only a real one will do.
+ *
+ * Reads the logged-in profile straight from Chrome, so there is no cookie file to export or
+ * keep fresh. macOS will ask for Keychain access the first time. Override the browser with
+ * YTDLP_COOKIES_FROM_BROWSER (any value yt-dlp accepts: firefox, safari, brave, …), or set
+ * it empty to go back to anonymous requests.
+ */
+const COOKIE_BROWSER = process.env.YTDLP_COOKIES_FROM_BROWSER ?? "chrome";
+const COOKIE_ARGS = COOKIE_BROWSER ? ["--cookies-from-browser", COOKIE_BROWSER] : [];
+
 function fetchMetadata(url: string): Promise<YtDlpMeta> {
   return new Promise((resolve, reject) => {
-    const proc = spawn("yt-dlp", ["--dump-json", "--no-playlist", url]);
+    const proc = spawn("yt-dlp", [...COOKIE_ARGS, "--dump-json", "--no-playlist", url]);
     let out = "";
     let err = "";
     proc.stdout.on("data", (d) => (out += d.toString()));
@@ -148,6 +165,7 @@ async function downloadAndTranscode(url: string, outPath: string): Promise<void>
 function attemptDownload(url: string, outPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const ytdlp = spawn("yt-dlp", [
+      ...COOKIE_ARGS,
       // Prefer m4a — the opus (251) path 403s more often when piped to stdout.
       "-f",
       "bestaudio[ext=m4a]/bestaudio",
