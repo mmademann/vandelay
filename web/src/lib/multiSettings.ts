@@ -165,6 +165,78 @@ export function saveThrowSettings(s: ThrowSettings): void {
 }
 
 /**
+ * Chop — a momentary re-trigger, not an effect.
+ *
+ * Delay sounds adjacent to a chop and is not one: a delay layers decaying copies OVER a
+ * track that keeps playing, while a chop replays a slice at full level and you hear nothing
+ * else. DJ Screw was rewinding the record with his hand. So this is a transport move, and
+ * the engine implements it by running a second player over the same buffer — see
+ * MultiEngine.startChop.
+ *
+ * Global rather than per-slot, exactly like ThrowSettings: it is how a performance gesture
+ * behaves, not state belonging to one stem.
+ */
+export type ChopMode = "stutter" | "roll";
+
+export interface ChopSettings {
+  /** Slice length as a fraction of a beat. 1 = a whole beat, 0.25 = a sixteenth note. */
+  sliceBeats: number;
+  /**
+   * stutter = the same slice over and over, the classic rewind.
+   * roll    = the slice halves as you hold it, the accelerating build.
+   */
+  mode: ChopMode;
+  /**
+   * Whether the song WAITS while you chop, instead of running on underneath.
+   *
+   * Off (the default): the slot's own playhead keeps going silently, so you land where the
+   * track would have been and the bit you chopped over is gone. Nothing drifts.
+   *
+   * On: what DJ Screw actually did with his hand. On release the playhead is put back to
+   * the slice boundary, so nothing is skipped and the track gets longer. It stays exactly
+   * on the grid — a slice boundary IS a beat boundary — but the slot falls behind the
+   * other stems in the arrangement, and that accumulates with every chop. Authentic for
+   * one record; something to watch across a full rack.
+   */
+  holdSong: boolean;
+}
+
+export const DEFAULT_CHOP_SETTINGS: ChopSettings = {
+  // A whole beat. Half a beat was the first guess and it is too quick to register as
+  // anything — you hear a texture, not a repeat. A Screw chop is a rewind onto a word or a
+  // drum phrase, so the slice has to be long enough to recognise what came back.
+  sliceBeats: 1,
+  mode: "stutter",
+  // Waits, because that is what chopping and screwing IS: Screw backspun the record, so
+  // nothing was skipped and the tape came out longer than the original. Rolling on is the
+  // concession to having five stems that have to stay together, not the real thing.
+  holdSong: true,
+};
+
+/** Slice lengths the picker offers, longest first. Two beats is a half-bar rewind. */
+export const CHOP_SLICES: { label: string; beats: number }[] = [
+  { label: "2", beats: 2 },
+  { label: "1", beats: 1 },
+  { label: "1/2", beats: 0.5 },
+  { label: "1/3", beats: 1 / 3 },
+  { label: "1/4", beats: 0.25 },
+];
+
+const CHOP_SETTINGS_KEY = "vandelay:multi:chop-settings:v1";
+
+export function loadChopSettings(): ChopSettings {
+  try {
+    const raw = localStorage.getItem(CHOP_SETTINGS_KEY);
+    if (!raw) return { ...DEFAULT_CHOP_SETTINGS };
+    return { ...DEFAULT_CHOP_SETTINGS, ...JSON.parse(raw) };
+  } catch { return { ...DEFAULT_CHOP_SETTINGS }; }
+}
+
+export function saveChopSettings(s: ChopSettings): void {
+  try { localStorage.setItem(CHOP_SETTINGS_KEY, JSON.stringify(s)); } catch {}
+}
+
+/**
  * Whether matched slots re-stretch automatically when the anchor's tempo changes.
  *
  * Off by default: an automatic cascade fires a stretch per slot, which is both audible and
@@ -292,6 +364,7 @@ export interface MultiMasterSettings {
   gain: number;
   loopLengthOverride: number | null;
   throwSettings: ThrowSettings;
+  chopSettings: ChopSettings;
   /**
    * Relative multiplier over every slot's own speed. Because it scales all slots by the
    * same ratio, the intervals between them are preserved — the whole set transposes
@@ -323,6 +396,7 @@ export function loadNamedSessions(): MultiSession[] {
           ...s.masterSettings,
           masterSpeed: s.masterSettings?.masterSpeed ?? 1,
           throwSettings: { ...DEFAULT_THROW_SETTINGS, ...s.masterSettings?.throwSettings },
+          chopSettings: { ...DEFAULT_CHOP_SETTINGS, ...s.masterSettings?.chopSettings },
         },
       }));
   } catch {

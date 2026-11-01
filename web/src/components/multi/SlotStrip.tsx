@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { cn } from "../../lib/cn";
 import { snapLoop, estimateBpm, findHits, snapDelayToTempo, stepDelayDivision, PHASE_DIVISIONS, tempoRelationLabel, TEMPO_RELATIONS, lockingDelays, coincidenceBeats } from "../../lib/loopSnap";
 import { multiEngine } from "../../audio/multiEngine";
-import type { MultiSlot } from "../../lib/multiSettings";
+import type { ChopSettings, MultiSlot } from "../../lib/multiSettings";
 import { Knob } from "./Knob";
 import {
   saveSlotSettings,
@@ -295,6 +295,9 @@ interface Props {
   isMatched: boolean;
   matchedBasePitch: number;
   pitchInterval: 1 | 7 | 12;
+  /** Position in the rack, 0-based. Only used to pick this slot's chop key. */
+  slotIndex: number;
+  chopSettings: ChopSettings;
   onPitchIntervalChange: (n: 1 | 7 | 12) => void;
   onRemove: () => void;
   onChange: (patch: Partial<MultiSlot>) => void;
@@ -349,9 +352,70 @@ interface Props {
   onApplyPreset: (preset: MultiPreset) => void;
 }
 
-export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedBpm, anchorBpm, gridBpm, rawGridBpm, tempoStale, tempoRelation, effectiveRelation, autoRelation, onTempoRelationChange, isReference, hasReference, isMatched, matchedBasePitch, pitchInterval, onPitchIntervalChange, onRemove, onChange, onSetReference, onTakeReference, onMatch, isTempoAnchor, hasTempoAnchor, onSetTempoAnchor, onTakeTempoAnchor, onTempoMatch, onStretchChange, stretch, stretching, onSavePreset, onDeletePreset, onApplyPreset }: Props) {
+export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedBpm, anchorBpm, gridBpm, rawGridBpm, tempoStale, tempoRelation, effectiveRelation, autoRelation, onTempoRelationChange, isReference, hasReference, isMatched, matchedBasePitch, pitchInterval, slotIndex, chopSettings, onPitchIntervalChange, onRemove, onChange, onSetReference, onTakeReference, onMatch, isTempoAnchor, hasTempoAnchor, onSetTempoAnchor, onTakeTempoAnchor, onTempoMatch, onStretchChange, stretch, stretching, onSavePreset, onDeletePreset, onApplyPreset }: Props) {
   const [presetName, setPresetName] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
+  const [chopping, setChopping] = useState(false);
+
+  /**
+   * One slice of this slot, in BUFFER seconds.
+   *
+   * Off rawGridBpm — the anchor's bar measured in this slot's own file timebase — because a
+   * chop slices loop positions, and those are buffer offsets that playback rate does not
+   * move. This is the same grid Phase, Move and Snap use (invariant 28a); the heard tempo
+   * would be wrong here by exactly the playback rate.
+   */
+  const chopSliceSec = rawGridBpm ? (60 / rawGridBpm) * chopSettings.sliceBeats : null;
+
+  const startChop = useCallback(() => {
+    if (!chopSliceSec || !buffer) return;
+    multiEngine.startChop(slot.id, chopSliceSec, chopSettings.mode, chopSettings.holdSong);
+    setChopping(multiEngine.isChopActive(slot.id));
+  }, [chopSliceSec, buffer, slot.id, chopSettings.mode, chopSettings.holdSong]);
+
+  const endChop = useCallback(() => {
+    multiEngine.stopChop(slot.id);
+    // The engine may be finishing a tap's figure, so ask rather than assume.
+    setChopping(multiEngine.isChopActive(slot.id));
+  }, [slot.id]);
+
+  /**
+   * Hold a number key to chop that slot.
+   *
+   * Chopping with a mouse button is not playable — the gesture is rhythmic and both hands
+   * are usually busy. Slot 1 is "1", and so on. Keydown repeats while a key is held, so the
+   * engine's own chopActive guard is what stops a chop restarting sixty times a second.
+   */
+  useEffect(() => {
+    const key = String(slotIndex + 1);
+    if (slotIndex > 8) return;
+    const typing = (t: EventTarget | null) =>
+      t instanceof HTMLElement && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
+    function down(e: KeyboardEvent) {
+      if (e.key !== key || e.metaKey || e.ctrlKey || e.altKey || typing(e.target)) return;
+      e.preventDefault();
+      startChop();
+    }
+    function up(e: KeyboardEvent) {
+      if (e.key !== key) return;
+      endChop();
+    }
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    // Tabbing away mid-chop never delivers the keyup, and the slot stays muted with no key
+    // left to release.
+    window.addEventListener("blur", endChop);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", endChop);
+    };
+  }, [slotIndex, startChop, endChop]);
+
+  // A chop must never outlive the strip, or the slot stays muted with nothing audible and
+  // no button left to un-press.
+  useEffect(() => () => { multiEngine.stopChop(slot.id); }, [slot.id]);
+
   const [throwActive, setThrowActive] = useState(false);
   /** A throw waiting for the next hit. Without this the button looks dead for up to 1.2s. */
   const [throwArmed, setThrowArmed] = useState(false);
@@ -368,6 +432,9 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
       setIsPlaying(multiEngine.isSlotPlaying(slot.id));
       setThrowActive(multiEngine.isThrowActive(slot.id));
       setThrowArmed(multiEngine.throwArmedAt(slot.id) > 0 && !multiEngine.isThrowActive(slot.id));
+      // A tap's figure ends on the engine's own clock, so the button cannot light itself
+      // down from the pointer event.
+      setChopping(multiEngine.isChopActive(slot.id));
       setCurrentTime(multiEngine.getSlotPosition(slot.id));
       // Catches seeks made elsewhere (Rewind All) — a stopped slot has no repaint loop.
       setSeekRevision(multiEngine.getSeekNonce(slot.id));
@@ -905,6 +972,23 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
               !buffer && "opacity-30 cursor-not-allowed")}
             title="Throw — tape echo burst + spring reverb. Waits for the next percussive hit so it lands on the beat rather than on the click.">
             {throwArmed ? "↯ Waiting…" : "↯ Throw"}
+          </button>
+          {/* Momentary, like Throw — held, not toggled. A chop is a gesture you play, and a
+              latched one is just a broken loop you have to remember to switch off. */}
+          <button type="button"
+            onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); startChop(); }}
+            onPointerUp={endChop}
+            onPointerCancel={endChop}
+            disabled={!buffer || !chopSliceSec}
+            className={cn("select-none rounded px-2 py-1 text-xs font-bold uppercase tracking-wide transition",
+              chopping
+                ? "bg-amber-500/25 text-amber-300 ring-1 ring-amber-400/50"
+                : "bg-muted/80 text-foreground/50 hover:text-amber-300 hover:bg-muted",
+              (!buffer || !chopSliceSec) && "opacity-30 cursor-not-allowed")}
+            title={chopSliceSec
+              ? `Chop — hold to replay a ${chopSettings.sliceBeats} beat slice over and over. Key ${slotIndex + 1}. Not an echo: the slot itself repeats, and it picks up exactly where it should on release.`
+              : "Chop needs a tempo — set a tempo anchor or wait for detection"}>
+            ✂ Chop
           </button>
           <button type="button"
             onClick={() => update({

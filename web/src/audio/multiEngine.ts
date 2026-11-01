@@ -6,8 +6,8 @@ Tone.setContext(new Tone.Context({ latencyHint: "playback", lookAhead: 0.3, upda
 
 import { disposeDualReverb, synthesizeSpringImpulse } from "./reverbSlot";
 import { createMultiEffectsChain, applyMultiEffectsChain, type MultiEffectsChain } from "./multiChain";
-import type { MultiSlot, MultiMasterSettings, ThrowSettings } from "../lib/multiSettings";
-import { DEFAULT_THROW_SETTINGS } from "../lib/multiSettings";
+import type { MultiSlot, MultiMasterSettings, ThrowSettings, ChopMode } from "../lib/multiSettings";
+import { DEFAULT_THROW_SETTINGS, DEFAULT_CHOP_SETTINGS } from "../lib/multiSettings";
 
 /**
  * Ceiling on the master bus, in dB.
@@ -61,6 +61,30 @@ interface RuntimeSlot extends MultiSlot {
   throwReverb: Tone.Reverb;
   throwActive: boolean;
   throwTimer: ReturnType<typeof setTimeout> | null;
+  /**
+   * Chop — a second player over the same buffer, and the two gates that cross between them.
+   *
+   * The main player NEVER stops while chopping; it is only muted. That is the whole reason
+   * for a second player rather than seeking the real one: when the chop ends the slot is
+   * already exactly where it should be, still on the grid and still in phase with every
+   * other slot, with nothing to resync. Seeking the main player would hand us a drift
+   * problem to solve on every release.
+   *
+   * Built lazily on the first chop, so a rack nobody chops pays nothing for this.
+   */
+  mainGate: Tone.Gain;
+  chopGate: Tone.Gain;
+  chopPlayer: Tone.Player | null;
+  chopActive: boolean;
+  /** Halving timer for roll mode. */
+  chopTimer: ReturnType<typeof setInterval> | null;
+  /** When the current chop was scheduled, so its release cannot be ordered before it. */
+  chopStartedAt?: number;
+  /** Where the current chop is slicing from, and how long the slice is. Both buffer seconds. */
+  chopStart?: number;
+  chopSliceLen?: number;
+  /** Whether this chop should put the playhead back on release — see ChopSettings.holdSong. */
+  chopHold?: boolean;
   // Independent playback tracking
   startedAt: number;
   /** Tone time the current fade ends; volume writes before this would cancel the ramp. */
@@ -80,6 +104,7 @@ class MultiEngine {
   private masterSettings: MultiMasterSettings = {
     gain: 0,
     loopLengthOverride: null,
+    chopSettings: DEFAULT_CHOP_SETTINGS,
     masterSpeed: 1,
     throwSettings: { ...DEFAULT_THROW_SETTINGS },
   };
@@ -227,7 +252,13 @@ class MultiEngine {
 
     // chain.drive, not chain.distortion: the grit drive sits in front of the shaper, so it
     // is now the chain's input node.
-    const player = new Tone.Player(toneBuffer).connect(chain.drive);
+    //
+    // Both players meet at the chain input, so a chop inherits the slot's whole voice — its
+    // EQ, grit, delay and reverb. A chop routed anywhere else sounds like a separate box
+    // bolted on beside the track rather than the track itself being chopped.
+    const mainGate = new Tone.Gain(1).connect(chain.drive);
+    const chopGate = new Tone.Gain(0).connect(chain.drive);
+    const player = new Tone.Player(toneBuffer).connect(mainGate);
     player.loop = true;
     player.loopStart = safeLoopStart;
     player.loopEnd = safeLoopEnd;
@@ -249,6 +280,11 @@ class MultiEngine {
       volume,
       springConvolver,
       springWet,
+      mainGate,
+      chopGate,
+      chopPlayer: null,
+      chopActive: false,
+      chopTimer: null,
       throwSend,
       throwFilter,
       throwDelay,
@@ -383,6 +419,10 @@ class MultiEngine {
     slot.throwReverb.disconnect(); slot.throwReverb.dispose();
     slot.throwDelay.disconnect(); slot.throwDelay.dispose();
     slot.throwFilter.disconnect(); slot.throwFilter.dispose();
+    if (slot.chopTimer) { clearInterval(slot.chopTimer); slot.chopTimer = null; }
+    if (slot.chopPlayer) { slot.chopPlayer.disconnect(); slot.chopPlayer.dispose(); }
+    slot.mainGate.disconnect(); slot.mainGate.dispose();
+    slot.chopGate.disconnect(); slot.chopGate.dispose();
     slot.throwSend.disconnect(); slot.throwSend.dispose();
     slot.volume.disconnect(); slot.volume.dispose();
     this.slots.delete(id);
@@ -594,16 +634,28 @@ class MultiEngine {
     }
   }
 
-  seekSlot(id: string, time: number): void {
+  /**
+   * `atTime` overrides WHEN the seek happens, and only Chop passes it.
+   *
+   * Everything else wants `Tone.now()` — a transport action sample-aligning a whole rack
+   * can afford the lookahead and needs every slot to share one timestamp (invariant 22).
+   * Chop cannot: it hands the slot back to its own playhead at `Tone.immediate()`, so a
+   * seek scheduled 0.3s later means you hear the main player at whatever position it had
+   * drifted to for a third of a second, and only then does it jump. That burst of the
+   * wrong part of the song is audible as the chop picking up some other section.
+   */
+  seekSlot(id: string, time: number, atTime?: number): void {
     const slot = this.slots.get(id);
     if (!slot) return;
     const clamped = Math.max(slot.loopStart, Math.min(slot.loopEnd - 0.01, time));
     slot.startOffset = clamped;
     slot.seekNonce++;
     if (slot.playing) {
-      const now = Tone.now();
-      slot.player.seek(clamped, now);
-      slot.startedAt = now;
+      const when = atTime ?? Tone.now();
+      slot.player.seek(clamped, when);
+      // startedAt is the time the seek takes effect, so getSlotPosition stays correct
+      // whichever clock the caller used.
+      slot.startedAt = when;
     }
   }
 
@@ -624,6 +676,181 @@ class MultiEngine {
    * Percussive hit times for a slot, in buffer seconds. Supplied by the UI, which owns the
    * analysis; the engine only needs to know when the next one arrives.
    */
+  /**
+   * Start chopping a slot: replay one slice of it, over and over, at full level.
+   *
+   * `sliceSec` is in BUFFER seconds and the caller computes it, for the same reason
+   * phaseBarSec is handed in rather than derived here — loop bounds are buffer positions,
+   * so the slice has to come off the FILE-time grid, and the engine has no business knowing
+   * about BPM. Using the heard tempo for this is wrong by exactly the playback rate, which
+   * is the mistake this area has made twice before (see the three time domains in
+   * CLAUDE.md).
+   *
+   * The slice is aligned to the grid rather than to the moment of the click: it starts at
+   * the last slice boundary measured from loopStart, so a chop lands on the beat even when
+   * your hand does not. You still hear it instantly, because that boundary is behind you.
+   */
+  startChop(id: string, sliceSec: number, mode: ChopMode = "stutter", holdSong = false): void {
+    const slot = this.slots.get(id);
+    if (!slot || !slot.playing) return;
+    if (!(sliceSec > 0.01)) return;
+
+    // Keydown auto-repeats about thirty times a second while a key is held, so a chop
+    // already running is left alone rather than restarted.
+    if (slot.chopActive) return;
+
+    const buf = slot.player.buffer;
+    if (!buf) return;
+
+    const pos = this.audiblePosition(id);
+    const loopDur = slot.loopEnd - slot.loopStart;
+    if (loopDur <= 0) return;
+    // Clamp to something that fits: a slice longer than the loop is not a chop.
+    const len = Math.min(sliceSec, loopDur);
+
+    // The slice that JUST PLAYED — it ENDS where you are, it does not start there.
+    //
+    // This is what a hand on a record does, and it is the only version that answers your
+    // finger at the same speed every press. Anchoring the loop to the beat grid was tried
+    // twice and both ways are wrong: starting at the boundary behind you rewinds by up to
+    // a whole beat the instant you touch the button, and starting at the live position
+    // makes the first repeat wait for the next boundary — so the response ranges from
+    // immediate to a full beat depending on when you happened to press.
+    //
+    // The repeats line up with your hand rather than with the bar. That is how a chop
+    // sounds, and nothing drifts from it: the main playhead is never touched.
+    const chopEnd = Math.max(slot.loopStart + len, Math.min(pos, slot.loopEnd));
+    const chopStart = chopEnd - len;
+
+    if (!slot.chopPlayer) {
+      // Shares the decoded buffer — Tone wraps the same AudioBuffer, nothing is copied.
+      slot.chopPlayer = new Tone.Player(buf).connect(slot.chopGate);
+    } else if (slot.chopPlayer.buffer !== buf) {
+      // The slot has been stretched since the last chop. swapBuffer replaces the MAIN
+      // player's buffer on every re-match and knows nothing about this one, so without
+      // this the chop replays the pre-stretch audio at pre-stretch positions — it chops a
+      // different part of the song, which is exactly how this was found.
+      slot.chopPlayer.buffer = buf;
+    }
+    const cp = slot.chopPlayer;
+    cp.loop = true;
+    cp.loopStart = chopStart;
+    cp.loopEnd = chopEnd;
+    cp.playbackRate = slotPlaybackRate(slot, this.masterSettings.masterSpeed);
+
+    // immediate(), NOT now(). Tone.now() is currentTime + lookAhead, and this engine runs a
+    // 0.3s lookAhead (see the context config at the top of this file) — so every chop was
+    // scheduled a third of a second into the future. A press and release shorter than that
+    // collapsed the mute and the un-mute into a few milliseconds of audio: a click, not a
+    // chop. Rapid presses produced a row of clicks, which is what a skipping CD is.
+    //
+    // A performance gesture has to be scheduled against the real clock. Every other
+    // transport action in here uses now() on purpose, because they are sample-aligning a
+    // whole rack and can afford the lead; this one is answering a finger.
+    const t = Tone.immediate();
+    this.crossToChop(slot, true, t);
+    cp.start(t, chopStart);
+    slot.chopActive = true;
+    slot.chopStartedAt = t;
+    slot.chopStart = chopStart;
+    slot.chopSliceLen = len;
+    slot.chopHold = holdSong;
+
+    if (mode === "roll") {
+      // The slice halves as you hold it — the accelerating build. Driven by a timer rather
+      // than sample-accurate scheduling on purpose: it only has to be right to within a
+      // slice, because changing loopEnd takes effect at the next wrap either way.
+      let cur = len;
+      slot.chopTimer = setInterval(() => {
+        if (!slot.chopActive || !slot.chopPlayer) return;
+        cur = Math.max(len / 8, cur / 2);
+        slot.chopPlayer.loopEnd = Math.min(chopStart + cur, slot.loopEnd);
+      }, Math.max(60, (len / (cp.playbackRate || 1)) * 2 * 1000));
+    }
+  }
+
+  /**
+   * Stop chopping and hand the slot back to its own playhead.
+   *
+   * Nothing is resynced because nothing drifted: the main player has been running silently
+   * the whole time, so it is already at the position the slot would have reached.
+   */
+  stopChop(id: string): void {
+    const slot = this.slots.get(id);
+    if (!slot || !slot.chopActive) return;
+
+    this.endChop(slot);
+  }
+
+  private endChop(slot: RuntimeSlot): void {
+    if (!slot.chopActive) return;
+    slot.chopActive = false;
+    if (slot.chopTimer) { clearInterval(slot.chopTimer); slot.chopTimer = null; }
+    // Never un-mute before the chop has had a chance to be heard. A tap can arrive inside
+    // the crossfade, and scheduling the release behind the start plays it backwards: the
+    // slot ducks, un-ducks, and only then the slice begins, into a muted gate.
+    const t = Math.max(Tone.immediate(), (slot.chopStartedAt ?? 0) + MultiEngine.CHOP_XFADE);
+    this.crossToChop(slot, false, t);
+    // Let the fade finish before the source goes, or the tail is cut to a click.
+    slot.chopPlayer?.stop(t + MultiEngine.CHOP_XFADE);
+
+    // Hold: the song waited, so put the playhead back where the chop was holding it — the
+    // END of the slice, which is the point the track had actually reached when you pressed.
+    // Nothing is skipped and nothing is heard twice: the slice has just played several
+    // times over, so the next thing you want is whatever follows it.
+    if (slot.chopHold && slot.chopStart !== undefined && slot.chopSliceLen) {
+      const loopDur = slot.loopEnd - slot.loopStart;
+      let resume = slot.chopStart + slot.chopSliceLen;
+      if (loopDur > 0) {
+        resume = slot.loopStart + (((resume - slot.loopStart) % loopDur) + loopDur) % loopDur;
+      }
+      this.seekSlot(slot.id, resume, t);
+    }
+  }
+
+  /**
+   * Where the slot is in the sound you are HEARING, not where its clock has run to.
+   *
+   * getSlotPosition answers in now() terms — lookAhead ahead of the speakers — which is
+   * right for everything that schedules the future and wrong for a gesture reacting to what
+   * you just heard. A third of a second is most of a beat at these tempos, so the chop
+   * would slice from a bar you have not reached.
+   */
+  private audiblePosition(id: string): number {
+    const slot = this.slots.get(id);
+    if (!slot) return 0;
+    const loopDur = slot.loopEnd - slot.loopStart;
+    if (loopDur <= 0) return this.getSlotPosition(id);
+    const behind = Tone.getContext().lookAhead * slotPlaybackRate(slot, this.masterSettings.masterSpeed);
+    const raw = this.getSlotPosition(id) - slot.loopStart - behind;
+    return slot.loopStart + ((raw % loopDur) + loopDur) % loopDur;
+  }
+
+  isChopActive(id: string): boolean {
+    return this.slots.get(id)?.chopActive ?? false;
+  }
+
+  /**
+   * Cross between the slot's own playhead and the chop slice.
+   *
+   * Short, not instant. The attack of each slice should be abrupt — that is the sound — but
+   * stepping between two unrelated points of a waveform at full level is a click, and the
+   * entry and exit are where it is worst.
+   */
+  private static readonly CHOP_XFADE = 0.004;
+
+  private crossToChop(slot: RuntimeSlot, toChop: boolean, now: number): void {
+    const x = MultiEngine.CHOP_XFADE;
+    for (const [g, target] of [
+      [slot.mainGate, toChop ? 0 : 1],
+      [slot.chopGate, toChop ? 1 : 0],
+    ] as [Tone.Gain, number][]) {
+      g.gain.cancelScheduledValues(now);
+      g.gain.setValueAtTime(g.gain.value, now);
+      g.gain.linearRampToValueAtTime(target, now + x);
+    }
+  }
+
   setHits(id: string, hits: number[]): void {
     const slot = this.slots.get(id);
     if (slot) slot.hits = hits;
@@ -957,6 +1184,10 @@ class MultiEngine {
       slot.throwReverb.disconnect(); slot.throwReverb.dispose();
       slot.throwDelay.disconnect(); slot.throwDelay.dispose();
       slot.throwFilter.disconnect(); slot.throwFilter.dispose();
+      if (slot.chopTimer) { clearInterval(slot.chopTimer); slot.chopTimer = null; }
+      if (slot.chopPlayer) { slot.chopPlayer.disconnect(); slot.chopPlayer.dispose(); }
+      slot.mainGate.disconnect(); slot.mainGate.dispose();
+      slot.chopGate.disconnect(); slot.chopGate.dispose();
       slot.throwSend.disconnect(); slot.throwSend.dispose();
       slot.volume.disconnect(); slot.volume.dispose();
     }

@@ -1067,8 +1067,10 @@ section("12u. Grit drives the shaper, not just its curve");
        && (multiChain.match(/GRIT_MAKEUP_DB/g) ?? []).length >= 3,
      "a second hardcoded number is how the two chains drift apart");
   ok("the player feeds the drive, not the shaper",
-     /new Tone\.Player\(toneBuffer\)\.connect\(chain\.drive\)/.test(engine),
-     "connecting to the distortion would route around the drive and silently restore the old behaviour");
+     /new Tone\.Player\(toneBuffer\)\.connect\(mainGate\)/.test(engine)
+       && /const mainGate = new Tone\.Gain\(1\)\.connect\(chain\.drive\)/.test(engine),
+     "connecting to the distortion would route around the drive and silently restore the old "
+     + "behaviour — the gate Chop mutes sits in between, but it still lands on drive");
   ok("the new nodes are disposed with the slot",
      (engine.match(/chain\.drive\.disconnect\(\); slot\.chain\.drive\.dispose\(\)/g) ?? []).length === 2
        && (engine.match(/chain\.makeup\.disconnect\(\); slot\.chain\.makeup\.dispose\(\)/g) ?? []).length === 2,
@@ -1721,6 +1723,113 @@ section("12ap. a brick wall between the mix and the speakers");
   ok("it has no knob",
      !/masterCeiling|limiterThreshold/.test(read("components/multi/MultiTransport.tsx")),
      "it is a safety net, not a sound — a control for it would invite using it as one");
+}
+
+section("12aq. Chop is a re-trigger, not an effect");
+{
+  // The distinction the whole feature turns on: a delay layers decaying copies OVER a track
+  // that keeps playing, while a chop replays a slice at full level and you hear nothing
+  // else. Faking it with delay gets the repeats and misses the abruptness entirely.
+  ok("there is a second player, and the main one is never stopped",
+     /slot\.chopPlayer = new Tone\.Player\(buf\)\.connect\(slot\.chopGate\)/.test(engine)
+       && !/startChop[\s\S]{0,1800}slot\.player\.stop\(/.test(engine),
+     "the main player running silently underneath is what makes release free — seek it "
+     + "instead and every release owes the grid a resync");
+  ok("both players meet at the chain input",
+     /const chopGate = new Tone\.Gain\(0\)\.connect\(chain\.drive\)/.test(engine),
+     "a chop routed anywhere else sounds like a separate box, not like that slot chopped");
+  ok("the slice is given in BUFFER seconds by the caller",
+     /startChop\(id: string, sliceSec: number/.test(engine)
+       && /const chopSliceSec = rawGridBpm \? \(60 \/ rawGridBpm\) \* chopSettings\.sliceBeats : null;/.test(slotStrip),
+     "loop positions are buffer offsets, so the slice comes off the FILE grid like Phase, "
+     + "Move and Snap (invariant 28a) — the heard tempo is wrong here by the playback rate");
+  ok("it repeats the slice that JUST PLAYED",
+     /const chopEnd = Math\.max\(slot\.loopStart \+ len, Math\.min\(pos, slot\.loopEnd\)\);/.test(engine)
+       && /const chopStart = chopEnd - len;/.test(engine),
+     "the slice ENDS where you are rather than starting there — what a hand on a record "
+     + "does, and the only version that answers your finger at the same speed every press. "
+     + "Anchoring to the beat grid was tried twice: the boundary behind you rewinds a beat "
+     + "on press, and the live position makes the first repeat wait for the next boundary, "
+     + "so the response ranged from instant to a full beat depending on when you pressed");
+  ok("entry and exit are crossfaded",
+     /CHOP_XFADE = 0\.004/.test(engine) && /private crossToChop\(/.test(engine),
+     "each slice should attack abruptly, but stepping between two unrelated points of a "
+     + "waveform at full level is a click — worst at the edges");
+  ok("the chop is momentary, not latched",
+     /onPointerDown=\{\(e\) => \{ e\.currentTarget\.setPointerCapture\(e\.pointerId\); startChop\(\); \}\}/.test(slotStrip)
+       && /onPointerUp=\{endChop\}/.test(slotStrip) && !/onPointerLeave=\{endChop\}/.test(slotStrip),
+     "pointer capture already routes the release here, so pointerleave would only end it early");
+  ok("and it cannot outlive the gesture",
+     /window\.addEventListener\("blur", endChop\)/.test(slotStrip)
+       && /useEffect\(\(\) => \(\) => \{ multiEngine\.stopChop\(slot\.id\); \}, \[slot\.id\]\)/.test(slotStrip),
+     "a blurred window never delivers keyup — the slot would stay muted with no key left to release");
+  ok("a held key does not restart it sixty times a second",
+     /if \(slot\.chopActive\) return;/.test(engine),
+     "keydown auto-repeats while a key is held");
+  ok("release is immediate — a hold ends when you let go",
+     /stopChop\(id: string\): void \{[\s\S]{0,200}this\.endChop\(slot\);/.test(engine)
+       && !/chopMinUntil/.test(engine),
+     "deferring the release so a tap could play out a figure made every HOLD end a slice "
+     + "late, and the abrupt cut is the sound — it was tried and reverted");
+  ok("the handback seek happens at the same instant as the crossfade",
+     /this\.seekSlot\(slot\.id, resume, t\);/.test(engine)
+       && /const when = atTime \?\? Tone\.now\(\);/.test(engine),
+     "seekSlot defaults to Tone.now() for transport actions that must share one timestamp "
+     + "(invariant 22); Chop hands back at immediate(), so the default meant 0.3s of the "
+     + "main player at its drifted position before the jump — heard as the chop picking "
+     + "up some other section of the song");
+  ok("the song can either roll on underneath or wait",
+     /holdSong: boolean;/.test(settings) && /holdSong: true,/.test(settings)
+       && /if \(slot\.chopHold && slot\.chopStart !== undefined && slot\.chopSliceLen\)/.test(engine),
+     "waiting is the DEFAULT because it is what the technique is — Screw backspun the "
+     + "record, so nothing was skipped and the tape came out longer. Rolling on keeps "
+     + "every slot in the same place in the song, which is the concession to having five "
+     + "stems that must stay together");
+  ok("resuming needs no quantize, and must not get one",
+     /let resume = slot\.chopStart \+ slot\.chopSliceLen;/.test(engine),
+     "slice boundaries are derived from the beat grid and counted from loopStart, so one "
+     + "already IS a beat boundary — rounding could only move it off");
+  ok("a stretch cannot leave the chop player on a stale buffer",
+     /slot\.chopPlayer\.buffer !== buf/.test(engine),
+     "swapBuffer replaces the MAIN player's buffer on every re-match and knows nothing "
+     + "about this one — the chop then replays pre-stretch audio at pre-stretch positions, "
+     + "which sounds like chopping a different part of the song");
+  ok("the chop player and both gates are disposed",
+     (engine.match(/slot\.chopGate\.disconnect\(\); slot\.chopGate\.dispose\(\)/g) ?? []).length === 2
+       && (engine.match(/slot\.chopPlayer\.dispose\(\)/g) ?? []).length === 2,
+     "both teardown paths — removing one slot, and disposing the engine");
+  ok("settings are global, like Throw's",
+     /chopSettings: ChopSettings;/.test(settings) && /CHOP_SETTINGS_KEY/.test(settings),
+     "how a gesture behaves is not state belonging to one stem");
+  ok("and the panel says Export will not have it",
+     /Chop is played live, so ● Rec captures it/.test(transport),
+     "the one thing about Chop that surprises you later rather than now");
+  // The timing bug that made the first build useless. Tone.now() is currentTime +
+  // lookAhead, and this engine runs 0.3s of it, so every chop was scheduled a third of a
+  // second late. A press and release shorter than that collapsed into a few milliseconds
+  // of audio — it sounded exactly like a skipping CD.
+  ok("the gesture is scheduled against the real clock, not the lookahead",
+     /const t = Tone\.immediate\(\);/.test(engine)
+       && !/startChop[\s\S]{0,2000}const now = Tone\.now\(\);/.test(engine),
+     "now() is right for sample-aligning a rack and wrong for answering a finger");
+  ok("and the release cannot be ordered before the start",
+     /Math\.max\(Tone\.immediate\(\), \(slot\.chopStartedAt \?\? 0\) \+ MultiEngine\.CHOP_XFADE\)/.test(engine),
+     "a tap can land inside the crossfade; un-muting first plays the gesture backwards");
+  ok("the slice is taken from what you are HEARING",
+     /private audiblePosition\(id: string\)/.test(engine) && /const pos = this\.audiblePosition\(id\);/.test(engine),
+     "getSlotPosition answers in now() terms — a third of a second ahead of the speakers, "
+     + "which is most of a beat at these tempos");
+  ok("nothing swallows a failed start",
+     !/try \{ cp\.start\(/.test(engine),
+     "a bare catch around the one call that makes sound is how the Essentia bug hid for months");
+  ok("the default slice is a whole beat",
+     /sliceBeats: 1,/.test(settings),
+     "half a beat reads as texture rather than as a repeat — a Screw chop is a rewind onto "
+     + "a word, so you have to be able to recognise what came back");
+  ok("Chop has its own transport control, not a corner of Throw's",
+     /ref=\{chopBtnRef\}/.test(transport) && /✂ Chop/.test(transport)
+       && /Throw Character<\/span>/.test(transport),
+     "settings for something you press on a slot do not belong behind a different button");
 }
 
 section("13. expensive analysis is memoised");

@@ -5,7 +5,7 @@ import { multiEngine } from "../audio/multiEngine";
 import { DRY_EFFECTS, type StemName } from "../audio/dubEngine";
 import { sanitizeEffects, EFFECTS_LIMITS } from "../store";
 import { suggestSetups, type SuggestCandidate } from "../lib/suggestSetup";
-import type { MultiMasterSettings, MultiSlot, MultiSession, ThrowSettings } from "../lib/multiSettings";
+import type { ChopSettings, MultiMasterSettings, MultiSlot, MultiSession, ThrowSettings } from "../lib/multiSettings";
 import { getCachedAudio, putCachedAudio } from "../lib/audioCache";
 import {
   loadNamedSessions,
@@ -18,6 +18,8 @@ import {
   saveMultiPreset,
   deleteMultiPreset,
   loadThrowSettings,
+  loadChopSettings,
+  saveChopSettings,
   saveThrowSettings,
   DEFAULT_THROW_SETTINGS,
   loadVersions,
@@ -263,6 +265,7 @@ export function MultiPage() {
     loopLengthOverride: null,
     masterSpeed: loadMasterSpeed(),
     throwSettings: loadThrowSettings(),
+    chopSettings: loadChopSettings(),
   }));
   const [namedSessions, setNamedSessions] = useState<MultiSession[]>(() => loadNamedSessions());
   const [sessionName, setSessionName] = useState("");
@@ -2298,6 +2301,11 @@ export function MultiPage() {
     setSuggestNote(null);
   }
 
+  function handleChopSettingsChange(chopSettings: ChopSettings) {
+    setMasterSettings((prev) => ({ ...prev, chopSettings }));
+    saveChopSettings(chopSettings);
+  }
+
   function handleThrowSettingsChange(throwSettings: ThrowSettings) {
     setMasterSettings((prev) => ({ ...prev, throwSettings }));
     saveThrowSettings(throwSettings);
@@ -2569,6 +2577,8 @@ export function MultiPage() {
           // timestamp, which is what keeps the downbeats aligned. It also reads each slot's
           // own loopStart, already clamped against buffer duration by addSlot.
           onRewindAll={() => multiEngine.rewindAll()}
+          chopSettings={masterSettings.chopSettings}
+          onChopSettingsChange={handleChopSettingsChange}
           onThrowSettingsChange={handleThrowSettingsChange}
           throwPresets={throwPresets}
           onSaveThrowPreset={handleSaveThrowPreset}
@@ -2627,7 +2637,7 @@ export function MultiPage() {
           </div>
         )}
 
-        {entries.map((entry) => {
+        {entries.map((entry, slotIndex) => {
           if (entry.loading) {
             const loadingLabel = entry.slot.stemName
               ? `Loading ${entry.slot.stemName} from ${entry.slot.trackId}…`
@@ -2699,6 +2709,10 @@ export function MultiPage() {
               anchorBpm={slotAnchorBpm}
               // Includes the anchor itself, unlike anchorBpm — and scaled into this slot's
               // own file timebase, the same grid quantize rounds to (see anchorBarGridBpm).
+              // Chop lives in SlotStrip because the slice is measured off rawGridBpm,
+              // which the strip already has — the same reason applyPhase lives there.
+              slotIndex={slotIndex}
+              chopSettings={masterSettings.chopSettings}
               rawGridBpm={
                 anchorBpm !== undefined
                   ? anchorBarGridBpm(anchorBpm, anchorEntryForBpm?.slot, entry.slot, masterSettings.masterSpeed ?? 1)

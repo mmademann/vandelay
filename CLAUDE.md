@@ -214,7 +214,7 @@ The π home link at the far left empties the rack — it navigates to a bare `/`
 - Knob row 1 (timing + pitch): Pitch (+ `Link`) · Speed (+ `master: on/off`) · Stretch · Phase (`0 1/8 1/4 1/3 3/8 1/2 2/3 3/4`)
 - Knob row 2 (level + tone): Gain · Reverb · Decay · Delay · D.Time · D.Feedbk · Bass · Grit · Phaser · Chorus
 - Waveform with loop region handles
-- Footer: Play/Pause · Rewind · Throw · Reset / Presets (name · 💾 · [spacer] · ✕)
+- Footer: Play/Pause · Rewind · Throw · Chop · Screw · Reset / Presets (name · 💾 · [spacer] · ✕)
 
 `S.Echo` and `B.Knob` are commented out in `SlotStrip.tsx` — the effects still run, only the knobs are hidden. `+ GENRE` was removed from the transport.
 
@@ -412,6 +412,53 @@ Traps that have each actually bitten:
     returns the limiter — `getMasterNode()` returns the Volume, and tapping that records
     PRE-limiter, so a loud take clips in the file while the room stays clean. It has no
     control and is not a sound.
+
+35. **Chop re-triggers the playhead; it is not an effect** — a delay layers decaying copies
+    OVER a track that keeps playing, a chop replays a slice at full level and you hear
+    nothing else. `startChop`/`stopChop` in `multiEngine.ts` run a **second** `Tone.Player`
+    over the same buffer into `chopGate`, while the main player keeps running silently
+    behind `mainGate`. That is the whole design: on release the slot is already where it
+    should be, in phase with every other slot, with nothing to resync. Seeking the real
+    playhead instead buys a drift problem on every release. The slice is handed in as
+    **buffer seconds** by `SlotStrip` off `rawGridBpm` — the same file-time grid Phase, Move
+    and Snap use (invariant 28a) — because loop positions are buffer offsets. It is
+    momentary — **held, and it ends the instant you release**. Deferring the release so a
+    tap could play out a whole figure was tried and reverted: it made every hold end a
+    slice late, and the abrupt cut is the sound. It has its own transport control rather
+    than a corner of Throw's panel, and is **live-only: `● Rec` captures it, `↓ Export` cannot**, because the
+    offline render reads knob values and knows nothing about what you pressed.
+
+    **It schedules against `Tone.immediate()`, not `Tone.now()`** — and this is the one that
+    actually shipped broken. `Tone.now()` is `currentTime + lookAhead`, and this engine runs
+    a 0.3s lookAhead, so every chop landed a third of a second late. A press and release
+    shorter than that collapsed the mute and the un-mute into a few milliseconds of audio:
+    the whole feature sounded like a skipping CD. Invariant 22 says transport actions read
+    `Tone.now()` once, and that is still right for sample-aligning a rack — but a gesture
+    answering a finger cannot afford the lead. For the same reason the slice comes from
+    `audiblePosition()`, which is `getSlotPosition()` minus the lookahead: a third of a
+    second is most of a beat at these tempos.
+
+    **The slice ENDS where you are; it does not start there.** It repeats what just
+    played, which is what a hand on a record does and the only version that answers your
+    finger at the same speed every press. Anchoring the loop to the beat grid was tried
+    twice and both ways are wrong: starting at the boundary behind you rewinds by up to a
+    whole beat the instant you press, and starting at the live position makes the first
+    repeat wait for the next boundary, so the response ranges from immediate to a full beat
+    depending on when you happened to press. The repeats line up with your hand rather than
+    with the bar, and nothing drifts from that — the main playhead is never touched.
+
+    **`holdSong` decides whether the track waits.** Off, the slot's playhead runs on
+    silently and you land where it would have been — nothing drifts, but what you chopped
+    over is gone. On, `endChop` seeks back to the boundary after the slice: nothing is
+    skipped, the track gets longer, and the slot falls behind the rest of the rack in the
+    arrangement by however long you chopped, cumulatively. **No quantize is needed on that
+    seek and none should be added** — slice boundaries come off the beat grid and are
+    counted from `loopStart`, so one already is a beat boundary.
+
+    **`swapBuffer` does not touch the chop player**, so `startChop` re-points its buffer
+    whenever the main player's has changed. Without that, the first stretch or re-match
+    leaves Chop replaying pre-stretch audio at pre-stretch positions — it chops a different
+    part of the song, which is exactly how the bug was found.
 
 ## Known gotchas
 

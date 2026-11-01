@@ -10,7 +10,8 @@ import {
   type ExportFormat,
   type ExportQuality,
 } from "../../audio/exportOptions";
-import type { MultiMasterSettings, MultiSlot, ThrowSettings, ThrowPreset } from "../../lib/multiSettings";
+import { CHOP_SLICES } from "../../lib/multiSettings";
+import type { ChopSettings, MultiMasterSettings, MultiSlot, ThrowSettings, ThrowPreset } from "../../lib/multiSettings";
 import { cn } from "../../lib/cn";
 import { Knob } from "./Knob";
 
@@ -156,6 +157,8 @@ interface Props {
   onPlayAll: (instant?: boolean) => void;
   onRewindAll: () => void;
   onThrowSettingsChange: (settings: ThrowSettings) => void;
+  chopSettings: ChopSettings;
+  onChopSettingsChange: (settings: ChopSettings) => void;
   onMasterSpeedChange: (speed: number) => void;
   throwPresets: ThrowPreset[];
   onSaveThrowPreset: (name: string) => void;
@@ -211,7 +214,7 @@ function buildExportFilename(activeSessionName: string | null, slotTitles: strin
   return `${unique.slice(0, 2).join(" × ")} +${unique.length - 2}`;
 }
 
-export function MultiTransport({ masterSettings, slotCount, referenceSlotId, activeSessionName, slotTitles, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, onMasterSpeedChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll, onTempoMatchAll, onLockAll, onComputeSuggestions, onPickSuggestion, suggestions, suggestIndex, onUndoSuggest, suggestNote, suggestKeepLoops, onToggleKeepLoops, versions, onSaveVersion, onRestoreVersion, onDeleteVersion, slotsLoading, gridNote, onDismissGridNote, staleTempoCount, onRelockStale, autoRelock, onToggleAutoRelock, tempoAnchorId, onRandomSession, randomDisabled }: Props) {
+export function MultiTransport({ masterSettings, slotCount, referenceSlotId, activeSessionName, slotTitles, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, chopSettings, onChopSettingsChange, onMasterSpeedChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll, onTempoMatchAll, onLockAll, onComputeSuggestions, onPickSuggestion, suggestions, suggestIndex, onUndoSuggest, suggestNote, suggestKeepLoops, onToggleKeepLoops, versions, onSaveVersion, onRestoreVersion, onDeleteVersion, slotsLoading, gridNote, onDismissGridNote, staleTempoCount, onRelockStale, autoRelock, onToggleAutoRelock, tempoAnchorId, onRandomSession, randomDisabled }: Props) {
   const [loopCount, setLoopCount] = useState(1);
   const [recording, setRecording] = useState(false);
   const [recElapsed, setRecElapsed] = useState(0);
@@ -255,6 +258,9 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
    * an edit whenever the active session changes.
    */
   const autoFilledRef = useRef("");
+  const [chopPanelOpen, setChopPanelOpen] = useState(false);
+  const chopPanelRef = useRef<HTMLDivElement>(null);
+  const chopBtnRef = useRef<HTMLButtonElement>(null);
   const throwPanelRef = useRef<HTMLDivElement>(null);
   const throwBtnRef = useRef<HTMLButtonElement>(null);
   const exportPanelRef = useRef<HTMLDivElement>(null);
@@ -268,7 +274,7 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
 
   // Close panels on outside click
   useEffect(() => {
-    if (!throwPanelOpen && !exportPanelOpen) return;
+    if (!throwPanelOpen && !exportPanelOpen && !chopPanelOpen) return;
     function handleClick(e: MouseEvent) {
       if (
         throwPanelRef.current && !throwPanelRef.current.contains(e.target as Node) &&
@@ -282,10 +288,16 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
       ) {
         setExportPanelOpen(false);
       }
+      if (
+        chopPanelRef.current && !chopPanelRef.current.contains(e.target as Node) &&
+        chopBtnRef.current && !chopBtnRef.current.contains(e.target as Node)
+      ) {
+        setChopPanelOpen(false);
+      }
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
-  }, [throwPanelOpen, exportPanelOpen]);
+  }, [throwPanelOpen, exportPanelOpen, chopPanelOpen]);
 
   // Pre-fill the export filename from the session so it is editable text rather than a
   // grey placeholder — the common case is exporting under the session's own name.
@@ -1009,29 +1021,148 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
           ⚄ Random
         </button>
 
+        {/* Chop gets its own control rather than living inside Throw's panel. Both are
+            momentary gestures, but one is an echo send and the other is the transport — and
+            settings for something you press on a SLOT have no business hidden behind a
+            different button up here. */}
         {slotCount > 0 && (
           <div className="relative shrink-0">
             <button
-              ref={throwBtnRef}
+              ref={chopBtnRef}
               type="button"
-              onClick={() => setThrowPanelOpen((o) => !o)}
+              onClick={() => setChopPanelOpen((o) => !o)}
               className={cn(
+                "shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
+                chopPanelOpen
+                  ? "bg-amber-500/20 text-amber-300 ring-1 ring-amber-400/40"
+                  : "bg-muted/80 text-foreground/50 hover:text-amber-300 hover:bg-muted",
+              )}
+              title="Chop — how the ✂ button on each slot behaves"
+            >
+              ✂ Chop
+            </button>
+
+            {chopPanelOpen && (
+              <div
+                ref={chopPanelRef}
+                className="absolute left-0 top-full mt-1 z-50 w-72 rounded-md border border-amber-500/20 bg-zinc-900/95 shadow-xl ring-1 ring-border/30 backdrop-blur-sm"
+              >
+                <div className="flex items-center justify-between px-3 pt-3">
+                  <span className="text-[10px] font-semibold uppercase tracking-widest text-amber-300/80">Chop</span>
+                  <button type="button" onClick={() => setChopPanelOpen(false)}
+                    className="px-1 text-sm leading-none text-foreground/30 hover:text-foreground/70">✕</button>
+                </div>
+                <p className="px-3 pt-1 text-[10px] text-foreground/35">
+                  Hold it on a slot, or hold that slot&apos;s number key.
+                </p>
+                <div className="flex flex-col gap-3 p-3">
+
+                  <div className="flex items-center gap-2">
+                    <span className="w-12 shrink-0 text-[10px] uppercase tracking-widest text-foreground/35">Repeat</span>
+                    <div className="flex gap-1">
+                      {CHOP_SLICES.map((sl) => (
+                        <button
+                          key={sl.label}
+                          type="button"
+                          onClick={() => onChopSettingsChange({ ...chopSettings, sliceBeats: sl.beats })}
+                          title={`${sl.label} of a beat`}
+                          className={`rounded px-2 py-1 text-[11px] font-bold tabular-nums transition ${
+                            Math.abs(chopSettings.sliceBeats - sl.beats) < 1e-6
+                              ? "bg-amber-500/25 text-amber-300 ring-1 ring-amber-400/40"
+                              : "bg-muted/60 text-foreground/40 hover:text-foreground"
+                          }`}
+                        >
+                          {sl.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Whether the track waits for you. Named by what happens to the song,
+                      not by the mechanism — "hold the playhead" means nothing to a listener. */}
+                  <div className="flex items-center gap-2">
+                    <span className="w-12 shrink-0 text-[10px] uppercase tracking-widest text-foreground/35">Song</span>
+                    <div className="flex gap-1">
+                      {([
+                        [false, "Rolls on", "The track keeps going underneath — you land where it would have been, and the chopped-over bit is gone. Nothing drifts."],
+                        [true, "Waits", "The track stops and picks up where it left off, so nothing is skipped and it gets longer. Stays on the beat, but this slot falls behind the others in the song."],
+                      ] as const).map(([val, label, hint]) => (
+                        <button
+                          key={label}
+                          type="button"
+                          onClick={() => onChopSettingsChange({ ...chopSettings, holdSong: val })}
+                          title={hint}
+                          className={`rounded px-2 py-1 text-[11px] font-bold transition ${
+                            chopSettings.holdSong === val
+                              ? "bg-amber-500/25 text-amber-300 ring-1 ring-amber-400/40"
+                              : "bg-muted/60 text-foreground/40 hover:text-foreground"
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <span className="w-12 shrink-0 text-[10px] uppercase tracking-widest text-foreground/35">Feel</span>
+                    <div className="flex gap-1">
+                      {([
+                        ["stutter", "Repeat", "The same slice over and over — the rewind."],
+                        ["roll", "Speed up", "The slice halves while you hold it — the build."],
+                      ] as const).map(([mode, label, hint]) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => onChopSettingsChange({ ...chopSettings, mode })}
+                          title={hint}
+                          className={`rounded px-2 py-1 text-[11px] font-bold transition ${
+                            chopSettings.mode === mode
+                              ? "bg-amber-500/25 text-amber-300 ring-1 ring-amber-400/40"
+                              : "bg-muted/60 text-foreground/40 hover:text-foreground"
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Said once, here, because it is the one thing about Chop that will
+                      surprise you later rather than now. */}
+                  <p className="text-[10px] leading-snug text-foreground/30">
+                    Chop is played live, so ● Rec captures it. ↓ Export re-renders from the knobs
+                    and will not have it.
+                  </p>
+                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {slotCount > 0 && (
+                          <div className="relative shrink-0">
+                            <button
+                              ref={throwBtnRef}
+                              type="button"
+                              onClick={() => setThrowPanelOpen((o) => !o)}
+                              className={cn(
                 "shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
                 throwPanelOpen
                   ? "bg-teal-500/20 text-teal-400 ring-1 ring-teal-400/40"
                   : "bg-muted/80 text-foreground/50 hover:text-teal-400 hover:bg-muted",
-              )}
-              title="Configure Throw character — delay time, feedback, spring reverb"
-            >
-              ↯ Throw
-            </button>
+                              )}
+                              title="Configure Throw character — delay time, feedback, spring reverb"
+                            >
+                              ↯ Throw
+                            </button>
 
-            {/* Throw character floating overlay */}
-            {throwPanelOpen && (
-              <div
+                            {/* Throw character floating overlay */}
+                            {throwPanelOpen && (
+                              <div
                 ref={throwPanelRef}
                 className="absolute left-0 top-full mt-1 z-50 w-80 rounded-md border border-teal-500/20 bg-zinc-900/95 shadow-xl backdrop-blur-sm ring-1 ring-border/30"
-              >
+                              >
                 <div className="flex items-center justify-between px-4 pt-3 pb-0">
                   <span className="text-[10px] font-semibold uppercase tracking-widest text-teal-400">Throw Character</span>
                   <button type="button" onClick={() => setThrowPanelOpen(false)}
