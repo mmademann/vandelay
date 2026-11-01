@@ -1,7 +1,72 @@
 {
-  "exportedAt": 1793032316626,
+  "exportedAt": 1793320804158,
   "version": 1,
   "namedSessions": [
+    {
+      "name": "TWAIN",
+      "savedAt": 1793320804157,
+      "slots": [
+        {
+          "id": "ea50427e-403b-410c-9d19-aa6d5a8a0ff1",
+          "trackId": "YFr_yFTFQV4",
+          "stemName": null,
+          "speed": 1,
+          "pitch": 0,
+          "linkPitch": true,
+          "bypassMasterSpeed": false,
+          "gain": 0,
+          "muted": false,
+          "soloed": false,
+          "effects": {
+            "speed": 1,
+            "pitch": 0,
+            "linkPitch": true,
+            "reverbType": "algorithmic",
+            "reverbDecay": 0.1,
+            "reverbWet": 0,
+            "delayTime": 0,
+            "delayFeedback": 0,
+            "delayWet": 0,
+            "bassBoost": 0,
+            "gain": 1,
+            "grit": 0,
+            "spaceEchoWow": 0,
+            "bigKnobWet": 0,
+            "eqLow": 0,
+            "eqMid": 0,
+            "eqHigh": 0,
+            "sweepFreq": 20000,
+            "sweepRes": 0.5,
+            "phaserWet": 0,
+            "chorusWet": 0
+          },
+          "loopStart": 0,
+          "loopEnd": 212.56560416666667,
+          "isReference": false,
+          "isTempoAnchor": false,
+          "stretch": 1,
+          "isMatched": false,
+          "matchedBasePitch": 0,
+          "pitchInterval": 12,
+          "detectedKey": "Eb major",
+          "detectedBpm": 123
+        }
+      ],
+      "masterSettings": {
+        "gain": 0,
+        "loopLengthOverride": null,
+        "masterSpeed": 1,
+        "throwSettings": {
+          "delayTime": 0.0764525993883792,
+          "delayFeedback": 0.74,
+          "delayWet": 0.69,
+          "reverbDecay": 0.1,
+          "reverbWet": 0,
+          "filterFreq": 2940,
+          "filterSweep": 0.3
+        }
+      }
+    },
     {
       "name": "GREECE",
       "savedAt": 1793029677449,
@@ -34287,6 +34352,41 @@
       "pitchInterval": 12,
       "bypassMasterSpeed": false,
       "stretch": 1
+    },
+    "ea50427e-403b-410c-9d19-aa6d5a8a0ff1": {
+      "speed": 1,
+      "pitch": 0,
+      "linkPitch": true,
+      "gain": 0,
+      "muted": false,
+      "soloed": false,
+      "effects": {
+        "speed": 1,
+        "pitch": 0,
+        "linkPitch": true,
+        "reverbType": "algorithmic",
+        "reverbDecay": 0.1,
+        "reverbWet": 0,
+        "delayTime": 0,
+        "delayFeedback": 0,
+        "delayWet": 0,
+        "bassBoost": 0,
+        "gain": 1,
+        "grit": 0,
+        "spaceEchoWow": 0,
+        "bigKnobWet": 0,
+        "eqLow": 0,
+        "eqMid": 0,
+        "eqHigh": 0,
+        "sweepFreq": 20000,
+        "sweepRes": 0.5,
+        "phaserWet": 0,
+        "chorusWet": 0
+      },
+      "loopStartFrac": 0,
+      "loopEndFrac": 1,
+      "bypassMasterSpeed": false,
+      "pitchInterval": 12
     }
   },
   "presets": [
