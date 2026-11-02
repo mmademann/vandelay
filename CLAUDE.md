@@ -449,11 +449,17 @@ Traps that have each actually bitten:
 
     **`holdSong` decides whether the track waits.** Off, the slot's playhead runs on
     silently and you land where it would have been — nothing drifts, but what you chopped
-    over is gone. On, `endChop` seeks back to the boundary after the slice: nothing is
-    skipped, the track gets longer, and the slot falls behind the rest of the rack in the
-    arrangement by however long you chopped, cumulatively. **No quantize is needed on that
-    seek and none should be added** — slice boundaries come off the beat grid and are
-    counted from `loopStart`, so one already is a beat boundary.
+    over is gone. On, `endChop` hands the playhead back wherever the chop had got
+    to (`chopPositionNow`), which is what lifting your hand off a record does — the repeat
+    stops repeating and runs on, with no discontinuity. Nothing is skipped, the track gets
+    longer, and the slot falls behind the rest of the rack by however long you chopped,
+    cumulatively. Resuming at the END of the slice was tried first and audibly skips:
+    release halfway through a repeat and the rest of it is cut.
+
+    **Nor does anything that writes the playback rate.** Four places set
+    `slot.player.playbackRate` — Speed, Pitch, and the master dial — and `syncChopRate`
+    mirrors it onto a live chop, or riding a dial mid-chop leaves the chop at the rate it
+    started with.
 
     **`swapBuffer` does not touch the chop player**, so `startChop` re-points its buffer
     whenever the main player's has changed. Without that, the first stretch or re-match

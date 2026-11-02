@@ -1772,7 +1772,7 @@ section("12aq. Chop is a re-trigger, not an effect");
      "deferring the release so a tap could play out a figure made every HOLD end a slice "
      + "late, and the abrupt cut is the sound — it was tried and reverted");
   ok("the handback seek happens at the same instant as the crossfade",
-     /this\.seekSlot\(slot\.id, resume, t\);/.test(engine)
+     /this\.seekSlot\(slot\.id, this\.chopPositionNow\(slot\), t\);/.test(engine)
        && /const when = atTime \?\? Tone\.now\(\);/.test(engine),
      "seekSlot defaults to Tone.now() for transport actions that must share one timestamp "
      + "(invariant 22); Chop hands back at immediate(), so the default meant 0.3s of the "
@@ -1785,10 +1785,22 @@ section("12aq. Chop is a re-trigger, not an effect");
      + "record, so nothing was skipped and the tape came out longer. Rolling on keeps "
      + "every slot in the same place in the song, which is the concession to having five "
      + "stems that must stay together");
-  ok("resuming needs no quantize, and must not get one",
-     /let resume = slot\.chopStart \+ slot\.chopSliceLen;/.test(engine),
-     "slice boundaries are derived from the beat grid and counted from loopStart, so one "
-     + "already IS a beat boundary — rounding could only move it off");
+  ok("release hands back wherever the chop had got to",
+     /this\.seekSlot\(slot\.id, this\.chopPositionNow\(slot\), t\);/.test(engine)
+       && /private chopPositionNow\(slot: RuntimeSlot\): number \{/.test(engine),
+     "what lifting your hand off a record does — the repeat stops repeating and runs on, "
+     + "with no discontinuity. Resuming at the END of the slice was the first version and "
+     + "it audibly skips: let go halfway through a repeat and the rest is cut");
+  ok("and the position survives a rate change mid-chop",
+     /slot\.chopAnchorPos = this\.chopPositionNow\(slot\);/.test(engine),
+     "the position is an integral of rate over time, so it has to be re-anchored before "
+     + "the rate moves or it is computed against a rate the chop never played at");
+  ok("a live chop follows Speed and Master",
+     /private syncChopRate\(slot: RuntimeSlot\): void \{/.test(engine)
+       && (engine.match(/this\.syncChopRate\(slot\);/g) ?? []).length === 2,
+     "four places write the main player's rate and none know this player exists — ride a "
+     + "dial mid-chop and the chop stays at the rate it started with, out of time and out "
+     + "of tune with the rest of the rack until you let go");
   ok("a stretch cannot leave the chop player on a stale buffer",
      /slot\.chopPlayer\.buffer !== buf/.test(engine),
      "swapBuffer replaces the MAIN player's buffer on every re-match and knows nothing "

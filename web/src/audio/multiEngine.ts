@@ -83,6 +83,10 @@ interface RuntimeSlot extends MultiSlot {
   /** Where the current chop is slicing from, and how long the slice is. Both buffer seconds. */
   chopStart?: number;
   chopSliceLen?: number;
+  /** Known chop position and the Tone time it was true, so the live position is exact
+   *  across a rate change mid-chop. */
+  chopAnchorPos?: number;
+  chopAnchorAt?: number;
   /** Whether this chop should put the playhead back on release — see ChopSettings.holdSong. */
   chopHold?: boolean;
   // Independent playback tracking
@@ -500,6 +504,7 @@ class MultiEngine {
       } else {
         slot.player.playbackRate = slotPlaybackRate(slot, this.masterSettings.masterSpeed);
       }
+      this.syncChopRate(slot);
     }
     if (boundsMoved) {
       slot.player.loopStart = slot.loopStart;
@@ -644,6 +649,39 @@ class MultiEngine {
    * drifted to for a third of a second, and only then does it jump. That burst of the
    * wrong part of the song is audible as the chop picking up some other section.
    */
+  /**
+   * Keep a live chop at the slot's current rate.
+   *
+   * Four separate places write the main player's rate — a Speed or Pitch change, and the
+   * master speed dial — and none of them know this player exists. Ride a dial while
+   * holding Chop and the chop carries on at the rate it was started with: out of time and
+   * out of tune with everything else until you let go.
+   */
+  private syncChopRate(slot: RuntimeSlot): void {
+    if (!slot.chopActive || !slot.chopPlayer) return;
+    // Re-anchor before the rate moves, or the position integral below is computed against
+    // a rate the chop was never playing at.
+    slot.chopAnchorPos = this.chopPositionNow(slot);
+    slot.chopAnchorAt = Tone.immediate();
+    slot.chopPlayer.playbackRate = slotPlaybackRate(slot, this.masterSettings.masterSpeed);
+  }
+
+  /**
+   * Where inside its slice the chop has got to, in buffer seconds.
+   *
+   * Tone.Player does not report a playback position, so this is the same integral
+   * getSlotPosition uses — anchor plus elapsed times rate, wrapped into the slice.
+   */
+  private chopPositionNow(slot: RuntimeSlot): number {
+    const start = slot.chopStart ?? 0;
+    const len = slot.chopSliceLen ?? 0;
+    if (!(len > 0)) return start;
+    const rate = slotPlaybackRate(slot, this.masterSettings.masterSpeed);
+    const elapsed = Math.max(0, Tone.immediate() - (slot.chopAnchorAt ?? 0)) * rate;
+    const into = (slot.chopAnchorPos ?? start) - start + elapsed;
+    return start + ((into % len) + len) % len;
+  }
+
   seekSlot(id: string, time: number, atTime?: number): void {
     const slot = this.slots.get(id);
     if (!slot) return;
@@ -754,6 +792,8 @@ class MultiEngine {
     slot.chopStartedAt = t;
     slot.chopStart = chopStart;
     slot.chopSliceLen = len;
+    slot.chopAnchorPos = chopStart;
+    slot.chopAnchorAt = t;
     slot.chopHold = holdSong;
 
     if (mode === "roll") {
@@ -794,17 +834,16 @@ class MultiEngine {
     // Let the fade finish before the source goes, or the tail is cut to a click.
     slot.chopPlayer?.stop(t + MultiEngine.CHOP_XFADE);
 
-    // Hold: the song waited, so put the playhead back where the chop was holding it — the
-    // END of the slice, which is the point the track had actually reached when you pressed.
-    // Nothing is skipped and nothing is heard twice: the slice has just played several
-    // times over, so the next thing you want is whatever follows it.
+    // Hold: the song waited, so hand the playhead back wherever the chop had got to —
+    // which is exactly what lifting your hand off a record does. The repeat simply stops
+    // repeating and runs on, with no discontinuity at all.
+    //
+    // Resuming at the END of the slice was the first version and it skips: let go halfway
+    // through a repeat and the rest of it is cut. Tidier against the bar, but you hear the
+    // jump, and the bar alignment was never guaranteed anyway — the slice is anchored to
+    // your hand, not to the grid.
     if (slot.chopHold && slot.chopStart !== undefined && slot.chopSliceLen) {
-      const loopDur = slot.loopEnd - slot.loopStart;
-      let resume = slot.chopStart + slot.chopSliceLen;
-      if (loopDur > 0) {
-        resume = slot.loopStart + (((resume - slot.loopStart) % loopDur) + loopDur) % loopDur;
-      }
-      this.seekSlot(slot.id, resume, t);
+      this.seekSlot(slot.id, this.chopPositionNow(slot), t);
     }
   }
 
@@ -1075,6 +1114,7 @@ class MultiEngine {
       // Player.playbackRate is a plain setter, not a ramping Param, so this is a step
       // change. Fine for dial drags; the re-anchor above is what keeps it from glitching.
       slot.player.playbackRate = slotPlaybackRate(slot, this.masterSettings.masterSpeed);
+      this.syncChopRate(slot);
     }
   }
 
