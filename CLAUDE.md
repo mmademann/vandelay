@@ -476,6 +476,20 @@ Traps that have each actually bitten:
     move the whole rig. Panels are docked above the rack, not floating, because a menu that
     closes when you reach for a knob is useless.
 
+38. **The hardware bassline is written in SCALE DEGREES, not notes** — `midiSequencer.ts`.
+    A step holds "the fifth, an octave down", so one pattern follows the key anchor
+    wherever it goes and re-pitches itself when that anchor changes; a grid of absolute
+    notes is in tune once and wrong the moment anything moves. It also means no cell is a
+    wrong note, which matters because the user does not know the synth and should not have
+    to. The root comes from **`tonicOf`, never `rootSemitone`**: that one folds A minor to
+    C, which is right for comparing stems and wrong here — a bassline rooted on C under a
+    track in A minor is the wrong note of the right scale. It follows the **key** anchor,
+    not the tempo anchor. Notes are scheduled on the same pulses as the clock (a sequencer
+    on its own interval drifts against the clock the device is keeping), the note-off is
+    scheduled with the note, and a glide is note OVERLAP because on a 303 the portamento
+    comes from one note still sounding when the next arrives. A sequenced port gets clock
+    but **not Start**, or the synth's own pattern plays underneath ours.
+
 36. **MIDI clock out follows the HEARD tempo, and its pulses are scheduled, not fired** —
     `midiClock.ts`, wired to `anchorEffectiveBpm` in `MultiPage`. Sending the raw detected
     BPM would hold outboard gear at the track's original tempo while the track slowed away

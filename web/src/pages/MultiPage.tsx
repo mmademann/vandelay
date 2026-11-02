@@ -2658,7 +2658,13 @@ export function MultiPage() {
             session, and a floating menu would close every time you reached for a knob. */}
         {synthPanel && MIDI_DEVICES.filter((d) => d.id === synthPanel).map((d) => (
           <div key={d.id} className="col-span-full">
-            <MidiSynthPanel device={d} onClose={() => setSynthPanel(null)} />
+            <MidiSynthPanel
+              device={d}
+              // The KEY anchor, not the tempo anchor: the bassline has to agree with
+              // whatever defines the key, which is a different slot by design.
+              anchorKey={entries.find((e) => e.slot.id === referenceSlotId)?.detectedKey}
+              onClose={() => setSynthPanel(null)}
+            />
           </div>
         ))}
 

@@ -3,6 +3,11 @@ import { Knob } from "./Knob";
 import { cn } from "../../lib/cn";
 import { midiOut } from "../../lib/midiOut";
 import { loadPanel, savePanel, type MidiDevice } from "../../lib/midiDevices";
+import { MidiStepGrid } from "./MidiStepGrid";
+import {
+  ACCENT_VELOCITY, NORMAL_VELOCITY, STEP_COUNT,
+  loadPattern, savePattern, noteFor, tonicOf, type Pattern,
+} from "../../lib/midiSequencer";
 
 /**
  * A front panel for one piece of outboard gear.
@@ -16,7 +21,18 @@ import { loadPanel, savePanel, type MidiDevice } from "../../lib/midiDevices";
  * mapping, and inventing a second one on top would make the number under the dial disagree
  * with the number on the wire.
  */
-export function MidiSynthPanel({ device, onClose }: { device: MidiDevice; onClose: () => void }) {
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+export function MidiSynthPanel({
+  device,
+  anchorKey,
+  onClose,
+}: {
+  device: MidiDevice;
+  /** The key anchor's detected key, which the bassline follows. */
+  anchorKey: string | null | undefined;
+  onClose: () => void;
+}) {
   // Reads the MIDI state itself rather than taking it as props: the transport owns the
   // on/off button, but nothing useful would be gained by threading ports through the page.
   const [ports, setPorts] = useState(() => midiOut.ports());
@@ -66,6 +82,51 @@ export function MidiSynthPanel({ device, onClose }: { device: MidiDevice; onClos
     for (const p of device.params) send(p.cc, p.initial);
   }
 
+  /* ---------------------------------------------------------------- sequencer */
+
+  const [pattern, setPattern] = useState<Pattern>(() => loadPattern(device.id));
+  const [seqOn, setSeqOn] = useState(false);
+  const [playingStep, setPlayingStep] = useState<number | null>(null);
+  useEffect(() => { savePattern(device.id, pattern); }, [device.id, pattern]);
+
+  // Follows the key anchor unless overridden. tonicOf, NOT rootSemitone: that one folds a
+  // minor to its relative major, which is right for comparing stems and wrong here — a
+  // bassline rooted on C under a track in A minor is the wrong note of the right scale.
+  const detected = tonicOf(anchorKey);
+  const root = pattern.root ?? detected?.semitone ?? 0;
+
+  useEffect(() => {
+    if (!seqOn || !enabled || !portId) return;
+    midiOut.setStepsPerBeat(pattern.stepsPerBeat);
+    // Clock keeps going; Start does not, so the synth's own pattern stays parked instead
+    // of playing underneath this one.
+    midiOut.setSequenced(portId, true);
+    midiOut.setStepCallback((step, atMs, stepMs) => {
+      const i = ((step % STEP_COUNT) + STEP_COUNT) % STEP_COUNT;
+      // Steps are scheduled up to a lookahead ahead of being heard, so light the column
+      // when it actually sounds rather than when it is queued.
+      window.setTimeout(() => setPlayingStep(i), Math.max(0, atMs - performance.now()));
+      const s = pattern.steps[i];
+      if (!s?.on) return;
+      const next = pattern.steps[(i + 1) % STEP_COUNT];
+      // A glide is one note still sounding when the next arrives — on a 303 that overlap
+      // IS the portamento, so hold past the step rather than sending a parameter.
+      const hold = next?.slide ? stepMs * 1.6 : stepMs * 0.5;
+      midiOut.sendNote(
+        portId, 1,
+        noteFor(pattern, s, root),
+        s.accent ? ACCENT_VELOCITY : NORMAL_VELOCITY,
+        atMs, hold,
+      );
+    });
+    return () => {
+      midiOut.setStepCallback(null);
+      midiOut.setSequenced(portId, false);
+      midiOut.allNotesOff(portId);
+      setPlayingStep(null);
+    };
+  }, [seqOn, enabled, portId, pattern, root]);
+
   const live = enabled && !!portId;
 
   return (
@@ -101,6 +162,67 @@ export function MidiSynthPanel({ device, onClose }: { device: MidiDevice; onClos
         </button>
         <button type="button" onClick={onClose}
           className="px-1 text-sm leading-none text-foreground/30 transition hover:text-foreground/70">✕</button>
+      </div>
+
+      {/* Bassline first, knobs second: the line is what you are writing, the knobs are how
+          it sounds. Collapsed until switched on, so the panel stays a tone editor for
+          anyone who only wants to turn the filter. */}
+      <div className="flex flex-col gap-2 rounded border border-border/30 bg-background/30 p-2">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <button
+            type="button"
+            onClick={() => setSeqOn((v) => !v)}
+            disabled={!live}
+            title={live
+              ? "Play a bassline from here instead of whatever is stored on the synth"
+              : "Needs MIDI on and a device picked"}
+            className={cn(
+              "rounded px-2 py-1 text-[11px] font-bold uppercase tracking-wide transition disabled:opacity-30",
+              seqOn ? "bg-accent/25 text-accent ring-1 ring-accent/40" : "bg-muted/70 text-foreground/50 hover:text-foreground",
+            )}
+          >
+            {seqOn ? "■ Bassline on" : "▶ Bassline"}
+          </button>
+
+          <span className="text-[10px] uppercase tracking-widest text-foreground/35">Key</span>
+          <select
+            value={pattern.root ?? ""}
+            onChange={(e) => setPattern((p) => ({ ...p, root: e.target.value === "" ? null : Number(e.target.value) }))}
+            className="rounded border border-border bg-muted/40 px-2 py-1 text-xs outline-none focus:border-accent/60"
+          >
+            <option value="">
+              {detected ? `Follow track (${NOTE_NAMES[detected.semitone]})` : "Follow track (not detected)"}
+            </option>
+            {NOTE_NAMES.map((n, i) => <option key={n} value={i}>{n}</option>)}
+          </select>
+
+          <span className="text-[10px] uppercase tracking-widest text-foreground/35">Octave</span>
+          <div className="flex gap-1">
+            {[1, 2, 3].map((o) => (
+              <button
+                key={o}
+                type="button"
+                onClick={() => setPattern((p) => ({ ...p, octave: o }))}
+                className={cn(
+                  "rounded px-2 py-1 text-[11px] font-bold tabular-nums transition",
+                  pattern.octave === o
+                    ? "bg-accent/20 text-accent ring-1 ring-accent/40"
+                    : "bg-muted/60 text-foreground/40 hover:text-foreground",
+                )}
+              >
+                {o === 1 ? "Deep" : o === 2 ? "Bass" : "Mid"}
+              </button>
+            ))}
+          </div>
+
+          {!detected && pattern.root === null && (
+            <span className="text-[10px] text-amber-300/80">
+              No key detected on this track — pick one above
+            </span>
+          )}
+        </div>
+
+        <MidiStepGrid pattern={pattern} playingStep={seqOn ? playingStep : null} onChange={setPattern} />
       </div>
 
       <div className="flex flex-wrap gap-x-3 gap-y-2">

@@ -1863,7 +1863,7 @@ section("12ar. MIDI clock out makes vandelay the tempo master");
      /const msPerPulse = 60000 \/ \(this\.bpm \* PPQ\);\n\s*\/\/ A backgrounded tab/.test(clock),
      "computing it once at start would freeze the clock at the tempo it began on");
   ok("a backgrounded tab cannot come back owing thousands of pulses",
-     /if \(this\.nextPulseMs < now - 500\) this\.nextPulseMs = now;/.test(clock),
+     /if \(this\.nextPulseMs < now - 500\) \{ this\.nextPulseMs = now; this\.pulse = 0; \}/.test(clock),
      "timers freeze when the tab is hidden; without this the catch-up fires them all at once");
   ok("start and stop ride the transport",
      /midiOut\.start\(\);/.test(multiPage) && /midiOut\.stop\(\);/.test(multiPage),
@@ -1873,9 +1873,11 @@ section("12ar. MIDI clock out makes vandelay the tempo master");
        && /isAnchored\(\): boolean/.test(clock),
      "with no tempo anchor the clock holds its last value, and a clock at 120 while the "
      + "rack plays at 73 is the kind of thing you notice an hour later");
-  ok("it sends to every output",
-     /for \(const out of this\.access\.outputs\.values\(\)\)/.test(clock),
-     "the whole rig shares one tempo; choosing ports is a setting nobody would set differently");
+  ok("clock goes to every output",
+     /for \(const \[id, out\] of this\.access\.outputs\) \{/.test(clock)
+       && /const transport = byte !== CLOCK;/.test(clock),
+     "the whole rig shares one tempo; choosing ports for CLOCK is a setting nobody would "
+     + "set differently — transport messages are the exception, see the sequencer section");
   ok("the button hides itself where Web MIDI does not exist",
      /midiOut\.isSupported\(\) && \(/.test(transport),
      "Safari has none, and a dead button is worse than no button");
@@ -1914,8 +1916,60 @@ section("12as. outboard front panels: the app holds the patch");
      "the transport counts them and every panel lists them; a single callback slot meant "
      + "whichever mounted last silenced the other");
   ok("the panel is docked, not floating",
-     /<MidiSynthPanel device=\{d\} onClose/.test(multiPage) && !/MidiSynthPanel[\s\S]{0,200}absolute/.test(multiPage),
+     /<MidiSynthPanel\n/.test(multiPage) && !/MidiSynthPanel[\s\S]{0,300}absolute/.test(multiPage),
      "a floating menu closes the moment you reach for a knob");
+}
+
+section("12at. the bassline follows the anchors, and needs no 303 knowledge");
+{
+  const seq = read("lib/midiSequencer.ts");
+  const grid = read("components/multi/MidiStepGrid.tsx");
+  const panel = read("components/multi/MidiSynthPanel.tsx");
+  const midi = read("lib/midiOut.ts");
+  ok("steps hold SCALE DEGREES, not notes",
+     /degree: number;/.test(seq) && /export function noteFor\(p: Pattern, step: Step, rootSemitone: number\)/.test(seq),
+     "a grid of absolute notes is in tune once, against one track, and wrong the moment "
+     + "the key anchor moves — degrees re-pitch themselves and have no wrong button");
+  ok("the root is the real tonic, NOT the relative-major fold",
+     /export function tonicOf\(/.test(seq) && /tonicOf\(anchorKey\)/.test(panel),
+     "rootSemitone folds A minor to C, which is right for comparing stems and wrong here: "
+     + "a bassline rooted on C under a track in A minor is the wrong note of the right scale");
+  ok("it follows the KEY anchor, not the tempo anchor",
+     /anchorKey=\{entries\.find\(\(e\) => e\.slot\.id === referenceSlotId\)\?\.detectedKey\}/.test(multiPage),
+     "they are different slots by design, and the line has to agree with whatever defines the key");
+  ok("there is a manual root for when detection fails",
+     /root: number \| null;/.test(seq) && /Follow track \(not detected\)/.test(panel),
+     "key detection fails on plenty of material and a dead sequencer is worse than a manual one");
+  ok("notes ride the same scheduled pulses as the clock",
+     /if \(this\.onStep && this\.pulse % this\.pulsesPerStep === 0\)/.test(midi),
+     "a sequencer timed by its own interval drifts against the clock the device is being "
+     + "told to keep");
+  ok("the note-off is scheduled with the note, not chased by a timer",
+     /out\.send\(\[0x80 \| ch, n, 0\], atMs \+ Math\.max\(10, holdMs\)\)/.test(midi),
+     "the whole point of the lookahead is that both ends land where they were put");
+  ok("glide is note overlap, not a parameter",
+     /const hold = next\?\.slide \? stepMs \* 1\.6 : stepMs \* 0\.5;/.test(panel),
+     "on a 303 the portamento comes from one note still sounding when the next arrives");
+  ok("a sequenced port gets clock but NOT Start",
+     /if \(transport && this\.sequenced\.has\(id\)\) continue;/.test(midi)
+       && /midiOut\.setSequenced\(portId, true\)/.test(panel),
+     "Start runs the synth's OWN pattern, which would play underneath ours — clock still "
+     + "goes everywhere so the tempo stays locked either way");
+  ok("the playhead lights when the step sounds, not when it is queued",
+     /window\.setTimeout\(\(\) => setPlayingStep\(i\), Math\.max\(0, atMs - performance\.now\(\)\)\)/.test(panel),
+     "steps are scheduled a lookahead early; lighting them on schedule runs the column "
+     + "ahead of the sound");
+  ok("stopping silences the synth",
+     /midiOut\.allNotesOff\(portId\)/.test(panel),
+     "a note held when the pattern stops drones until something else happens to clear it");
+  ok("the grid never starts empty",
+     /export const STARTERS: NamedPattern\[\]/.test(seq) && /STARTERS\.map\(\(st\)/.test(grid),
+     "a blank grid is only useful to someone who already knows the idiom, which is exactly "
+     + "what this is meant to spare the user");
+  ok("and it is labelled in plain words",
+     /"Louder"/.test(grid) && /"Glide"/.test(grid) && !/>Accent</.test(grid) && !/>Slide</.test(grid),
+     "accent and slide are 303 vocabulary; the user said they do not know the box and "
+     + "should not have to");
 }
 
 section("13. expensive analysis is memoised");

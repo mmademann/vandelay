@@ -37,6 +37,9 @@ class MidiOut {
   private anchored = false;
   private timer: ReturnType<typeof setInterval> | null = null;
   private nextPulseMs = 0;
+  private pulse = 0;
+  private pulsesPerStep = PPQ / 4;
+  private onStep: ((step: number, atMs: number, stepMs: number) => void) | null = null;
   private listeners = new Set<() => void>();
 
   /** Told when ports appear or vanish, so every panel can re-render its list. */
@@ -120,6 +123,7 @@ class MidiOut {
     this.running = true;
     if (!this.enabled) return;
     this.nextPulseMs = performance.now();
+    this.pulse = 0;
     this.sendNow(START);
   }
 
@@ -135,21 +139,90 @@ class MidiOut {
     const msPerPulse = 60000 / (this.bpm * PPQ);
     // A backgrounded tab freezes timers, and the clock would otherwise come back owing
     // thousands of pulses and fire them all at once.
-    if (this.nextPulseMs < now - 500) this.nextPulseMs = now;
+    if (this.nextPulseMs < now - 500) { this.nextPulseMs = now; this.pulse = 0; }
     const horizon = now + LOOKAHEAD_MS;
     while (this.nextPulseMs < horizon) {
       this.sendAt(CLOCK, this.nextPulseMs);
+      // Sequencer steps ride the SAME scheduled pulses as the clock, so a note cannot
+      // land a hair off the beat the device is being told to keep. Anything timed by its
+      // own interval would drift against this one.
+      if (this.onStep && this.pulse % this.pulsesPerStep === 0) {
+        this.onStep(this.pulse / this.pulsesPerStep, this.nextPulseMs, msPerPulse * this.pulsesPerStep);
+      }
+      this.pulse++;
       // Read msPerPulse fresh each tick rather than each pulse: a tempo change takes effect
       // at the next tick, which is well under the time it takes to turn a dial.
       this.nextPulseMs += msPerPulse;
     }
   };
 
+  /**
+   * Called once per sequencer step, with the time that step lands and how long it lasts.
+   *
+   * The step index counts up forever; a pattern takes it modulo its own length. That keeps
+   * patterns of different lengths from needing their own counters.
+   */
+  setStepCallback(fn: ((step: number, atMs: number, stepMs: number) => void) | null): void {
+    this.onStep = fn;
+  }
+
+  /** Steps per quarter note: 4 = sixteenths, 2 = eighths, 6 = sixteenth triplets. */
+  setStepsPerBeat(n: number): void {
+    this.pulsesPerStep = Math.max(1, Math.round(PPQ / Math.max(1, n)));
+  }
+
+  /**
+   * One note, scheduled.
+   *
+   * The note-off is scheduled with it rather than chased by a timer — the whole point of
+   * the lookahead is that both ends land where they were put. `overlapMs` past the step
+   * makes the next note legato, which is how a 303 slides: the glide comes from one note
+   * still sounding when the next arrives, not from a parameter.
+   */
+  sendNote(portId: string, channel: number, note: number, velocity: number, atMs: number, holdMs: number): void {
+    if (!this.access || !this.enabled) return;
+    const out = this.access.outputs.get(portId);
+    if (!out) return;
+    const ch = Math.max(0, Math.min(15, channel - 1));
+    const n = Math.max(0, Math.min(127, Math.round(note)));
+    const v = Math.max(1, Math.min(127, Math.round(velocity)));
+    try {
+      out.send([0x90 | ch, n, v], atMs);
+      out.send([0x80 | ch, n, 0], atMs + Math.max(10, holdMs));
+    } catch { /* port went away */ }
+  }
+
+  /** Silence a port — every note off, on every channel. Used when a pattern stops. */
+  allNotesOff(portId: string): void {
+    if (!this.access) return;
+    const out = this.access.outputs.get(portId);
+    if (!out) return;
+    for (let ch = 0; ch < 16; ch++) {
+      try { out.send([0xb0 | ch, 123, 0]); } catch { /* gone */ }
+    }
+  }
+
+  /**
+   * Ports vandelay is sequencing itself, which must NOT be sent Start.
+   *
+   * Start tells a device to run its OWN pattern. On a synth we are feeding notes to, that
+   * means two basslines at once — ours and whatever was last written to the box. Clock
+   * still goes everywhere, so the tempo stays locked either way; only the transport
+   * messages are withheld.
+   */
+  private sequenced = new Set<string>();
+
+  setSequenced(portId: string, on: boolean): void {
+    if (on) this.sequenced.add(portId); else this.sequenced.delete(portId);
+  }
+
   private sendAt(byte: number, atMs: number): void {
     if (!this.access) return;
-    // Every output, not a chosen one. The whole rig is meant to share this tempo, and
-    // picking ports is a setting nobody would ever want set differently.
-    for (const out of this.access.outputs.values()) {
+    const transport = byte !== CLOCK;
+    // Clock goes to every output: the whole rig shares one tempo, and picking ports for it
+    // is a setting nobody would ever want set differently.
+    for (const [id, out] of this.access.outputs) {
+      if (transport && this.sequenced.has(id)) continue;
       try { out.send([byte], atMs); } catch { /* port went away mid-send */ }
     }
   }
