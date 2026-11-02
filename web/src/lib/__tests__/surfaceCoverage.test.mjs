@@ -1866,8 +1866,18 @@ section("12ar. MIDI clock out makes vandelay the tempo master");
      /if \(this\.nextPulseMs < now - 500\) \{ this\.nextPulseMs = now; this\.pulse = 0; \}/.test(clock),
      "timers freeze when the tab is hidden; without this the catch-up fires them all at once");
   ok("start and stop ride the transport",
-     /midiOut\.start\(\);/.test(multiPage) && /midiOut\.stop\(\);/.test(multiPage),
+     /midiOut\.start\(startAt\);/.test(multiPage) && /midiOut\.stop\(\);/.test(multiPage),
      "downstream sequencers need MIDI Start, not just clock");
+  ok("the downbeat is measured AFTER the audio context is awake",
+     /const downbeatMs = this\.wallClockMsFor\(t\);/.test(read("audio/multiEngine.ts"))
+       && /return downbeatMs;/.test(read("audio/multiEngine.ts")),
+     "play() awaits Tone.start() and resume() before it picks its start time, so a lead "
+     + "measured by the caller beforehand is short by however long those took");
+  ok("Play All re-anchors a clock the panel was already running",
+     /if \(wasRunning\) this\.restart\(atMs\);/.test(clock),
+     "auditioning a bassline holds the clock up on its own, so refresh() saw no change and "
+     + "returned — the pattern kept the phase it picked up when you pressed Play bass, "
+     + "which is unrelated to where the rack's bar 1 is");
   ok("the button says what tempo it is actually sending",
      /\{midiAnchored \? `\$\{Math\.round\(midiBpm\)\} bpm` : "no anchor"\}/.test(transport)
        && /isAnchored\(\): boolean/.test(clock),
@@ -1875,9 +1885,9 @@ section("12ar. MIDI clock out makes vandelay the tempo master");
      + "rack plays at 73 is the kind of thing you notice an hour later");
   ok("clock goes to every output",
      /for \(const \[id, out\] of this\.access\.outputs\) \{/.test(clock)
-       && /const transport = byte !== CLOCK;/.test(clock),
+       && /if \(byte === START && this\.sequenced\.has\(id\)\) continue;/.test(clock),
      "the whole rig shares one tempo; choosing ports for CLOCK is a setting nobody would "
-     + "set differently — transport messages are the exception, see the sequencer section");
+     + "set differently — START is the single exception, see the sequencer section");
   ok("the button hides itself where Web MIDI does not exist",
      /midiOut\.isSupported\(\) && \(/.test(transport),
      "Safari has none, and a dead button is worse than no button");
@@ -1909,8 +1919,21 @@ section("12as. outboard front panels: the app holds the patch");
      "no SysEx on any of these, so the hardware has no idea what the app shows until "
      + "something moves — recalling a patch would otherwise mean wiggling every dial");
   ok("the panel and its port survive a reload",
-     /export function savePanel\(/.test(dev) && /savePanel\(device\.id, portId, values\)/.test(panel),
+     /export function savePanel\(/.test(dev)
+       && /savePanel\(device\.id, \{ portId, channel, values, delayBeats, delayMaxMs \}\)/.test(panel),
      "the app holds the patch; losing it on refresh would defeat the point");
+  ok("the echo row cannot display a division it is not sending",
+     /if \(d\.beats === delayBeats\) return true;/.test(panel),
+     "a <select> whose value matches no option shows the first one instead, so a tempo "
+     + "change that pushed the division out of range made the row read Free while the app "
+     + "carried on sending that division");
+  ok("the synth's own delay can be timed to the anchor",
+     /delay: \{ timeCc: 18, maxMs: 1000 \}/.test(dev)
+       && /ms \/ Math\.max\(1, delayMaxMs\)/.test(panel)
+       && /setDelayBeats\(null\)/.test(panel),
+     "a slot's delay is ours and exact; this one is inside the box, on a CC whose meaning "
+     + "Roland never published — so maxMs is a guess on screen, trimmed by ear, and the "
+     + "knob hands itself back the moment it is touched");
   ok("more than one thing can watch the MIDI ports",
      /private listeners = new Set<\(\) => void>\(\);/.test(midi),
      "the transport counts them and every panel lists them; a single callback slot meant "
@@ -1951,10 +1974,69 @@ section("12at. the bassline follows the anchors, and needs no 303 knowledge");
      /const hold = next\?\.slide \? stepMs \* 1\.6 : stepMs \* 0\.5;/.test(panel),
      "on a 303 the portamento comes from one note still sounding when the next arrives");
   ok("a sequenced port gets clock but NOT Start",
-     /if \(transport && this\.sequenced\.has\(id\)\) continue;/.test(midi)
+     /if \(byte === START && this\.sequenced\.has\(id\)\) continue;/.test(midi)
        && /midiOut\.setSequenced\(portId, true\)/.test(panel),
      "Start runs the synth's OWN pattern, which would play underneath ours — clock still "
      + "goes everywhere so the tempo stays locked either way");
+  ok("STOP is never withheld",
+     !/if \(transport && this\.sequenced\.has\(id\)\) continue;/.test(midi)
+       && /setSequenced\(portId: string, on: boolean\)[\s\S]{0,400}this\.sendTo\(portId, STOP\)/.test(midi),
+     "withholding every transport message left a port that had already been started with "
+     + "no message able to reach it — the rig could not be stopped from the app at all");
+  ok("the sequencer can run the clock on its own",
+     /setSequencerRunning\(on: boolean\)/.test(midi)
+       && /midiOut\.setSequencerRunning\(true\)/.test(panel),
+     "writing a line means hearing it with the rack stopped; requiring Play All first made "
+     + "the bassline button look dead most of the time");
+  ok("notes and CC go out on a channel you can change",
+     /midiOut\.sendCC\(portId, channel, cc, v\)/.test(panel)
+       && /portId, channel,\n/.test(panel),
+     "clock and Start carry no channel, so a wrong one looks like a working connection "
+     + "until no knob moves and no note sounds");
+  ok("snapping finds the beat, not just the bar length",
+     /export function beatPhaseShift\(/.test(read("lib/loopSnap.ts"))
+       && (read("lib/loopSnap.ts").match(/loopStart \+ beatPhaseShift\(buffer, loopStart, loopEnd, bpm\)/g) || []).length === 2,
+     "quantize rounds the loop LENGTH and deliberately leaves loopStart alone, which makes "
+     + "a loop repeat cleanly and agree with nothing. Play All starts every slot at its own "
+     + "loopStart and the hardware sequencer's step 1 lands there too, so a start sitting "
+     + "before the first kick puts the whole rack off that stem permanently. Both snapLoop "
+     + "and quantizeToGrid have to land on a beat first");
+  ok("the hardware downbeat waits for the rack's lookahead",
+     /wallClockMsFor\(audioTime: number\): number \{/.test(read("audio/multiEngine.ts"))
+       && /const startAt = await multiEngine\.play\(/.test(multiPage)
+       && /midiOut\.start\(startAt\)/.test(multiPage)
+       && /midiOut\.restart\(at\)/.test(multiPage),
+     "Tone.now() is currentTime + a 0.3s lookAhead, so the rack is not audible for ~350ms "
+     + "after play() returns. Starting the clock immediately put every outboard sequencer "
+     + "most of a beat ahead of the track — the same lookahead trap as Chop");
+  ok("queued column highlights are cancelled when the pattern changes",
+     /for \(const t of pending\) window\.clearTimeout\(t\)/.test(panel),
+     "the step effect re-runs on every edit; a lookahead of highlights queued by the "
+     + "previous run lands on top of the new one and walks the marker off the beat");
+  ok("the bassline is rooted on the HEARD key, not the detected one",
+     /anchorPitchShift/.test(panel) && /12 \* Math\.log2\(slotRate\(/.test(multiPage),
+     "a detected key describes the file; playback rate moves it. An anchor at 0.65x sounds "
+     + "7.46 semitones below its own badge, so a bassline on that badge is a fifth out");
+  ok("the leftover cents go to the synth's master tune",
+     /tune: \{ cc: 104, centsRange: 50 \}/.test(read("lib/midiDevices.ts"))
+       && /setAutoTune\(false\)/.test(panel),
+     "a slowed track almost never lands on a semitone, and the nearest note is then up to "
+     + "half a quarter-tone out; the knob hands itself back the moment it is touched");
+  ok("the bassline starts and stops with the rack",
+     /useEffect\(\(\) => \{ setSeqOn\(playing\); \}, \[playing\]\);/.test(panel)
+       && /playing=\{hardwarePlaying\}/.test(multiPage),
+     "a second transport you had to remember to arm was the whole confusion — Play All "
+     + "plays the bassline, and the panel button only ever means 'just the bass'");
+  ok("playing ONE slot does not start the hardware",
+     !/playing=\{isPlayingAll\}/.test(multiPage)
+       && /setHardwarePlaying\(true\)/.test(multiPage)
+       && /setHardwarePlaying\(false\)/.test(multiPage),
+     "isPlayingAll is polled off the engine, so auditioning a single stem turned it true "
+     + "and dragged the whole rig in with it");
+  ok("the panel owns the port for as long as it is open",
+     /setSequenced\(portId, true\);\n    return \(\) => \{ midiOut\.setSequenced\(portId, false\); \};/.test(panel),
+     "Start makes the synth run its OWN stored pattern; claiming the port only while a "
+     + "line was playing meant Play All started a bassline the user had not written");
   ok("the playhead lights when the step sounds, not when it is queued",
      /window\.setTimeout\(\(\) => setPlayingStep\(i\), Math\.max\(0, atMs - performance\.now\(\)\)\)/.test(panel),
      "steps are scheduled a lookahead early; lighting them on schedule runs the column "

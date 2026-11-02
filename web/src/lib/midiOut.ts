@@ -29,6 +29,23 @@ const LOOKAHEAD_MS = 120;
 
 type Ports = { id: string; name: string };
 
+/**
+ * Which MIDI channels a message goes out on. 0 means all sixteen.
+ *
+ * All sixteen is the default, and it is the right default here. A channel is a number the
+ * synth has to agree with, it is buried in that synth's own menus, and there is no way to
+ * read it back — so a wrong one looks exactly like a working connection, because clock
+ * and Start carry no channel and arrive regardless. Sending to every channel of ONE port
+ * cannot be wrong: the device ignores the fifteen that are not its own. The picker stays
+ * for a multitimbral box, where it starts to matter.
+ */
+const ALL_CHANNELS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+
+function channelsOf(channel: number): number[] {
+  if (channel < 1) return ALL_CHANNELS;
+  return [Math.max(0, Math.min(15, channel - 1))];
+}
+
 class MidiOut {
   private access: MIDIAccess | null = null;
   private enabled = false;
@@ -117,20 +134,71 @@ class MidiOut {
   /** Whether that BPM came from a tempo anchor, or is just the last one it saw. */
   isAnchored(): boolean { return this.anchored; }
 
-  /** Rack started. Downstream sequencers run from their own bar 1. */
-  start(): void {
-    if (this.running) return;
-    this.running = true;
+  /**
+   * Two things can want the clock running, and either is enough.
+   *
+   * The rack is the obvious one. The other is our own step sequencer: writing a bassline
+   * means hearing it on its own, and making that require Play All turns a synth panel
+   * into something you can only use with a full session loaded. Whoever lets go last
+   * stops the clock.
+   */
+  private transportOn = false;
+  private seqOn = false;
+
+  private refresh(atMs?: number): void {
+    const want = this.transportOn || this.seqOn;
+    if (want === this.running) return;
+    this.running = want;
     if (!this.enabled) return;
-    this.nextPulseMs = performance.now();
-    this.pulse = 0;
-    this.sendNow(START);
+    if (want) {
+      // Downbeat one, at the instant the rack's own audio reaches the speakers — which is
+      // NOT now. See multiEngine.transportLeadMs.
+      this.nextPulseMs = atMs ?? performance.now();
+      this.pulse = 0;
+      this.sendAt(START, this.nextPulseMs);
+    } else {
+      this.sendNow(STOP);
+      // A note we scheduled on with its note-off still in the future would hang forever.
+      if (this.access) for (const id of this.access.outputs.keys()) this.allNotesOff(id);
+    }
   }
 
-  stop(): void {
-    if (!this.running) return;
-    this.running = false;
-    if (this.enabled) this.sendNow(STOP);
+  /**
+   * Rack started. Downstream sequencers run from their own bar 1.
+   *
+   * `atMs` is when the rack is actually audible, which the caller knows and this does
+   * not. Without it the hardware starts while the audio engine is still counting down its
+   * lookahead, and everything outboard plays ahead of the track by most of a beat.
+   */
+  start(atMs?: number): void {
+    const wasRunning = this.running;
+    this.transportOn = true;
+    this.refresh(atMs);
+    // Already running because the panel was auditioning a line on its own, so `refresh`
+    // did nothing and the pattern kept the phase it picked up when you pressed Play bass.
+    // The rack is the authority on where bar 1 is; re-anchor to it.
+    if (wasRunning) this.restart(atMs);
+  }
+
+  stop(): void { this.transportOn = false; this.refresh(); }
+
+  /** Our own sequencer holds the clock up, so a bassline plays with the rack stopped. */
+  setSequencerRunning(on: boolean): void { this.seqOn = on; this.refresh(); }
+
+  isRunning(): boolean { return this.running; }
+
+  /**
+   * Back to step 1, in step with the rack.
+   *
+   * Rewind All drops every slot on its own downbeat; without this the pulse counter runs
+   * straight through it and the bassline is left mid-pattern against a track that just
+   * restarted. Start goes out too, so a device running its OWN pattern rewinds with us —
+   * ports we are sequencing are excluded from transport messages anyway.
+   */
+  restart(atMs?: number): void {
+    this.pulse = 0;
+    this.nextPulseMs = atMs ?? performance.now();
+    if (this.enabled && this.running) this.sendAt(START, this.nextPulseMs);
   }
 
   private tick = (): void => {
@@ -183,12 +251,13 @@ class MidiOut {
     if (!this.access || !this.enabled) return;
     const out = this.access.outputs.get(portId);
     if (!out) return;
-    const ch = Math.max(0, Math.min(15, channel - 1));
     const n = Math.max(0, Math.min(127, Math.round(note)));
     const v = Math.max(1, Math.min(127, Math.round(velocity)));
     try {
-      out.send([0x90 | ch, n, v], atMs);
-      out.send([0x80 | ch, n, 0], atMs + Math.max(10, holdMs));
+      for (const ch of channelsOf(channel)) {
+        out.send([0x90 | ch, n, v], atMs);
+        out.send([0x80 | ch, n, 0], atMs + Math.max(10, holdMs));
+      }
     } catch { /* port went away */ }
   }
 
@@ -207,22 +276,39 @@ class MidiOut {
    *
    * Start tells a device to run its OWN pattern. On a synth we are feeding notes to, that
    * means two basslines at once — ours and whatever was last written to the box. Clock
-   * still goes everywhere, so the tempo stays locked either way; only the transport
-   * messages are withheld.
+   * still goes everywhere, so the tempo stays locked either way.
+   *
+   * **Only Start is withheld.** Holding Stop back as well was the bug that made the rig
+   * unstoppable: a port sequenced after it had already been started kept running its own
+   * pattern with no message left that could reach it, and nothing in the app would
+   * silence it. Stop is never the wrong thing to deliver.
    */
   private sequenced = new Set<string>();
 
   setSequenced(portId: string, on: boolean): void {
-    if (on) this.sequenced.add(portId); else this.sequenced.delete(portId);
+    if (on) {
+      this.sequenced.add(portId);
+      // It may already be running its own pattern from an earlier Start. Park it now,
+      // because from here on it will never be sent another one.
+      this.sendTo(portId, STOP);
+      this.allNotesOff(portId);
+    } else {
+      this.sequenced.delete(portId);
+    }
+  }
+
+  private sendTo(portId: string, byte: number): void {
+    const out = this.access?.outputs.get(portId);
+    if (!out) return;
+    try { out.send([byte]); } catch { /* gone */ }
   }
 
   private sendAt(byte: number, atMs: number): void {
     if (!this.access) return;
-    const transport = byte !== CLOCK;
     // Clock goes to every output: the whole rig shares one tempo, and picking ports for it
     // is a setting nobody would ever want set differently.
     for (const [id, out] of this.access.outputs) {
-      if (transport && this.sequenced.has(id)) continue;
+      if (byte === START && this.sequenced.has(id)) continue;
       try { out.send([byte], atMs); } catch { /* port went away mid-send */ }
     }
   }
@@ -242,9 +328,10 @@ class MidiOut {
     if (!this.access || !this.enabled) return;
     const out = this.access.outputs.get(portId);
     if (!out) return;
-    const ch = Math.max(0, Math.min(15, channel - 1));
     const v = Math.max(0, Math.min(127, Math.round(value)));
-    try { out.send([0xb0 | ch, cc & 0x7f, v]); } catch { /* port went away */ }
+    try {
+      for (const ch of channelsOf(channel)) out.send([0xb0 | ch, cc & 0x7f, v]);
+    } catch { /* port went away */ }
   }
 }
 

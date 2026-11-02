@@ -269,6 +269,17 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
   const [midiError, setMidiError] = useState<string | null>(null);
   const [midiBpm, setMidiBpm] = useState(() => midiOut.currentBpm());
   const [midiAnchored, setMidiAnchored] = useState(() => midiOut.isAnchored());
+  /**
+   * Turn MIDI on by itself.
+   *
+   * Chrome asks once and remembers, so after the first yes this is silent and the
+   * hardware is simply there. Leaving it behind a button meant every session began with
+   * a synth panel that did nothing, and nothing on screen said which button was the
+   * reason. The button stays — as the readout, and as the way to switch it back off.
+   */
+  useEffect(() => {
+    if (midiOut.isSupported() && !midiOut.isEnabled()) void midiOut.enable();
+  }, []);
   useEffect(() => midiOut.subscribe(() => {
     setMidiOn(midiOut.isEnabled());
     setMidiPorts(midiOut.ports().map((p) => p.name));
@@ -692,22 +703,34 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
             same idea — vandelay driving hardware — and because neither does anything until
             MIDI is on. Shown even with the synth unplugged: the panel is a patch editor
             first and a controller second, so it is worth opening either way. */}
-        {slotCount > 0 && midiOut.isSupported() && MIDI_DEVICES.map((d) => (
-          <button
-            key={d.id}
-            type="button"
-            onClick={() => onToggleSynthPanel(d.id)}
-            title={`${d.name} front panel — every parameter over MIDI, including the ones buried in its menus`}
-            className={cn(
-              "shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
-              synthPanel === d.id
-                ? "bg-accent/20 text-accent ring-1 ring-accent/40"
-                : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted",
-            )}
-          >
-            {d.name}
-          </button>
-        ))}
+        {slotCount > 0 && midiOut.isSupported() && MIDI_DEVICES.map((d) => {
+          // Whether the box is actually on the end of a cable. Worth saying on the button:
+          // the panel opens either way, and without this there is nothing to distinguish
+          // editing a patch from editing a patch nobody is listening to.
+          const plugged = midiPorts.some((n) => n.toLowerCase().includes(d.portHint.toLowerCase()));
+          return (
+            <button
+              key={d.id}
+              type="button"
+              onClick={() => onToggleSynthPanel(d.id)}
+              title={plugged
+                ? `${d.name} is connected — front panel, including the parameters buried in its menus`
+                : `${d.name} front panel. Nothing by that name is plugged in, so this edits the patch only.`}
+              className={cn(
+                "flex shrink-0 items-center gap-1.5 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
+                synthPanel === d.id
+                  ? "bg-accent/20 text-accent ring-1 ring-accent/40"
+                  : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted",
+              )}
+            >
+              {d.name}
+              <span className={cn(
+                "h-1.5 w-1.5 rounded-full",
+                plugged ? "bg-accent" : "bg-foreground/20",
+              )} />
+            </button>
+          );
+        })}
 
         {/* One control for the whole feature.
             It started as three loose buttons — Suggest, a keep-loops toggle, an undo — which

@@ -1128,14 +1128,49 @@ class MultiEngine {
    * Without it, each slot resumes from where it was parked and already-playing slots are
    * left alone.
    */
-  async play(instant = false, fromLoopStart = false): Promise<void> {
+  /**
+   * How far ahead of the wall clock the rack's audio is scheduled, in milliseconds.
+   *
+   * `Tone.now()` is `currentTime + lookAhead`, and this engine runs a 0.3s lookAhead, so
+   * every transport action lands about 350ms after the call that made it. Anything timed
+   * against `performance.now()` instead — MIDI, which is everything outboard — has to
+   * wait the same amount or it arrives first. It was arriving first: the hardware
+   * bassline led the rack by most of a beat, which reads as the notes landing a column
+   * early against the grid.
+   *
+   * `outputLatency` is in there because that is the gap between the audio graph running
+   * and the speaker moving, and MIDI does not have it.
+   */
+  transportLeadMs(): number {
+    return Math.max(0, this.wallClockMsFor(Tone.now() + 0.05) - performance.now());
+  }
+
+  /**
+   * An audio-context time as a `performance.now()` timestamp at the speakers.
+   *
+   * The two clocks are the whole problem: Tone schedules in context time with a 0.3s
+   * lookahead baked in, MIDI is timestamped in `performance.now()`, and `outputLatency`
+   * is the gap between the graph running and the cone moving, which MIDI does not have.
+   */
+  wallClockMsFor(audioTime: number): number {
+    const ctx = Tone.getContext();
+    const out = (ctx.rawContext as AudioContext).outputLatency || 0;
+    return performance.now() + (audioTime - ctx.currentTime + out) * 1000;
+  }
+
+  /** Returns the wall-clock instant the downbeat is audible, for the MIDI clock. */
+  async play(instant = false, fromLoopStart = false): Promise<number> {
     await Tone.start();
     await Tone.getContext().resume();
     this.running = true;
 
-    if (this.slots.size === 0) return;
+    if (this.slots.size === 0) return performance.now();
 
     const t = Tone.now() + 0.05;
+    // Sampled HERE, after the two awaits above. Measuring the lead before the call left
+    // the hardware early by however long resuming the context took — which on a first
+    // play is not small, and is exactly the bug this whole mechanism exists to fix.
+    const downbeatMs = this.wallClockMsFor(t);
     const anySoloed = Array.from(this.slots.values()).some((s) => s.soloed);
 
     for (const slot of this.slots.values()) {
@@ -1175,6 +1210,7 @@ class MultiEngine {
       slot.startedAt = t;
       slot.playing = true;
     }
+    return downbeatMs;
   }
 
   stop(fade = false): void {

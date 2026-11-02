@@ -76,6 +76,96 @@ export function nearestZeroCrossing(buffer: AudioBuffer, time: number): number {
  * zero-crossing alignment needs — a deliberately chosen point in the track shouldn't
  * jump somewhere else. The end absorbs the musical rounding.
  */
+/**
+ * How far the loop start sits from a real beat, in seconds. Add it to land on one.
+ *
+ * Snapping used to round the loop LENGTH to whole bars and leave the start exactly where
+ * it was dragged, which is correct for making a loop repeat and useless for making it
+ * agree with anything. Play All starts every slot at its own loopStart, all at the same
+ * instant, and the hardware sequencer's step 1 lands there too — so a loop start sitting
+ * 60ms before the first kick puts the whole rack 60ms off that stem, permanently, and no
+ * amount of re-snapping touches it. Finding the beat was left to the user and a pair of
+ * drag handles, which is not a thing anyone should be asked to do by eye.
+ *
+ * Broadband on purpose, unlike `findHits`: that one high-passes to isolate snares, and a
+ * downbeat is usually a kick. Scores every candidate phase across one beat by how much
+ * onset energy lands on the grid it implies, and keeps the winner only if it clearly
+ * beats the average — a pad or a drone has no beat to find, and guessing one would move
+ * a loop for no reason.
+ *
+ * Folded to the NEAREST beat, so the result is always under half a beat in either
+ * direction. Rounding forward instead would throw away up to a whole beat of audio.
+ */
+export function beatPhaseShift(
+  buffer: AudioBuffer,
+  startSec: number,
+  endSec: number,
+  bpm: number | undefined,
+): number {
+  if (!bpm || !Number.isFinite(bpm) || bpm <= 0) return 0;
+  const beatSec = 60 / bpm;
+  const sr = buffer.sampleRate;
+  const data = buffer.getChannelData(0);
+  const from = Math.max(0, Math.floor(startSec * sr));
+  // 20s is plenty of beats to vote with, and keeps this cheap on a multi-minute stem.
+  const to = Math.min(data.length, Math.ceil(Math.min(endSec, startSec + 20) * sr));
+  if (to - from < sr * beatSec * 2) return 0;
+
+  // Same ~172Hz envelope rate the rest of this file uses.
+  const hop = Math.max(1, Math.round(sr / 172));
+  const frames = Math.floor((to - from) / hop);
+  if (frames < 16) return 0;
+
+  const env = new Float32Array(frames);
+  for (let f = 0; f < frames; f++) {
+    const s = from + f * hop;
+    let peak = 0;
+    for (let i = s; i < s + hop && i < to; i++) {
+      const v = data[i] < 0 ? -data[i] : data[i];
+      if (v > peak) peak = v;
+    }
+    env[f] = peak;
+  }
+
+  // An attack is a rise in that envelope, half-wave rectified.
+  const flux = new Float32Array(frames);
+  for (let f = 1; f < frames; f++) {
+    const d = env[f] - env[f - 1];
+    flux[f] = d > 0 ? d : 0;
+  }
+
+  const framesPerBeat = (beatSec * sr) / hop;
+  const beats = Math.floor(frames / framesPerBeat);
+  if (beats < 2) return 0;
+
+  const steps = Math.max(8, Math.round(framesPerBeat));
+  let bestPhase = 0;
+  let best = -1;
+  let total = 0;
+  for (let p = 0; p < steps; p++) {
+    const phase = (p / steps) * framesPerBeat;
+    let score = 0;
+    for (let b = 0; b < beats; b++) {
+      const f = Math.round(phase + b * framesPerBeat);
+      if (f >= frames) break;
+      // One frame either side, so a hit landing between frames still votes.
+      score += flux[f] + 0.5 * ((flux[f - 1] || 0) + (flux[f + 1] || 0));
+    }
+    total += score;
+    if (score > best) { best = score; bestPhase = phase; }
+  }
+
+  // No clear winner means no beat to find. Leave the loop alone rather than nudge it
+  // somewhere arbitrary — a pad has onsets too, they are just not on a grid.
+  const mean = total / steps;
+  if (best <= 0 || mean <= 0 || best < mean * 1.3) return 0;
+
+  let shift = (bestPhase * hop) / sr;
+  if (shift > beatSec / 2) shift -= beatSec;
+  if (startSec + shift < 0) shift += beatSec;
+  return shift;
+}
+
 export function snapLoop(
   buffer: AudioBuffer,
   loopStart: number,
@@ -85,12 +175,19 @@ export function snapLoop(
 ): SnapResult {
   const beatsPerBar = opts.beatsPerBar ?? 4;
   const dur = buffer.duration;
-  const start = nearestZeroCrossing(buffer, Math.max(0, loopStart));
 
   if (!bpm || !Number.isFinite(bpm) || bpm <= 0) {
+    const zeroStart = nearestZeroCrossing(buffer, Math.max(0, loopStart));
     const end = nearestZeroCrossing(buffer, Math.min(dur, loopEnd));
-    return { loopStart: start, loopEnd: end, mode: "zero-only", reason: "no-tempo" };
+    return { loopStart: zeroStart, loopEnd: end, mode: "zero-only", reason: "no-tempo" };
   }
+
+  // Beat first, bars second. Rounding the length is pointless if the start is not on a
+  // beat — see beatPhaseShift.
+  const start = nearestZeroCrossing(
+    buffer,
+    Math.max(0, loopStart + beatPhaseShift(buffer, loopStart, loopEnd, bpm)),
+  );
 
   const beatSec = 60 / bpm;
   const barSec = beatSec * beatsPerBar;
@@ -224,7 +321,10 @@ export function quantizeToGrid(
   const beatsPerBar = opts.beatsPerBar ?? 4;
   const barSec = (60 / bpm) * beatsPerBar;
   const dur = buffer.duration;
-  const start = nearestZeroCrossing(buffer, Math.max(0, loopStart));
+  const start = nearestZeroCrossing(
+    buffer,
+    Math.max(0, loopStart + beatPhaseShift(buffer, loopStart, loopEnd, bpm)),
+  );
   const span = loopEnd - start;
   if (span <= 0) return null;
 

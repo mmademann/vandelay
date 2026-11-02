@@ -148,6 +148,15 @@ const S = true;
 const _ = false;
 
 export const STARTERS: NamedPattern[] = [
+  // The root on every beat and nothing else. Four on the floor — the plainest thing the
+  // box can play, and so the one to reach for when the question is whether it is
+  // listening at all rather than what it sounds like.
+  build("Four", "minor", [
+    [1, 0, A, _], null, null, null,
+    [1, 0, _, _], null, null, null,
+    [1, 0, A, _], null, null, null,
+    [1, 0, _, _], null, null, null,
+  ]),
   // Root-heavy and relentless — the one everybody hears as "acid".
   build("Rolling", "minor", [
     [1, 0, A, _], null, [1, 0, _, _], [1, 1, _, _],

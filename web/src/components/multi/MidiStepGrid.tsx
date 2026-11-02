@@ -163,6 +163,8 @@ export function MidiStepGrid({
       </div>
 
       <p className="text-[10px] leading-snug text-foreground/30">
+        Left to right is one bar &mdash; at <span className="text-foreground/50">Normal</span> each
+        square is a sixteenth, so four of them make a beat.
         Click a square to place a note, click it again to clear it. Higher row, higher note —
         every one is in your track&rsquo;s key, so there is nothing wrong you can press.
         <span className="text-amber-400/70"> Louder</span> hits harder;

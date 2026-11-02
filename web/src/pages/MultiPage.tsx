@@ -201,6 +201,31 @@ export function MultiPage() {
   const [showPicker, setShowPicker] = useState(false);
   /** Which outboard synth's front panel is open, by device id. */
   const [synthPanel, setSynthPanel] = useState<string | null>(null);
+
+  /**
+   * Plugged in means on screen.
+   *
+   * A synth sitting in the MIDI port list with nothing in the UI to show for it is just a
+   * button you have to know about, and the whole point of these panels is not having to
+   * know the hardware. So the first time a device's port appears, its panel opens itself.
+   *
+   * First time ONLY — the ports list re-emits whenever anything is plugged or unplugged,
+   * and a panel that reopened on each of those could never be closed.
+   */
+  const autoOpenedRef = useRef(new Set<string>());
+  useEffect(() => {
+    const check = () => {
+      const names = midiOut.ports().map((p) => p.name.toLowerCase());
+      for (const d of MIDI_DEVICES) {
+        if (autoOpenedRef.current.has(d.id)) continue;
+        if (!names.some((n) => n.includes(d.portHint.toLowerCase()))) continue;
+        autoOpenedRef.current.add(d.id);
+        setSynthPanel(d.id);
+      }
+    };
+    check();
+    return midiOut.subscribe(check);
+  }, []);
   const [referenceSlotId, setReferenceSlotId] = useState<string | null>(null);
   /** Slot whose tempo the others stretch to match. Independent of the key anchor. */
   const [tempoAnchorId, setTempoAnchorId] = useState<string | null>(null);
@@ -296,6 +321,14 @@ export function MultiPage() {
   /** Name of the session that just saved — drives the transient ✓ on its row. "" = the new-session form. */
   const [savedFlash, setSavedFlash] = useState<string | null>(null);
   const [isPlayingAll, setIsPlayingAll] = useState(false);
+  /**
+   * Whether the OUTBOARD gear is playing, which only Play All and Pause All decide.
+   *
+   * Not `isPlayingAll`: that is polled off the engine, so starting one stem on its own
+   * made it true and dragged the hardware in with it. Playing a single slot is a thing
+   * you do to hear that slot.
+   */
+  const [hardwarePlaying, setHardwarePlaying] = useState(false);
   const [library, setLibrary] = useState<{ id: string; title: string }[]>([]);
   const libraryRef = useRef<{ id: string; title: string }[]>([]);
   const libraryPromiseRef = useRef<Promise<{ id: string; title: string }[]> | null>(null);
@@ -2399,13 +2432,17 @@ export function MultiPage() {
     // With a tempo anchor set the loops share a grid, so starting them all from loop start
     // lands them on one downbeat. Without an anchor there is no shared grid to align to and
     // slots keep resuming from wherever they were parked.
-    await multiEngine.play(instant, tempoAnchorIdRef.current !== null);
-    midiOut.start();
+    // play() hands back the wall-clock instant its downbeat is audible, which is ~350ms
+    // out and not knowable before the call — it awaits the audio context first.
+    const startAt = await multiEngine.play(instant, tempoAnchorIdRef.current !== null);
+    midiOut.start(startAt);
+    setHardwarePlaying(true);
   }
 
   function handleStopAll(fade = false) {
     multiEngine.stop(fade);
     midiOut.stop();
+    setHardwarePlaying(false);
   }
 
   const portalTarget = document.getElementById("multi-transport-portal");
@@ -2591,7 +2628,14 @@ export function MultiPage() {
           // One engine call, not a loop of seeks: the engine rewinds every slot on a single
           // timestamp, which is what keeps the downbeats aligned. It also reads each slot's
           // own loopStart, already clamped against buffer duration by addSlot.
-          onRewindAll={() => multiEngine.rewindAll()}
+          onRewindAll={() => {
+            // Same lead as Play All: rewindAll schedules against Tone.now() too.
+            const at = performance.now() + multiEngine.transportLeadMs();
+            multiEngine.rewindAll();
+            // Rewind is a transport action, so the hardware has to take it too — otherwise
+            // the rack lands on its downbeat and the bassline carries on mid-pattern.
+            midiOut.restart(at);
+          }}
           synthPanel={synthPanel}
           onToggleSynthPanel={(id) => setSynthPanel((cur) => (cur === id ? null : id))}
           chopSettings={masterSettings.chopSettings}
@@ -2662,7 +2706,22 @@ export function MultiPage() {
               device={d}
               // The KEY anchor, not the tempo anchor: the bassline has to agree with
               // whatever defines the key, which is a different slot by design.
+              // The bassline is part of the rack, so Play All plays it and Pause All stops
+              // it. The panel's own button then only ever means "just the bass".
+              playing={hardwarePlaying}
+              // The heard tempo, so the synth's own delay stays on the grid when the
+              // master speed moves — same number the clock is sending.
+              anchorBpm={anchorEffectiveBpm}
               anchorKey={entries.find((e) => e.slot.id === referenceSlotId)?.detectedKey}
+              // ...and with the key as it SOUNDS, not as it was detected. A detected key
+              // describes the file; playback rate moves it. An anchor at 0.65x is 7.46
+              // semitones below the key on its badge, so a bassline built on that badge is
+              // most of a fifth out — which is exactly how this bug was heard.
+              anchorPitchShift={(() => {
+                const a = entries.find((e) => e.slot.id === referenceSlotId);
+                if (!a) return 0;
+                return 12 * Math.log2(slotRate(a.slot, masterSettings.masterSpeed ?? 1));
+              })()}
               onClose={() => setSynthPanel(null)}
             />
           </div>
