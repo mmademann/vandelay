@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { multiEngine } from "../../audio/multiEngine";
+import { midiOut } from "../../lib/midiOut";
+import { MIDI_DEVICES } from "../../lib/midiDevices";
 import { renderMulti, canExportMulti } from "../../audio/renderMulti";
 import { multiRecorder } from "../../audio/multiRecorder";
 import {
@@ -159,6 +161,9 @@ interface Props {
   onThrowSettingsChange: (settings: ThrowSettings) => void;
   chopSettings: ChopSettings;
   onChopSettingsChange: (settings: ChopSettings) => void;
+  /** Open outboard front panel, by device id. */
+  synthPanel: string | null;
+  onToggleSynthPanel: (id: string) => void;
   onMasterSpeedChange: (speed: number) => void;
   throwPresets: ThrowPreset[];
   onSaveThrowPreset: (name: string) => void;
@@ -214,7 +219,7 @@ function buildExportFilename(activeSessionName: string | null, slotTitles: strin
   return `${unique.slice(0, 2).join(" × ")} +${unique.length - 2}`;
 }
 
-export function MultiTransport({ masterSettings, slotCount, referenceSlotId, activeSessionName, slotTitles, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, chopSettings, onChopSettingsChange, onMasterSpeedChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll, onTempoMatchAll, onLockAll, onComputeSuggestions, onPickSuggestion, suggestions, suggestIndex, onUndoSuggest, suggestNote, suggestKeepLoops, onToggleKeepLoops, versions, onSaveVersion, onRestoreVersion, onDeleteVersion, slotsLoading, gridNote, onDismissGridNote, staleTempoCount, onRelockStale, autoRelock, onToggleAutoRelock, tempoAnchorId, onRandomSession, randomDisabled }: Props) {
+export function MultiTransport({ masterSettings, slotCount, referenceSlotId, activeSessionName, slotTitles, getSlotsAndBuffers, onStopAll, onPlayAll, onRewindAll, onThrowSettingsChange, chopSettings, onChopSettingsChange, synthPanel, onToggleSynthPanel, onMasterSpeedChange, throwPresets, onSaveThrowPreset, onDeleteThrowPreset, onApplyThrowPreset, isPlaying, onMatchAll, onTempoMatchAll, onLockAll, onComputeSuggestions, onPickSuggestion, suggestions, suggestIndex, onUndoSuggest, suggestNote, suggestKeepLoops, onToggleKeepLoops, versions, onSaveVersion, onRestoreVersion, onDeleteVersion, slotsLoading, gridNote, onDismissGridNote, staleTempoCount, onRelockStale, autoRelock, onToggleAutoRelock, tempoAnchorId, onRandomSession, randomDisabled }: Props) {
   const [loopCount, setLoopCount] = useState(1);
   const [recording, setRecording] = useState(false);
   const [recElapsed, setRecElapsed] = useState(0);
@@ -258,6 +263,29 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
    * an edit whenever the active session changes.
    */
   const autoFilledRef = useRef("");
+  /** Outboard gear following vandelay's tempo. Chrome only; see midiOut.ts. */
+  const [midiOn, setMidiOn] = useState(false);
+  const [midiPorts, setMidiPorts] = useState<string[]>([]);
+  const [midiError, setMidiError] = useState<string | null>(null);
+  const [midiBpm, setMidiBpm] = useState(() => midiOut.currentBpm());
+  const [midiAnchored, setMidiAnchored] = useState(() => midiOut.isAnchored());
+  useEffect(() => midiOut.subscribe(() => {
+    setMidiOn(midiOut.isEnabled());
+    setMidiPorts(midiOut.ports().map((p) => p.name));
+    setMidiBpm(midiOut.currentBpm());
+    setMidiAnchored(midiOut.isAnchored());
+  }), []);
+
+  async function toggleMidi() {
+    if (midiOut.isEnabled()) {
+      midiOut.disable();
+      setMidiError(null);
+      return;
+    }
+    const r = await midiOut.enable();
+    setMidiError(r.ok ? null : r.error ?? "MIDI unavailable");
+  }
+
   const [chopPanelOpen, setChopPanelOpen] = useState(false);
   const chopPanelRef = useRef<HTMLDivElement>(null);
   const chopBtnRef = useRef<HTMLButtonElement>(null);
@@ -623,6 +651,63 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
             )}
           </div>
         )}
+
+        {/* Vandelay as tempo master for outboard gear. Beside the master speed dial because
+            that dial is what it mainly does: drop the rack to 0.75x and the hardware slows
+            with it. Hidden where the browser has no Web MIDI rather than shown broken. */}
+        {slotCount > 0 && midiOut.isSupported() && (
+          <button
+            type="button"
+            onClick={() => { void toggleMidi(); }}
+            title={midiError
+              ? midiError
+              : midiOn
+                ? `Sending MIDI clock at the anchor's heard tempo to: ${midiPorts.join(", ") || "no devices connected"}`
+                : "Send MIDI clock to connected hardware, so its sequencers follow this tempo"}
+            data-anchored={midiAnchored}
+            className={cn(
+              "shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
+              midiOn
+                ? "bg-accent/20 text-accent ring-1 ring-accent/40"
+                : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted",
+            )}
+          >
+            &#9834; Clock
+            {midiOn && (
+              /* The tempo it is ACTUALLY sending, not the one you might assume. Without an
+                 anchor it holds its last value, and a clock at 120 while the rack plays at
+                 73 is the kind of thing you notice an hour later. */
+              <span className={cn(
+                "ml-1.5 rounded px-1.5 py-0.5 text-[9px] font-medium normal-case tracking-normal tabular-nums",
+                midiAnchored ? "bg-foreground/10 text-foreground/70" : "bg-amber-500/20 text-amber-300",
+              )}>
+                {midiAnchored ? `${Math.round(midiBpm)} bpm` : "no anchor"}
+                {" · "}{midiPorts.length} out
+              </span>
+            )}
+          </button>
+        )}
+
+        {/* A button per piece of outboard gear. They sit beside Clock because they are the
+            same idea — vandelay driving hardware — and because neither does anything until
+            MIDI is on. Shown even with the synth unplugged: the panel is a patch editor
+            first and a controller second, so it is worth opening either way. */}
+        {slotCount > 0 && midiOut.isSupported() && MIDI_DEVICES.map((d) => (
+          <button
+            key={d.id}
+            type="button"
+            onClick={() => onToggleSynthPanel(d.id)}
+            title={`${d.name} front panel — every parameter over MIDI, including the ones buried in its menus`}
+            className={cn(
+              "shrink-0 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition",
+              synthPanel === d.id
+                ? "bg-accent/20 text-accent ring-1 ring-accent/40"
+                : "bg-muted/80 text-foreground/50 hover:text-foreground hover:bg-muted",
+            )}
+          >
+            {d.name}
+          </button>
+        ))}
 
         {/* One control for the whole feature.
             It started as three loose buttons — Suggest, a keep-loops toggle, an undo — which

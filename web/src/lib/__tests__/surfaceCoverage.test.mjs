@@ -1844,6 +1844,80 @@ section("12aq. Chop is a re-trigger, not an effect");
      "settings for something you press on a slot do not belong behind a different button");
 }
 
+section("12ar. MIDI clock out makes vandelay the tempo master");
+{
+  const clock = read("lib/midiOut.ts");
+  ok("pulses are SCHEDULED ahead, not fired by the timer that notices them",
+     /out\.send\(\[byte\], atMs\)/.test(clock) && /const LOOKAHEAD_MS = 120;/.test(clock),
+     "a JS interval is accurate to a few ms at best, and at 24 pulses a beat that is "
+     + "audible as a wobbling tempo. send() takes a timestamp the browser honours, so a "
+     + "loose timer scheduling precisely beats a precise timer");
+  ok("24 pulses per quarter note",
+     /const PPQ = 24;/.test(clock) && /60000 \/ \(this\.bpm \* PPQ\)/.test(clock),
+     "it is in the MIDI spec, not a choice");
+  ok("it follows the HEARD tempo",
+     /midiOut\.setBpm\(anchorEffectiveBpm\)/.test(multiPage),
+     "the raw detected BPM would hold the gear at the track's original tempo while the "
+     + "track itself slowed away from it — the master speed dial is the whole point");
+  ok("the interval is re-read each tick, so a tempo change lands",
+     /const msPerPulse = 60000 \/ \(this\.bpm \* PPQ\);\n\s*\/\/ A backgrounded tab/.test(clock),
+     "computing it once at start would freeze the clock at the tempo it began on");
+  ok("a backgrounded tab cannot come back owing thousands of pulses",
+     /if \(this\.nextPulseMs < now - 500\) this\.nextPulseMs = now;/.test(clock),
+     "timers freeze when the tab is hidden; without this the catch-up fires them all at once");
+  ok("start and stop ride the transport",
+     /midiOut\.start\(\);/.test(multiPage) && /midiOut\.stop\(\);/.test(multiPage),
+     "downstream sequencers need MIDI Start, not just clock");
+  ok("the button says what tempo it is actually sending",
+     /\{midiAnchored \? `\$\{Math\.round\(midiBpm\)\} bpm` : "no anchor"\}/.test(transport)
+       && /isAnchored\(\): boolean/.test(clock),
+     "with no tempo anchor the clock holds its last value, and a clock at 120 while the "
+     + "rack plays at 73 is the kind of thing you notice an hour later");
+  ok("it sends to every output",
+     /for \(const out of this\.access\.outputs\.values\(\)\)/.test(clock),
+     "the whole rig shares one tempo; choosing ports is a setting nobody would set differently");
+  ok("the button hides itself where Web MIDI does not exist",
+     /midiOut\.isSupported\(\) && \(/.test(transport),
+     "Safari has none, and a dead button is worse than no button");
+  ok("enabling happens on a click",
+     /onClick=\{\(\) => \{ void toggleMidi\(\); \}\}/.test(transport),
+     "Chrome prompts for MIDI permission and will not prompt outside a gesture");
+}
+
+section("12as. outboard front panels: the app holds the patch");
+{
+  // `clock` is scoped to the section above; this one needs its own handle on the module.
+  const midi = read("lib/midiOut.ts");
+  const dev = read("lib/midiDevices.ts");
+  const panel = read("components/multi/MidiSynthPanel.tsx");
+  ok("CC goes to ONE port, unlike clock",
+     /sendCC\(portId: string, channel: number, cc: number, value: number\)/.test(midi)
+       && /this\.access\.outputs\.get\(portId\)/.test(midi),
+     "74 is the filter cutoff on the TB-03 AND the SH-01A AND the JP-08 — broadcasting a "
+     + "parameter would move three synths at once");
+  ok("the CC map comes from Roland's own chart",
+     /\{ label: "Cutoff", cc: 74/.test(dev) && /\{ label: "Resonance", cc: 71/.test(dev)
+       && /\{ label: "Decay", cc: 75/.test(dev),
+     "community lists disagree with Roland's in places, and a wrong number moves the wrong knob");
+  ok("values are raw 0-127, with no second mapping invented on top",
+     /min=\{0\}\n\s*max=\{127\}/.test(panel),
+     "scaling here would make the number under the dial disagree with the number on the wire");
+  ok("there is a push-all, because the synth cannot be read",
+     /function sendAll\(\)/.test(panel) && /Push all/.test(panel),
+     "no SysEx on any of these, so the hardware has no idea what the app shows until "
+     + "something moves — recalling a patch would otherwise mean wiggling every dial");
+  ok("the panel and its port survive a reload",
+     /export function savePanel\(/.test(dev) && /savePanel\(device\.id, portId, values\)/.test(panel),
+     "the app holds the patch; losing it on refresh would defeat the point");
+  ok("more than one thing can watch the MIDI ports",
+     /private listeners = new Set<\(\) => void>\(\);/.test(midi),
+     "the transport counts them and every panel lists them; a single callback slot meant "
+     + "whichever mounted last silenced the other");
+  ok("the panel is docked, not floating",
+     /<MidiSynthPanel device=\{d\} onClose/.test(multiPage) && !/MidiSynthPanel[\s\S]{0,200}absolute/.test(multiPage),
+     "a floating menu closes the moment you reach for a knob");
+}
+
 section("13. expensive analysis is memoised");
 {
   ok("estimateBpm results are cached", /WeakMap/.test(multiPage) && /sourceBpm/.test(multiPage),

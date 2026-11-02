@@ -466,6 +466,30 @@ Traps that have each actually bitten:
     leaves Chop replaying pre-stretch audio at pre-stretch positions — it chops a different
     part of the song, which is exactly how the bug was found.
 
+37. **Outboard front panels: the app holds the patch** — `midiDevices.ts` carries a CC map
+    per synth, read off **Roland's own MIDI Implementation Chart** rather than a community
+    list, because the two disagree and a wrong number moves the wrong knob. None of the
+    Boutiques support SysEx (their charts all say `x / x`), so a sound cannot be read back
+    off the hardware — but every parameter is writable, so what is on screen IS the patch
+    and `Push all` sends the lot after power-on. `sendCC` addresses ONE port, unlike clock,
+    which broadcasts: CC 74 is the filter cutoff on all three synths, so a broadcast would
+    move the whole rig. Panels are docked above the rack, not floating, because a menu that
+    closes when you reach for a knob is useless.
+
+36. **MIDI clock out follows the HEARD tempo, and its pulses are scheduled, not fired** —
+    `midiClock.ts`, wired to `anchorEffectiveBpm` in `MultiPage`. Sending the raw detected
+    BPM would hold outboard gear at the track's original tempo while the track slowed away
+    from it; the master speed dial dragging the hardware with it is the entire point. MIDI
+    clock is 24 PPQ, so a JS interval firing each pulse is audibly wobbly — instead a loose
+    25ms timer schedules every pulse due in the next 120ms with an explicit timestamp,
+    which Web MIDI honours (same trick as the Web Audio metronome). `msPerPulse` is re-read
+    each tick so a tempo change lands within a tick, and a catch-up guard stops a
+    backgrounded tab returning with thousands of pulses owed. Chrome only — Safari has no
+    Web MIDI — and the button hides itself rather than appearing dead. With no tempo
+    anchor it keeps sending at the last good tempo rather than lurching the hardware to a
+    default, and the button says `no anchor` instead of a BPM, because a clock at 120 while
+    the rack plays at 73 is the kind of thing you notice an hour later.
+
 ## Known gotchas
 
 - `yt-dlp` on PATH; Rosetta: `arch -arm64 brew install yt-dlp`.

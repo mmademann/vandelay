@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { multiEngine } from "../audio/multiEngine";
+import { midiOut } from "../lib/midiOut";
+import { MidiSynthPanel } from "../components/multi/MidiSynthPanel";
+import { MIDI_DEVICES } from "../lib/midiDevices";
 import { DRY_EFFECTS, type StemName } from "../audio/dubEngine";
 import { sanitizeEffects, EFFECTS_LIMITS } from "../store";
 import { suggestSetups, type SuggestCandidate } from "../lib/suggestSetup";
@@ -196,6 +199,8 @@ export function MultiPage() {
 
   const [entries, setEntries] = useState<SlotEntry[]>([]);
   const [showPicker, setShowPicker] = useState(false);
+  /** Which outboard synth's front panel is open, by device id. */
+  const [synthPanel, setSynthPanel] = useState<string | null>(null);
   const [referenceSlotId, setReferenceSlotId] = useState<string | null>(null);
   /** Slot whose tempo the others stretch to match. Independent of the key anchor. */
   const [tempoAnchorId, setTempoAnchorId] = useState<string | null>(null);
@@ -2382,15 +2387,25 @@ export function MultiPage() {
     }
   }
 
+  /**
+   * Outboard gear follows the anchor's HEARD tempo, so the master speed dial drags the
+   * whole rig with it — the Boutiques are screwed in the same sense the samples are.
+   */
+  useEffect(() => {
+    midiOut.setBpm(anchorEffectiveBpm);
+  }, [anchorEffectiveBpm]);
+
   async function handlePlayAll(instant = false) {
     // With a tempo anchor set the loops share a grid, so starting them all from loop start
     // lands them on one downbeat. Without an anchor there is no shared grid to align to and
     // slots keep resuming from wherever they were parked.
     await multiEngine.play(instant, tempoAnchorIdRef.current !== null);
+    midiOut.start();
   }
 
   function handleStopAll(fade = false) {
     multiEngine.stop(fade);
+    midiOut.stop();
   }
 
   const portalTarget = document.getElementById("multi-transport-portal");
@@ -2577,6 +2592,8 @@ export function MultiPage() {
           // timestamp, which is what keeps the downbeats aligned. It also reads each slot's
           // own loopStart, already clamped against buffer duration by addSlot.
           onRewindAll={() => multiEngine.rewindAll()}
+          synthPanel={synthPanel}
+          onToggleSynthPanel={(id) => setSynthPanel((cur) => (cur === id ? null : id))}
           chopSettings={masterSettings.chopSettings}
           onChopSettingsChange={handleChopSettingsChange}
           onThrowSettingsChange={handleThrowSettingsChange}
@@ -2636,6 +2653,14 @@ export function MultiPage() {
             </button>
           </div>
         )}
+
+        {/* Outboard front panels sit above the rack: they are instruments in the same
+            session, and a floating menu would close every time you reached for a knob. */}
+        {synthPanel && MIDI_DEVICES.filter((d) => d.id === synthPanel).map((d) => (
+          <div key={d.id} className="col-span-full">
+            <MidiSynthPanel device={d} onClose={() => setSynthPanel(null)} />
+          </div>
+        ))}
 
         {entries.map((entry, slotIndex) => {
           if (entry.loading) {
