@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { multiEngine } from "../../audio/multiEngine";
 import { midiOut } from "../../lib/midiOut";
-import { MIDI_DEVICES } from "../../lib/midiDevices";
+import { MIDI_DEVICES, matchesPort } from "../../lib/midiDevices";
 import { renderMulti, canExportMulti } from "../../audio/renderMulti";
 import { multiRecorder } from "../../audio/multiRecorder";
 import {
@@ -707,7 +707,7 @@ export function MultiTransport({ masterSettings, slotCount, referenceSlotId, act
           // Whether the box is actually on the end of a cable. Worth saying on the button:
           // the panel opens either way, and without this there is nothing to distinguish
           // editing a patch from editing a patch nobody is listening to.
-          const plugged = midiPorts.some((n) => n.toLowerCase().includes(d.portHint.toLowerCase()));
+          const plugged = midiPorts.some((n) => matchesPort(d, n));
           return (
             <button
               key={d.id}

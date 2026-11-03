@@ -12,6 +12,8 @@ import {
   writeAllVersions,
   type MultiVersion,
 } from "./multiSettings";
+import { readAllPanels, writeAllPanels, type PanelState } from "./midiDevices";
+import { readAllPatterns, writeAllPatterns, type Pattern } from "./midiSequencer";
 
 export interface MultiExportFile {
   exportedAt: number;
@@ -24,6 +26,16 @@ export interface MultiExportFile {
   anchor: { trackId: string; stemName: StemName | null } | null;
   /** Optional: backups written before in-session versions existed have none. */
   versions?: Record<string, MultiVersion[]>;
+  /**
+   * The outboard synths: every front panel and every bassline, by device id.
+   *
+   * Optional for the same reason `versions` is — a backup written before the hardware
+   * existed carries neither, and restoring an empty one would wipe patches that took
+   * real time to dial and cannot be read back off the synth, since none of them answer
+   * SysEx. The app IS the patch, so the app's backup has to hold it.
+   */
+  midiPanels?: Record<string, Partial<PanelState>>;
+  midiPatterns?: Record<string, Pattern>;
 }
 
 export function buildExport(masterSettings: MultiMasterSettings): MultiExportFile {
@@ -39,6 +51,8 @@ export function buildExport(masterSettings: MultiMasterSettings): MultiExportFil
     // In-session versions ride with the backup like everything else; losing the
     // alternatives you kept would make the feature untrustworthy.
     versions: readAllVersions(),
+    midiPanels: readAllPanels(),
+    midiPatterns: readAllPatterns(),
   };
 }
 
@@ -71,6 +85,8 @@ export function applyImport(data: MultiExportFile): void {
   // Only when the backup actually carries them. An older file has no `versions` key, and
   // writing an empty store for it would delete versions the user still has locally.
   if (data.versions) writeAllVersions(data.versions);
+  if (data.midiPanels) writeAllPanels(data.midiPanels);
+  if (data.midiPatterns) writeAllPatterns(data.midiPatterns);
   if (data.anchor) {
     saveAnchorKey(data.anchor.trackId, data.anchor.stemName);
   } else {

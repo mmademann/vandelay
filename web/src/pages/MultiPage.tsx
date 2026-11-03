@@ -4,7 +4,8 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { multiEngine } from "../audio/multiEngine";
 import { midiOut } from "../lib/midiOut";
 import { MidiSynthPanel } from "../components/multi/MidiSynthPanel";
-import { MIDI_DEVICES } from "../lib/midiDevices";
+import { MIDI_DEVICES, matchesPort, readAllPanels, writeAllPanels } from "../lib/midiDevices";
+import { readAllPatterns, writeAllPatterns } from "../lib/midiSequencer";
 import { DRY_EFFECTS, type StemName } from "../audio/dubEngine";
 import { sanitizeEffects, EFFECTS_LIMITS } from "../store";
 import { suggestSetups, type SuggestCandidate } from "../lib/suggestSetup";
@@ -184,12 +185,22 @@ function slotRate(slot: MultiSlot, masterSpeed: number): number {
 function anchorBarGridBpm(
   anchorRawBpm: number,
   anchorSlot: MultiSlot | undefined,
+  anchorStretch: number,
   slot: MultiSlot,
   masterSpeed: number,
 ): number {
   const aRate = anchorSlot ? slotRate(anchorSlot, masterSpeed) : 1;
   const eRate = slotRate(slot, masterSpeed);
-  return anchorRawBpm * ((aRate || 1) / (eRate || 1));
+  // `anchorRawBpm` is measured on the anchor's SOURCE audio, but the engine is playing a
+  // buffer that has been stretched away from it — so the bar the rack actually hears is
+  // longer by exactly that ratio and this has to divide it back out. Leaving it off made
+  // the grid disagree with the transport's own BPM by the anchor's stretch: a 97% anchor
+  // read 82 bpm in the transport and handed Phase, Move, Snap and quantize an 80 bpm bar.
+  // Only the ANCHOR's stretch belongs here. The slot's own is already accounted for, since
+  // the answer is expressed in that slot's buffer seconds, which is what its loop bounds
+  // are measured in.
+  const aStretch = anchorStretch > 0 ? anchorStretch : 1;
+  return (anchorRawBpm * ((aRate || 1) / (eRate || 1))) / aStretch;
 }
 
 export function MultiPage() {
@@ -201,6 +212,15 @@ export function MultiPage() {
   const [showPicker, setShowPicker] = useState(false);
   /** Which outboard synth's front panel is open, by device id. */
   const [synthPanel, setSynthPanel] = useState<string | null>(null);
+  /**
+   * Bumped when a session writes new synth patches, to force the panels to remount.
+   *
+   * A panel reads its stored state once, into a ref, because nothing else ever changes it
+   * behind the panel's back. Loading a session does exactly that, and without a remount
+   * the restored patch sits in storage while the screen — and the synth — keep the old
+   * one. Used as part of the React key.
+   */
+  const [midiEpoch, setMidiEpoch] = useState(0);
 
   /**
    * Plugged in means on screen.
@@ -215,12 +235,16 @@ export function MultiPage() {
   const autoOpenedRef = useRef(new Set<string>());
   useEffect(() => {
     const check = () => {
-      const names = midiOut.ports().map((p) => p.name.toLowerCase());
+      const names = midiOut.ports().map((p) => p.name);
+      // Only ONE panel opens per pass, even with the whole rig plugged in. Every device
+      // found is marked seen, so the rest do not pop open later as ports re-enumerate —
+      // three panels fighting over one slot would just show whichever was last in the list.
+      let opened = false;
       for (const d of MIDI_DEVICES) {
         if (autoOpenedRef.current.has(d.id)) continue;
-        if (!names.some((n) => n.includes(d.portHint.toLowerCase()))) continue;
+        if (!names.some((n) => matchesPort(d, n))) continue;
         autoOpenedRef.current.add(d.id);
-        setSynthPanel(d.id);
+        if (!opened) { setSynthPanel(d.id); opened = true; }
       }
     };
     check();
@@ -275,13 +299,16 @@ export function MultiPage() {
   const pendingPhaseRestoreRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!anchorBpm || pendingPhaseRestoreRef.current.size === 0) return;
-    const anchorSlot = entriesRef.current.find((e) => e.slot.id === tempoAnchorId)?.slot;
+    const anchorEntry = entriesRef.current.find((e) => e.slot.id === tempoAnchorId);
+    const anchorSlot = anchorEntry?.slot;
     const ms = masterSettings.masterSpeed ?? 1;
     for (const id of pendingPhaseRestoreRef.current) {
       const slot = entriesRef.current.find((e) => e.slot.id === id)?.slot;
       // Per-slot grid — see anchorBarGridBpm. Falls back to the anchor's own bar for a slot
       // that has since been removed, which is harmless because nothing reads it.
-      const barSec = (60 / (slot ? anchorBarGridBpm(anchorBpm, anchorSlot, slot, ms) : anchorBpm)) * 4;
+      const barSec = (60 / (slot
+        ? anchorBarGridBpm(anchorBpm, anchorSlot, anchorEntry?.stretch ?? 1, slot, ms)
+        : anchorBpm)) * 4;
       multiEngine.setPhaseBarSec(id, barSec);
       const target = multiEngine.startPositionFor(id);
       if (Math.abs(target - multiEngine.getLoopStart(id)) > 1e-6) multiEngine.seekSlot(id, target);
@@ -410,6 +437,32 @@ export function MultiPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tempoAnchorId, anchorEffectiveBpm, entries, masterSettings.masterSpeed]);
 
+  /**
+   * Slots sitting on the anchor's tempo right now — matched, whatever their stretch says.
+   *
+   * The badge used to be "is this buffer stretched away from its source", which is only a
+   * proxy and is wrong in the one case that looks most like a bug: a slot whose own tempo
+   * already agrees with the anchor needs a ratio of 1.000, so Match Tempo correctly does
+   * nothing, the stretch stays at 100%, and every control on the row keeps saying the slot
+   * is unmatched. Pressing the button again changes nothing, which reads as a dead button.
+   *
+   * Derived rather than stored, so it survives a reload the same way the stretch does.
+   */
+  const tempoOnGrid = useMemo(() => {
+    const out = new Set<string>();
+    if (!tempoAnchorId || !anchorEffectiveBpm) return out;
+    const ms = masterSettings.masterSpeed ?? 1;
+    for (const e of entries) {
+      if (e.slot.id === tempoAnchorId || e.loading) continue;
+      const bpm = e.detectedBpm ?? sourceBpm(e.sourceBuffer);
+      if (!bpm) continue;
+      const want = tempoStretchRatio(heardBpm(bpm, e.slot, ms), anchorEffectiveBpm, e.tempoRelation);
+      if (Math.abs(want - e.stretch) <= 0.01) out.add(e.slot.id);
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tempoAnchorId, anchorEffectiveBpm, entries, masterSettings.masterSpeed]);
+
   const staleTempoIdsRef = useRef<Set<string>>(new Set());
   staleTempoIdsRef.current = staleTempoIds;
 
@@ -483,7 +536,7 @@ export function MultiPage() {
   useEffect(() => {
     if (!localStorage.getItem("vandelay:multi:sessions:v1")) {
       loadExportFromServer().then((data) => {
-        if (data) applyImport(data);
+        if (data) { applyImport(data); setMidiEpoch((n) => n + 1); }
       }).catch(() => {});
     }
     multiEngine.setThrowSettings(masterSettings.throwSettings);
@@ -503,6 +556,10 @@ export function MultiPage() {
     // page unload left the working tree permanently dirty. Use ↓ Backup in the Sessions panel.
     return () => {
       multiEngine.dispose();
+      // The outboard has to stop with everything else. Disposing the engine silenced the
+      // speakers and left the MIDI clock streaming at the last tempo for as long as the
+      // tab stayed open — the rig kept running after you had walked away from the page.
+      midiOut.stop();
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -914,6 +971,7 @@ export function MultiPage() {
             ? anchorBarGridBpm(
                 anchorBpmRef.current,
                 entriesRef.current.find((e) => e.slot.id === tempoAnchorIdRef.current)?.slot,
+                entriesRef.current.find((e) => e.slot.id === tempoAnchorIdRef.current)?.stretch ?? 1,
                 finalSlot,
                 masterSettingsRef.current.masterSpeed ?? 1,
               )
@@ -1337,13 +1395,16 @@ export function MultiPage() {
     targetSlotId: string,
     relationOverride?: number | null,
     remeasure = false,
-  ) {
+  ): Promise<string | null> {
+    // Returns what happened, for the chip beside the button. Every exit used to be a bare
+    // `return`, so the three ways this can legitimately do nothing — no anchor, no
+    // readable tempo, already on the grid — were indistinguishable from a dead button.
     const anchorId = tempoAnchorIdRef.current;
-    if (!anchorId || anchorId === targetSlotId) return;
+    if (!anchorId || anchorId === targetSlotId) return null;
 
     const anchorEntry = entriesRef.current.find((e) => e.slot.id === anchorId);
     const target = entriesRef.current.find((e) => e.slot.id === targetSlotId);
-    if (!anchorEntry || !target || !target.sourceBuffer) return;
+    if (!anchorEntry || !target || !target.sourceBuffer) return "still loading";
 
     const anchorSrc = anchorEntry.sourceBuffer ?? anchorEntry.buffer;
     const anchorRaw = anchorEntry.detectedBpm ?? (anchorSrc ? sourceBpm(anchorSrc) : undefined);
@@ -1353,7 +1414,11 @@ export function MultiPage() {
     // already known, so a failed measurement costs nothing but the time it took.
     const measured = remeasure ? await redetectTempoFromLoop(targetSlotId) : undefined;
     const targetBpm = measured ?? target.detectedBpm ?? sourceBpm(target.sourceBuffer);
-    if (!anchorRaw || !targetBpm) return;
+    if (!anchorRaw || !targetBpm) {
+      return !anchorRaw
+        ? "no tempo could be read from the anchor"
+        : "no tempo could be read from this slot — snap its loop to a few bars and try again";
+    }
 
     // Match the tempo the anchor is *heard* at, not its raw detected BPM: Speed, master
     // speed and its own stretch all move it. Must use the same formula as staleTempoIds or
@@ -1405,7 +1470,7 @@ export function MultiPage() {
           ),
         );
       }
-      return;
+      return `already at ${Math.round(anchorBpm)} bpm — nothing to stretch`;
     }
 
     setEntries((prev) => prev.map((e) => (e.slot.id === targetSlotId ? { ...e, stretching: true } : e)));
@@ -1466,8 +1531,10 @@ export function MultiPage() {
         const pEntry: SlotEntry = persisted;
         persistMatchedState(pEntry, pEntry.isMatched ?? false, pEntry.matchedBasePitch ?? 0);
       }
+      return `stretched to ${Math.round(stretch * 100)}% — now at ${Math.round(anchorBpm)} bpm`;
     } catch {
       setEntries((prev) => prev.map((e) => (e.slot.id === targetSlotId ? { ...e, stretching: false } : e)));
+      return "the stretch failed";
     }
   }
 
@@ -1792,6 +1859,7 @@ export function MultiPage() {
       const slotGridBpm = anchorBarGridBpm(
         anchorBpm,
         anchor?.slot,
+        anchor?.stretch ?? 1,
         entry.slot,
         masterSettingsRef.current.masterSpeed ?? 1,
       );
@@ -1888,6 +1956,11 @@ export function MultiPage() {
    * Both save paths (named save and the resave button) go through this — when they each
    * built the list inline, adding a field to one silently stripped it from the other.
    */
+  /** The outboard as it stands, for a session save. */
+  function currentMidiState() {
+    return { panels: readAllPanels(), patterns: readAllPatterns() };
+  }
+
   function buildSessionSlots(): MultiSlot[] {
     return entriesRef.current.map((e) => ({
       ...e.slot,
@@ -1906,7 +1979,7 @@ export function MultiPage() {
   function handleSaveSession() {
     const name = sessionName.trim();
     if (!name || entries.length === 0) return;
-    setNamedSessions(saveNamedSession(name, buildSessionSlots(), masterSettings));
+    setNamedSessions(saveNamedSession(name, buildSessionSlots(), masterSettings, currentMidiState()));
     setSessionName("");
     // Versions saved before the rack had a name live in the "(unsaved)" bucket; move them
     // across, or naming a session silently orphans everything kept up to that point.
@@ -1920,6 +1993,14 @@ export function MultiPage() {
 
   function handleLoadSession(session: MultiSession) {
     setActiveSessionName(session.name);
+    // Only when the session actually carries them. One saved before the hardware existed
+    // has neither, which is indistinguishable from "deliberately no synths" — and these
+    // patches cannot be read back off the units, so wiping them is unrecoverable.
+    if (session.midiPanels || session.midiPatterns) {
+      if (session.midiPanels) writeAllPanels(session.midiPanels);
+      if (session.midiPatterns) writeAllPatterns(session.midiPatterns);
+      setMidiEpoch((n) => n + 1);
+    }
     const ms = { ...session.masterSettings, masterSpeed: session.masterSettings.masterSpeed ?? 1 };
     setMasterSettings(ms);
     multiEngine.setMasterSettings(ms);
@@ -2178,7 +2259,7 @@ export function MultiPage() {
       for (const e of entriesRef.current) {
         const want = c.phases.get(e.slot.id) ?? 0;
         const have = e.slot.phase ?? 0;
-        const barSec = (60 / anchorBarGridBpm(paBpm, pa?.slot, e.slot, ms)) * 4;
+        const barSec = (60 / anchorBarGridBpm(paBpm, pa?.slot, pa?.stretch ?? 1, e.slot, ms)) * 4;
         multiEngine.setPhaseBarSec(e.slot.id, barSec);
         if (Math.abs(want - have) < 1e-6) continue;
         // Move by the DIFFERENCE, exactly as the Phase control does. The offset lives in
@@ -2396,6 +2477,9 @@ export function MultiPage() {
         return;
       }
       applyImport(data);
+      // Same remount a session load needs: a panel reads its patch once, so without this
+      // the imported synth state sits in storage while the screen keeps the old one.
+      setMidiEpoch((n) => n + 1);
       setNamedSessions(data.namedSessions);
       // The imported set need not contain the session the header currently names.
       setActiveSessionName((cur) =>
@@ -2531,7 +2615,7 @@ export function MultiPage() {
                     type="button"
                     onClick={() => {
                       if (entriesRef.current.length > 0) {
-                        setNamedSessions(saveNamedSession(s.name, buildSessionSlots(), masterSettings));
+                        setNamedSessions(saveNamedSession(s.name, buildSessionSlots(), masterSettings, currentMidiState()));
                         // Resaving makes this the session the rack belongs to; without this the
                         // header button kept naming whichever session was loaded before.
                         setActiveSessionName(s.name);
@@ -2700,8 +2784,14 @@ export function MultiPage() {
 
         {/* Outboard front panels sit above the rack: they are instruments in the same
             session, and a floating menu would close every time you reached for a knob. */}
-        {synthPanel && MIDI_DEVICES.filter((d) => d.id === synthPanel).map((d) => (
-          <div key={d.id} className="col-span-full">
+        {/* EVERY panel is mounted, and the ones you are not looking at are hidden rather
+            than unmounted. Two things depend on it. A mounted panel claims its port, so no
+            box in the rig is ever left running its own stored pattern underneath the rack
+            — which is what closing a panel used to do. And a mounted panel runs its own
+            sequencer, so three synths can hold three lines at once instead of only
+            whichever one you happen to have open. Nothing sounds until you arm it. */}
+        {MIDI_DEVICES.map((d) => (
+          <div key={`${d.id}:${midiEpoch}`} className={synthPanel === d.id ? "col-span-full" : "hidden"}>
             <MidiSynthPanel
               device={d}
               // The KEY anchor, not the tempo anchor: the bassline has to agree with
@@ -2805,7 +2895,7 @@ export function MultiPage() {
               chopSettings={masterSettings.chopSettings}
               rawGridBpm={
                 anchorBpm !== undefined
-                  ? anchorBarGridBpm(anchorBpm, anchorEntryForBpm?.slot, entry.slot, masterSettings.masterSpeed ?? 1)
+                  ? anchorBarGridBpm(anchorBpm, anchorEntryForBpm?.slot, anchorEntryForBpm?.stretch ?? 1, entry.slot, masterSettings.masterSpeed ?? 1)
                   // No anchor: this slot's own tempo defines its bar. Falling back to
                   // measuring the buffer matches what Snap has always done — without it
                   // Phase and Move sat greyed out on any slot Essentia had not returned a
@@ -2819,6 +2909,7 @@ export function MultiPage() {
               // unity speed. Falls back to this slot's own heard tempo with no anchor.
               gridBpm={slotHeardBpm}
               tempoStale={staleTempoIds.has(entry.slot.id)}
+              tempoOnGrid={tempoOnGrid.has(entry.slot.id)}
               tempoRelation={entry.tempoRelation}
               effectiveRelation={entry.effectiveRelation}
               autoRelation={autoRelations.get(entry.slot.id)}
@@ -2830,9 +2921,12 @@ export function MultiPage() {
               onTempoMatch={() => {
                 // Stretch then quantize, same as the transport's Match Tempos — rate alone
                 // still drifts if the loop is not a whole number of the anchor's bars.
-                void stretchSlotToTempoAnchor(entry.slot.id, undefined, true).then(() =>
-                  quantizeAllToAnchorGrid(entry.slot.id),
-                );
+                // The note goes up AFTER the quantize, which writes one of its own: this
+                // button's outcome is the more specific of the two.
+                void stretchSlotToTempoAnchor(entry.slot.id, undefined, true).then((note) => {
+                  quantizeAllToAnchorGrid(entry.slot.id);
+                  if (note) setGridNote(note);
+                });
               }}
               onStretchChange={(ratio) => { void handleStretchChange(entry.slot.id, ratio); }}
               stretch={entry.stretch}

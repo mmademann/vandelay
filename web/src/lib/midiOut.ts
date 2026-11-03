@@ -29,6 +29,9 @@ const LOOKAHEAD_MS = 120;
 
 type Ports = { id: string; name: string };
 
+/** Called once per step of one device's sequencer, with when it lands and how long it is. */
+type StepFn = (step: number, atMs: number, stepMs: number) => void;
+
 /**
  * Which MIDI channels a message goes out on. 0 means all sixteen.
  *
@@ -55,8 +58,7 @@ class MidiOut {
   private timer: ReturnType<typeof setInterval> | null = null;
   private nextPulseMs = 0;
   private pulse = 0;
-  private pulsesPerStep = PPQ / 4;
-  private onStep: ((step: number, atMs: number, stepMs: number) => void) | null = null;
+  private steppers = new Map<string, { fn: StepFn; pulsesPerStep: number }>();
   private listeners = new Set<() => void>();
 
   /** Told when ports appear or vanish, so every panel can re-render its list. */
@@ -143,10 +145,10 @@ class MidiOut {
    * stops the clock.
    */
   private transportOn = false;
-  private seqOn = false;
+  private seqKeys = new Set<string>();
 
   private refresh(atMs?: number): void {
-    const want = this.transportOn || this.seqOn;
+    const want = this.transportOn || this.seqKeys.size > 0;
     if (want === this.running) return;
     this.running = want;
     if (!this.enabled) return;
@@ -182,8 +184,17 @@ class MidiOut {
 
   stop(): void { this.transportOn = false; this.refresh(); }
 
-  /** Our own sequencer holds the clock up, so a bassline plays with the rack stopped. */
-  setSequencerRunning(on: boolean): void { this.seqOn = on; this.refresh(); }
+  /**
+   * Our own sequencers hold the clock up, so a bassline plays with the rack stopped.
+   *
+   * A SET, keyed per device, because the rig is three synths and any one of them wanting
+   * to be heard is reason enough to run. A single flag meant the second panel to stop
+   * took the clock out from under the first.
+   */
+  setSequencerRunning(key: string, on: boolean): void {
+    if (on) this.seqKeys.add(key); else this.seqKeys.delete(key);
+    this.refresh();
+  }
 
   isRunning(): boolean { return this.running; }
 
@@ -214,8 +225,9 @@ class MidiOut {
       // Sequencer steps ride the SAME scheduled pulses as the clock, so a note cannot
       // land a hair off the beat the device is being told to keep. Anything timed by its
       // own interval would drift against this one.
-      if (this.onStep && this.pulse % this.pulsesPerStep === 0) {
-        this.onStep(this.pulse / this.pulsesPerStep, this.nextPulseMs, msPerPulse * this.pulsesPerStep);
+      for (const s of this.steppers.values()) {
+        if (this.pulse % s.pulsesPerStep !== 0) continue;
+        s.fn(this.pulse / s.pulsesPerStep, this.nextPulseMs, msPerPulse * s.pulsesPerStep);
       }
       this.pulse++;
       // Read msPerPulse fresh each tick rather than each pulse: a tempo change takes effect
@@ -230,13 +242,12 @@ class MidiOut {
    * The step index counts up forever; a pattern takes it modulo its own length. That keeps
    * patterns of different lengths from needing their own counters.
    */
-  setStepCallback(fn: ((step: number, atMs: number, stepMs: number) => void) | null): void {
-    this.onStep = fn;
-  }
-
-  /** Steps per quarter note: 4 = sixteenths, 2 = eighths, 6 = sixteenth triplets. */
-  setStepsPerBeat(n: number): void {
-    this.pulsesPerStep = Math.max(1, Math.round(PPQ / Math.max(1, n)));
+  setStepper(key: string, fn: StepFn | null, stepsPerBeat: number): void {
+    if (!fn) { this.steppers.delete(key); return; }
+    // Steps per quarter note: 4 = sixteenths, 2 = eighths, 6 = sixteenth triplets. Per
+    // device, not global — one synth on eighths under another on sixteenths is a rig,
+    // and a shared divisor made the second panel silently restride the first.
+    this.steppers.set(key, { fn, pulsesPerStep: Math.max(1, Math.round(PPQ / Math.max(1, stepsPerBeat))) });
   }
 
   /**
@@ -324,6 +335,32 @@ class MidiOut {
    * 74 is the filter cutoff on the TB-03 and on the SH-01A and on the JP-08 — so a
    * broadcast would move three synths at once. Each panel picks its own port.
    */
+  /**
+   * Detune a whole synth by a fraction of a semitone, using pitch bend.
+   *
+   * This is the fallback for a unit with no master-tune CC — the JP-08 has none, and its
+   * Master Tune is a button combination on the box that MIDI cannot reach. Pitch bend is
+   * on every chart and does the same job: it moves the whole instrument, which is all a
+   * tune control is.
+   *
+   * `semitoneRange` is how far the synth bends at full, and it is a GUESS in the same
+   * sense `delay.maxMs` is: 2 is both the MIDI convention and the Jupiter-8's own default,
+   * but nothing reports it back. Wrong guess and the correction is the wrong size, never
+   * the wrong direction — and it is at most half a semitone either way, so the failure is
+   * a track that is still slightly out rather than one that is wildly out.
+   */
+  sendPitchBendCents(portId: string, channel: number, cents: number, semitoneRange: number): void {
+    if (!this.access || !this.enabled) return;
+    const out = this.access.outputs.get(portId);
+    if (!out) return;
+    const frac = Math.max(-1, Math.min(1, cents / 100 / Math.max(0.01, semitoneRange)));
+    // 14-bit, centre 8192, sent low 7 bits first.
+    const raw = Math.max(0, Math.min(16383, Math.round(8192 + frac * 8191)));
+    try {
+      for (const ch of channelsOf(channel)) out.send([0xe0 | ch, raw & 0x7f, (raw >> 7) & 0x7f]);
+    } catch { /* port went away */ }
+  }
+
   sendCC(portId: string, channel: number, cc: number, value: number): void {
     if (!this.access || !this.enabled) return;
     const out = this.access.outputs.get(portId);

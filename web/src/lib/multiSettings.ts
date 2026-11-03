@@ -1,4 +1,6 @@
 import type { StemName } from "../audio/dubEngine";
+import type { PanelState as MidiPanelState } from "./midiDevices";
+import type { Pattern as MidiPattern } from "./midiSequencer";
 import type { EffectsState } from "../store";
 
 export interface MultiSlot {
@@ -378,6 +380,16 @@ export interface MultiSession {
   savedAt: number;
   slots: MultiSlot[];
   masterSettings: MultiMasterSettings;
+  /**
+   * The outboard synths as they were: every front panel and every bassline.
+   *
+   * Optional, because a session saved before the hardware existed has neither — and on
+   * those the live patches must be left alone rather than wiped, which is the same rule
+   * the backup file follows. A session is "the rack as it sounded", and with no SysEx to
+   * read a patch back off these synths, the patch only exists here.
+   */
+  midiPanels?: Record<string, Partial<MidiPanelState>>;
+  midiPatterns?: Record<string, MidiPattern>;
 }
 
 const NAMED_KEY = "vandelay:multi:sessions:v1";
@@ -408,9 +420,13 @@ export function saveNamedSession(
   name: string,
   slots: MultiSlot[],
   masterSettings: MultiMasterSettings,
+  midi?: { panels: Record<string, Partial<MidiPanelState>>; patterns: Record<string, MidiPattern> },
 ): MultiSession[] {
   const existing = loadNamedSessions().filter((s) => s.name !== name);
-  const updated: MultiSession[] = [{ name, savedAt: Date.now(), slots, masterSettings }, ...existing];
+  const updated: MultiSession[] = [
+    { name, savedAt: Date.now(), slots, masterSettings, midiPanels: midi?.panels, midiPatterns: midi?.patterns },
+    ...existing,
+  ];
   try { localStorage.setItem(NAMED_KEY, JSON.stringify(updated)); } catch {}
   return updated;
 }

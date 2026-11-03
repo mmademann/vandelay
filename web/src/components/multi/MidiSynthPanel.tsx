@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Knob } from "./Knob";
 import { cn } from "../../lib/cn";
 import { midiOut } from "../../lib/midiOut";
-import { loadPanel, savePanel, type MidiDevice } from "../../lib/midiDevices";
+import { loadPanel, matchesPort, ownedByAnother, panelStoreEpoch, savePanel, type MidiDevice, type MidiParam } from "../../lib/midiDevices";
 import { DELAY_DIVISIONS } from "../../lib/loopSnap";
 import { MidiStepGrid } from "./MidiStepGrid";
 import {
@@ -70,20 +70,50 @@ export function MidiSynthPanel({
     return v;
   });
 
-  // Pick the port on its own. The name hint first; failing that, the only output there
-  // is — a driver is free to call the port anything, and a list of one is not a choice.
+  /**
+   * Pick the port on its own, BY NAME ONLY.
+   *
+   * There used to be a fallback to "the only output there is", on the grounds that a
+   * driver can call a port anything and a list of one is not a choice. With three panels
+   * mounted at once it is a choice — of which synth that cable goes to — and all three
+   * would have grabbed the same port and played three lines down it. If nothing matches
+   * by name the panel says so and you pick.
+   */
   useEffect(() => {
-    if (portId && ports.some((p) => p.id === portId)) return;
-    const guess = ports.find((p) => p.name.toLowerCase().includes(device.portHint.toLowerCase()));
-    const pick = guess ?? (ports.length === 1 ? ports[0] : undefined);
-    if (pick) setPortId(pick.id);
-  }, [ports, portId, device.portHint]);
+    const held = ports.find((p) => p.id === portId);
+    // A stored port is kept — EXCEPT when it is plainly another unit's. Storage outlives
+    // the rule that wrote it: the JP-08 once matched "Boutique" and so adopted the port
+    // called "Boutique SH-01A", and fixing the matching rule did nothing for anyone who
+    // already had that id saved. Both panels went on firing down one cable, which is why
+    // the first fix changed nothing. Checked every time, not once as a migration, because
+    // a port id can also be re-used by a different unit after a replug.
+    if (held && !ownedByAnother(device, held.name)) return;
+    const guess = ports.find((p) => matchesPort(device, p.name));
+    setPortId(guess ? guess.id : undefined);
+  }, [ports, portId, device]);
 
   const [delayBeats, setDelayBeats] = useState<number | null>(stored.delayBeats);
   const [delayMaxMs, setDelayMaxMs] = useState(stored.delayMaxMs);
+  /**
+   * Persist the panel — debounced, with a guaranteed write on the way out.
+   *
+   * `values` is a new object on every knob frame, so this used to read, parse, stringify
+   * and write the whole panel store sixty times a second for the length of a drag. The
+   * unmount flush is not optional: a patch saved 300ms after you stop touching it is
+   * fine, a patch lost because you closed the page 200ms after the last turn is not.
+   */
+  const panelStateRef = useRef({ portId, channel, values, delayBeats, delayMaxMs });
+  panelStateRef.current = { portId, channel, values, delayBeats, delayMaxMs };
   useEffect(() => {
-    savePanel(device.id, { portId, channel, values, delayBeats, delayMaxMs });
+    const t = window.setTimeout(() => savePanel(device.id, panelStateRef.current), 300);
+    return () => window.clearTimeout(t);
   }, [device.id, portId, channel, values, delayBeats, delayMaxMs]);
+  // ...unless the store was replaced underneath us. See panelStoreEpoch.
+  const mountedAtEpoch = useRef(panelStoreEpoch()).current;
+  useEffect(() => () => {
+    if (panelStoreEpoch() !== mountedAtEpoch) return;
+    savePanel(device.id, panelStateRef.current);
+  }, [device.id, mountedAtEpoch]);
 
   /**
    * While this panel is open the synth plays OUR notes and nothing else.
@@ -116,6 +146,18 @@ export function MidiSynthPanel({
     for (const p of device.params) send(p.cc, values[p.cc] ?? p.initial);
   }
 
+  /**
+   * Load a sound.
+   *
+   * Only the CCs the preset names are written, so the dials it says nothing about keep
+   * what you had. Sent as well as stored, because the synth has no idea what is on screen
+   * until something moves — the same reason Push all exists.
+   */
+  function applyPreset(preset: { name: string; values: Record<number, number> }) {
+    setValues((prev) => ({ ...prev, ...preset.values }));
+    for (const [cc, v] of Object.entries(preset.values)) send(Number(cc), v);
+  }
+
   /** Knobs AND the line — a reset that leaves yesterday's pattern running is half a reset. */
   function reset() {
     const v: Record<number, number> = {};
@@ -123,6 +165,11 @@ export function MidiSynthPanel({
     setValues(v);
     for (const p of device.params) send(p.cc, p.initial);
     setPattern((prev) => ({ ...emptyPattern(), root: prev.root, octave: prev.octave }));
+    // Everything that claims a state has to drop it too, or Reset leaves a Sound button
+    // lit on a patch that is no longer that sound and an Echo row naming a division the
+    // delay knob no longer holds.
+    setDelayBeats(null);
+    setAutoTune(true);
   }
 
   /**
@@ -199,10 +246,33 @@ export function MidiSynthPanel({
    * Switches itself off the moment that knob is touched by hand, because two things
    * writing one control is the only way this could lie about what it is set to.
    */
+  /**
+   * Which sound is loaded, for the lit button.
+   *
+   * READ OFF THE DIALS, not remembered. A name held in state is lost on reload, on a
+   * session load and on a backup import — so the panel came back showing a patch with
+   * nothing lit, which reads as a preset that did not save. Matching on the values means
+   * the light is simply true: it goes out by itself the moment a dial that sound owns is
+   * moved, and comes back if you move it back. Same rule as the Line button.
+   */
+  const activeSound = device.presets?.find((p) =>
+    Object.entries(p.values).every(([cc, v]) => values[Number(cc)] === v),
+  )?.name ?? null;
+
   const [autoTune, setAutoTune] = useState(true);
   const tune = device.tune;
+  const bend = device.bend;
   useEffect(() => {
-    if (!autoTune || !tune || !following || !live) return;
+    if (!autoTune || !following || !live || !portId) return;
+    // No master-tune CC on this unit, so bend the whole instrument instead. Same job,
+    // different message — and nothing on the panel has to know the difference.
+    if (!tune && bend) {
+      const t = window.setTimeout(() => {
+        midiOut.sendPitchBendCents(portId, channel, heardCents, bend.semitoneRange);
+      }, 400);
+      return () => window.clearTimeout(t);
+    }
+    if (!tune) return;
     // Debounced for the reason the delay re-sync is (invariant 32): this watches the
     // anchor's playback rate, and the master dial moves that every frame you drag it.
     // Writing the tune CC per frame made the knob look like it was moving on its own.
@@ -212,23 +282,51 @@ export function MidiSynthPanel({
       send(tune.cc, v);
     }, 400);
     return () => window.clearTimeout(t);
-  }, [autoTune, tune, following, live, heardCents, send]);
+  }, [autoTune, tune, bend, following, live, heardCents, send, portId, channel]);
+
+  /**
+   * Hold the clock up while this synth's line should sound.
+   *
+   * Deliberately its OWN effect, depending on nothing but whether the line is running.
+   * It used to live with the stepper below, whose deps include `pattern` — so every edit
+   * released the clock and took it straight back, and taking it back resets the pulse
+   * counter to zero. Clicking a Mood, a cell or a Speed restarted the line from step 1.
+   * Invisible during Play All, because the transport holds the clock as well and the
+   * release is then a no-op, which is why it only ever happened on the solo button.
+   */
+  useEffect(() => {
+    if (!seqOn || !enabled || !portId) return;
+    // Run the clock ourselves. Needing Play All first made this button look dead whenever
+    // the rack happened to be stopped, which is most of the time you are writing a line.
+    midiOut.setSequencerRunning(device.id, true);
+    // Silence belongs HERE, with stopping — not with the stepper below, which re-runs on
+    // every edit. There it cut the sounding note each time you clicked a cell, so writing
+    // a line while listening to it stuttered on every change.
+    return () => {
+      midiOut.setSequencerRunning(device.id, false);
+      midiOut.allNotesOff(portId);
+      setPlayingStep(null);
+    };
+  }, [seqOn, enabled, portId, device.id]);
 
   useEffect(() => {
     if (!seqOn || !enabled || !portId) return;
-    midiOut.setStepsPerBeat(pattern.stepsPerBeat);
-    // Run the clock ourselves. Needing Play All first made this button look dead whenever
-    // the rack happened to be stopped, which is most of the time you are writing a line.
-    midiOut.setSequencerRunning(true);
     const pending = new Set<number>();
-    midiOut.setStepCallback((step, atMs, stepMs) => {
+    midiOut.setStepper(device.id, (step, atMs, stepMs) => {
       const i = ((step % STEP_COUNT) + STEP_COUNT) % STEP_COUNT;
       // Steps are scheduled up to a lookahead ahead of being heard, so light the column
       // when it actually sounds rather than when it is queued. Kept so they can be
       // cancelled: this effect re-runs on every edit, and a lookahead's worth of
       // highlights queued by the previous run would otherwise land on top of the new one
       // and walk the marker off the column that is really sounding.
-      pending.add(window.setTimeout(() => setPlayingStep(i), Math.max(0, atMs - performance.now())));
+      // Dropped from the set as it fires, not just on teardown: at 12 squares a beat
+      // this runs ~16 times a second, and a set that only ever grew held a quarter of a
+      // million dead ids after an hour of playing.
+      const id: number = window.setTimeout(() => {
+        pending.delete(id);
+        setPlayingStep(i);
+      }, Math.max(0, atMs - performance.now()));
+      pending.add(id);
       const s = pattern.steps[i];
       if (!s?.on) return;
       const next = pattern.steps[(i + 1) % STEP_COUNT];
@@ -241,15 +339,12 @@ export function MidiSynthPanel({
         s.accent ? ACCENT_VELOCITY : NORMAL_VELOCITY,
         atMs, hold,
       );
-    });
+    }, pattern.stepsPerBeat);
     return () => {
-      midiOut.setStepCallback(null);
-      midiOut.setSequencerRunning(false);
+      midiOut.setStepper(device.id, null, pattern.stepsPerBeat);
       for (const t of pending) window.clearTimeout(t);
-      midiOut.allNotesOff(portId);
-      setPlayingStep(null);
     };
-  }, [seqOn, enabled, portId, channel, pattern, root]);
+  }, [seqOn, enabled, portId, channel, pattern, root, device.id]);
 
   /**
    * One note, now. The only way to tell a wrong channel from a dead cable without
@@ -259,6 +354,68 @@ export function MidiSynthPanel({
     if (!portId) return;
     const note = noteFor(pattern, { on: true, degree: 1, oct: 0, accent: true, slide: false }, root);
     midiOut.sendNote(portId, channel, note, ACCENT_VELOCITY, performance.now() + 10, 400);
+  }
+
+  /**
+   * The parameters split into the sections printed on the unit itself, in source order.
+   *
+   * Forty identical circles in one wrap is not a front panel, it is a haystack — the
+   * TB-03's ten were fine loose, the other two are not. A device with no groups comes out
+   * as a single unnamed row, which is exactly what it was before.
+   */
+  const groups: [string, MidiParam[]][] = [];
+  for (const p of device.params) {
+    const g = p.group ?? "";
+    const last = groups[groups.length - 1];
+    if (last && last[0] === g) last[1].push(p);
+    else groups.push([g, [p]]);
+  }
+
+  /** One dial or switch. A straight 0-127 CC: the chart is the only mapping, and a
+   *  second one invented here would make the number under the dial disagree with the
+   *  number on the wire. */
+  function renderParam(p: MidiParam) {
+    const v = values[p.cc] ?? p.initial;
+    const set = (next: number) => {
+      if (tune && p.cc === tune.cc) setAutoTune(false);
+      if (delay && p.cc === delay.timeCc) setDelayBeats(null);
+      setValues((prev) => ({ ...prev, [p.cc]: next }));
+      send(p.cc, next);
+    };
+    if (p.toggle) {
+      return (
+        <button
+          key={p.cc}
+          type="button"
+          onClick={() => set(v >= 64 ? 0 : 127)}
+          className={cn(
+            "h-[62px] w-[62px] shrink-0 rounded text-[10px] font-bold uppercase leading-tight tracking-wide transition",
+            v >= 64
+              ? "bg-accent/20 text-accent ring-1 ring-accent/40"
+              : "bg-muted/60 text-foreground/40 hover:text-foreground",
+          )}
+        >
+          {p.label}
+          <span className="mt-0.5 block font-medium normal-case tracking-normal opacity-70">
+            {p.format ? p.format(v) : v}
+          </span>
+        </button>
+      );
+    }
+    return (
+      <Knob
+        key={p.cc}
+        label={tune && p.cc === tune.cc && autoTune && following ? `${p.label} · track` : p.label}
+        value={v}
+        min={0}
+        max={127}
+        step={1}
+        defaultValue={p.initial}
+        size={44}
+        displayValue={p.format ? p.format(v) : String(v)}
+        onChange={(next) => set(Math.round(next))}
+      />
+    );
   }
 
   return (
@@ -325,7 +482,7 @@ export function MidiSynthPanel({
             onClick={() => setSeqOn((v) => !v)}
             disabled={!live}
             title={live
-              ? "Just the bass. Play All starts it with everything else."
+              ? "Just the bass. Play All starts it with everything else, on every connected synth."
               : "No MIDI output — pick one above"}
             className={cn(
               "rounded px-2 py-1 text-[11px] font-bold uppercase tracking-wide transition disabled:opacity-30",
@@ -368,7 +525,7 @@ export function MidiSynthPanel({
             ))}
           </div>
 
-          {following && heardRoot !== null && Math.abs(heardCents) >= 3 && (
+          {(tune || bend) && following && heardRoot !== null && Math.abs(heardCents) >= 3 && (
             <button
               type="button"
               onClick={() => setAutoTune((v) => !v)}
@@ -440,51 +597,46 @@ export function MidiSynthPanel({
         </div>
       )}
 
-      <div className="flex flex-wrap gap-x-3 gap-y-2">
-        {device.params.map((p) => {
-          const v = values[p.cc] ?? p.initial;
-          const set = (next: number) => {
-            if (tune && p.cc === tune.cc) setAutoTune(false);
-            if (delay && p.cc === delay.timeCc) setDelayBeats(null);
-            setValues((prev) => ({ ...prev, [p.cc]: next }));
-            send(p.cc, next);
-          };
-          if (p.toggle) {
-            return (
-              <button
-                key={p.cc}
-                type="button"
-                onClick={() => set(v >= 64 ? 0 : 127)}
-                className={cn(
-                  "h-[62px] w-[62px] shrink-0 rounded text-[10px] font-bold uppercase leading-tight tracking-wide transition",
-                  v >= 64
-                    ? "bg-accent/20 text-accent ring-1 ring-accent/40"
-                    : "bg-muted/60 text-foreground/40 hover:text-foreground",
-                )}
-              >
-                {p.label}
-                <span className="mt-0.5 block font-medium normal-case tracking-normal opacity-70">
-                  {p.format ? p.format(v) : v}
-                </span>
-              </button>
-            );
-          }
-          return (
-            <Knob
-              key={p.cc}
-              label={tune && p.cc === tune.cc && autoTune && following ? `${p.label} · track` : p.label}
-              value={v}
-              min={0}
-              max={127}
-              step={1}
-              defaultValue={p.initial}
-              size={44}
-              displayValue={p.format ? p.format(v) : String(v)}
-              onChange={(next) => set(Math.round(next))}
-            />
-          );
-        })}
+      {device.presets && device.presets.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
+          <span className="w-16 shrink-0 text-right text-[10px] font-semibold uppercase tracking-widest text-foreground/35">
+            Sound
+          </span>
+          {device.presets.map((p) => (
+            <button
+              key={p.name}
+              type="button"
+              onClick={() => applyPreset(p)}
+              title={`Load ${p.name}. Only the dials this sound needs move; the rest stay where you left them.`}
+              className={cn(
+                "rounded px-2 py-1 text-[11px] font-bold transition",
+                activeSound === p.name
+                  ? "bg-accent/20 text-accent ring-1 ring-accent/40"
+                  : "bg-muted/60 text-foreground/50 hover:bg-muted hover:text-foreground",
+              )}
+            >
+              {p.name}
+            </button>
+          ))}
+          <span className="text-[10px] text-foreground/30">
+            Volume is the knob on the box &mdash; no MIDI reaches it.
+          </span>
+        </div>
+      )}
+
+      <div className="flex flex-col gap-2">
+        {groups.map(([name, params], i) => (
+          <div key={i} className="flex flex-wrap items-start gap-x-3 gap-y-2">
+            {name && (
+              <span className="w-16 shrink-0 pt-4 text-right text-[10px] font-semibold uppercase tracking-widest text-foreground/30">
+                {name}
+              </span>
+            )}
+            {params.map(renderParam)}
+          </div>
+        ))}
       </div>
     </div>
   );
+
 }

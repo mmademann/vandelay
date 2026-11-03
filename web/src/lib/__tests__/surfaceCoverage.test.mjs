@@ -467,14 +467,14 @@ section("12. moving the loop region keeps its geometry consistent");
        && /anchorRawBpm \* \(\(aRate \|\| 1\) \/ \(eRate \|\| 1\)\)/.test(gridFn),
      "without the ratio every slot is placed on the anchor's file bar, which is only its own bar at equal rates");
   ok("rawGridBpm is that same per-slot grid",
-     /anchorBarGridBpm\(anchorBpm, anchorEntryForBpm\?\.slot, entry\.slot/.test(rawGridProp),
+     /anchorBarGridBpm\(anchorBpm, anchorEntryForBpm\?\.slot, anchorEntryForBpm\?\.stretch \?\? 1, entry\.slot/.test(rawGridProp),
      "Phase and Move read this prop; handing them the raw anchor tempo is the bug above");
   ok("quantize derives its grid from the same helper",
      /const slotGridBpm = anchorBarGridBpm\(/.test(multiPage),
      "two copies of this formula is exactly how Phase and quantize drifted apart");
   for (const [re, why] of [
     [/const phaseGrid = anchorBpmRef\.current !== undefined/, "the decode-path phase restore"],
-    [/anchorBarGridBpm\(anchorBpm, anchorSlot, slot, ms\)/, "the deferred restore flushed when the anchor's BPM lands"],
+    [/anchorBarGridBpm\(anchorBpm, anchorSlot, anchorEntry\?\.stretch \?\? 1, slot, ms\)/, "the deferred restore flushed when the anchor's BPM lands"],
   ]) {
     ok(`phase restore uses the per-slot grid: ${why}`, re.test(multiPage),
        "a restore on the anchor's raw bar puts the slot back at a different offset than the UI shows");
@@ -1920,7 +1920,7 @@ section("12as. outboard front panels: the app holds the patch");
      + "something moves — recalling a patch would otherwise mean wiggling every dial");
   ok("the panel and its port survive a reload",
      /export function savePanel\(/.test(dev)
-       && /savePanel\(device\.id, \{ portId, channel, values, delayBeats, delayMaxMs \}\)/.test(panel),
+       && /panelStateRef\.current = \{ portId, channel, values, delayBeats, delayMaxMs \};/.test(panel),
      "the app holds the patch; losing it on refresh would defeat the point");
   ok("the echo row cannot display a division it is not sending",
      /if \(d\.beats === delayBeats\) return true;/.test(panel),
@@ -1964,7 +1964,7 @@ section("12at. the bassline follows the anchors, and needs no 303 knowledge");
      /root: number \| null;/.test(seq) && /Follow track \(not detected\)/.test(panel),
      "key detection fails on plenty of material and a dead sequencer is worse than a manual one");
   ok("notes ride the same scheduled pulses as the clock",
-     /if \(this\.onStep && this\.pulse % this\.pulsesPerStep === 0\)/.test(midi),
+     /for \(const s of this\.steppers\.values\(\)\) \{\n\s*if \(this\.pulse % s\.pulsesPerStep !== 0\) continue;/.test(midi),
      "a sequencer timed by its own interval drifts against the clock the device is being "
      + "told to keep");
   ok("the note-off is scheduled with the note, not chased by a timer",
@@ -1984,8 +1984,8 @@ section("12at. the bassline follows the anchors, and needs no 303 knowledge");
      "withholding every transport message left a port that had already been started with "
      + "no message able to reach it — the rig could not be stopped from the app at all");
   ok("the sequencer can run the clock on its own",
-     /setSequencerRunning\(on: boolean\)/.test(midi)
-       && /midiOut\.setSequencerRunning\(true\)/.test(panel),
+     /setSequencerRunning\(key: string, on: boolean\)/.test(midi)
+       && /midiOut\.setSequencerRunning\(device\.id, true\)/.test(panel),
      "writing a line means hearing it with the rack stopped; requiring Play All first made "
      + "the bassline button look dead most of the time");
   ok("notes and CC go out on a channel you can change",
@@ -2038,7 +2038,7 @@ section("12at. the bassline follows the anchors, and needs no 303 knowledge");
      "Start makes the synth run its OWN stored pattern; claiming the port only while a "
      + "line was playing meant Play All started a bassline the user had not written");
   ok("the playhead lights when the step sounds, not when it is queued",
-     /window\.setTimeout\(\(\) => setPlayingStep\(i\), Math\.max\(0, atMs - performance\.now\(\)\)\)/.test(panel),
+     /setPlayingStep\(i\);\n\s*\}, Math\.max\(0, atMs - performance\.now\(\)\)\);/.test(panel),
      "steps are scheduled a lookahead early; lighting them on schedule runs the column "
      + "ahead of the sound");
   ok("stopping silences the synth",
@@ -2052,6 +2052,301 @@ section("12at. the bassline follows the anchors, and needs no 303 knowledge");
      /"Louder"/.test(grid) && /"Glide"/.test(grid) && !/>Accent</.test(grid) && !/>Slide</.test(grid),
      "accent and slide are 303 vocabulary; the user said they do not know the box and "
      + "should not have to");
+}
+
+section("12au. a second and third front panel, from the same chart-reading rules");
+{
+  const dev = read("lib/midiDevices.ts");
+  const panel = read("components/multi/MidiSynthPanel.tsx");
+  const transport = read("components/multi/MultiTransport.tsx");
+
+  /** The params array of one device, as source text. */
+  const block = (name) => {
+    const m = dev.match(new RegExp(`export const ${name}[\\s\\S]*?\\n\\};`));
+    return m ? m[0].slice(m[0].indexOf("params: [")) : "";
+  };
+  const ccs = (name) => [...block(name).matchAll(/cc: (\d+)/g)].map((x) => Number(x[1]));
+
+  ok("all three units are on the transport",
+     /export const MIDI_DEVICES: MidiDevice\[\] = \[TB_03, SH_01A, JP_08\];/.test(dev),
+     "the panel, the transport button and the auto-open are all driven off this one array, "
+     + "so a device is added by adding a row and nothing else");
+
+  for (const name of ["TB_03", "SH_01A", "JP_08"]) {
+    const list = ccs(name);
+    ok(`${name} never sends two things to the same CC`,
+       list.length > 0 && new Set(list).size === list.length,
+       "two dials on one CC means the second silently overwrites the first, and Push all "
+       + "sends whichever came last");
+    ok(`${name} leaves out the performance controllers`,
+       !list.includes(1) && !list.includes(11) && !list.includes(64),
+       "modulation, expression and hold are on every chart and belong on none of these "
+       + "panels: they are what a player does while the patch sits still, so a dial for "
+       + "one is a wheel you cannot let go of");
+  }
+
+  ok("the JP-08 numbers come from the normal chart, not Control Mode",
+     ![50, 51, 59, 60, 61, 62, 79, 84, 85, 88, 89, 90, 96, 97, 103, 104, 108, 110, 112]
+       .some((c) => ccs("JP_08").includes(c)),
+     "the same PDF carries a second chart headed `JP-08 (Control Mode)` whose numbers are "
+     + "completely different and transmit-only — it is the unit driving Roland's plugin, "
+     + "not the other way round. Reading the wrong page moves the wrong knob on every dial");
+
+  ok("the JP-08 claims no master tune, because it has none",
+     !/tune: \{/.test(block("JP_08")) && !/name: "JP-08"[\s\S]*?tune: \{/.test(dev),
+     "its chart lists no CC for master tune; CC 23 is VCO-2 TUNE, which detunes the second "
+     + "oscillator AGAINST the first. Pressing that into service to chase the track's pitch "
+     + "would beat the synth against itself instead of moving it");
+
+  ok("and the JP-08 is tuned over pitch bend instead",
+     /bend: \{ semitoneRange: 2 \}/.test(dev)
+       && /sendPitchBendCents\(portId: string, channel: number, cents: number, semitoneRange: number\)/
+            .test(read("lib/midiOut.ts"))
+       && /\{\(tune \|\| bend\) && following && heardRoot !== null && Math\.abs\(heardCents\) >= 3 && \(/.test(panel),
+     "pitch bend moves the whole instrument, which is all a master tune does — so the one "
+     + "unit whose tuning MIDI cannot reach still lands on a slowed track's pitch, and the "
+     + "user never has to know the two synths are corrected by different messages. The "
+     + "button still hides itself on a device with neither route");
+
+  ok("every panel stays mounted, so no synth is left running its own pattern",
+     /\{MIDI_DEVICES\.map\(\(d\) => \(/.test(multiPage)
+       && /className=\{synthPanel === d\.id \? "col-span-full" : "hidden"\}/.test(multiPage),
+     "a closed panel released its port, and the next Play All sent that synth a Start — so "
+     + "it ran whatever pattern was last written to the box, under the rack. It also means "
+     + "three synths can hold three lines at once instead of only the open one");
+
+  ok("...and Play All plays EVERY connected synth, with no switch in the way",
+     !/seqArmed/.test(dev + panel),
+     "an 'armed' flag was added here and removed the same hour. A synth silent through "
+     + "Play All reads as a broken app, and the flag had already persisted `false` before "
+     + "its default was reconsidered — so changing the default fixed nothing for the one "
+     + "person using it. To silence a synth, clear its line");
+
+  ok("a generic port name never beats the model written on it",
+     /portFallbackHints\?: string\[\];/.test(dev)
+       && /portHints: \["JP-08"\],\n\s*portFallbackHints: \["Boutique"\],/.test(dev)
+       && /return !ownedByAnother\(device, portName\);/.test(dev)
+       && /MIDI_DEVICES\.some\(\(d\) => d\.id !== device\.id && hasHint\(d\.portHints, portName\)\)/.test(dev),
+     "the SH-01A's port is called `Boutique SH-01A`. With `Boutique` as an equal hint the "
+     + "JP-08 matched it too, and since every panel is mounted BOTH sequencers fired down "
+     + "the one cable — two lines at two divisions on one synth, so changing either Speed "
+     + "changed nothing you could hear. The word still has to exist, because a first-gen "
+     + "Boutique can enumerate as exactly that; it just must never win");
+
+  ok("a stored port that belongs to another unit is given back",
+     /export function ownedByAnother\(/.test(dev)
+       && /if \(held && !ownedByAnother\(device, held\.name\)\) return;/.test(panel),
+     "fixing the matching rule did nothing on its own: the JP-08 had already SAVED the "
+     + "port called `Boutique SH-01A`, and the auto-pick only ran when no port was stored. "
+     + "Both panels kept firing down one cable and the fix looked like it had failed");
+
+  ok("and a port that matches nothing is not grabbed at all",
+     !/portIsUnclaimed/.test(dev + panel)
+       && !/ports\.length === 1/.test(panel)
+       && /const guess = ports\.find\(\(p\) => matchesPort\(device, p\.name\)\);/.test(panel),
+     "falling back to 'the only output there is' made sense with one panel. With three "
+     + "mounted it is a choice — of which synth that cable goes to — and all three took it");
+
+  ok("Reset drops every state that claims to be current",
+     /setDelayBeats\(null\);\n\s*setAutoTune\(true\);/.test(panel),
+     "it left an Echo row naming a division the delay knob no longer held, and auto-tune "
+     + "switched off from whichever dial had last been touched. The Sound light needs no "
+     + "resetting — it is read off the dials, so it goes out on its own");
+
+  ok("a sound can be dialled with nothing plugged in",
+     !/onClick=\{\(\) => applyPreset\(p\)\}\n\s*disabled=\{!live\}/.test(panel),
+     "the panel is a patch editor first and a controller second — every knob works "
+     + "offline, so the presets that move those same knobs must too");
+
+  ok("the step highlight timers do not accumulate",
+     /pending\.delete\(id\);/.test(panel),
+     "one setTimeout per step, never removed once fired: at 12 squares a beat that is a "
+     + "quarter of a million dead ids after an hour");
+
+  ok("the bar grid divides out the anchor's own stretch",
+     /anchorStretch: number,/.test(multiPage)
+       && /\/ aStretch;/.test(multiPage)
+       && !/anchorBarGridBpm\([^);]*\?\.slot,\s*(entry|e)\.slot/.test(multiPage),
+     "anchorRawBpm is measured on the anchor's SOURCE audio while the engine plays a "
+     + "stretched buffer, so the heard bar is longer by that ratio. Left out, a 97% anchor "
+     + "read 82 bpm in the transport and handed Phase, Move, Snap and quantize an 80 bpm "
+     + "bar — every one of them 3% off, and only when the anchor itself is stretched");
+
+  ok("every way Match Tempo can do nothing says so",
+     /\): Promise<string \| null> \{/.test(multiPage)
+       && /return "still loading";/.test(multiPage)
+       && /no tempo could be read from the anchor/.test(multiPage)
+       && /nothing to stretch/.test(multiPage)
+       && /\.then\(\(note\) => \{\n\s*quantizeAllToAnchorGrid\(entry\.slot\.id\);\n\s*if \(note\) setGridNote\(note\);/.test(multiPage),
+     "three of its exits are legitimate no-ops — no anchor, no readable tempo, already on "
+     + "the grid — and as bare returns they were indistinguishable from a dead button");
+
+  ok("a slot already at the anchor's tempo reads as matched",
+     /const tempoOnGrid = useMemo\(/.test(multiPage)
+       && /tempoOnGrid=\{tempoOnGrid\.has\(entry\.slot\.id\)\}/.test(multiPage)
+       && /const isTempoMatched = !isTempoAnchor && \(tempoOnGrid \|\| Math\.abs\(stretch - 1\) > 0\.005\);/
+            .test(read("components/multi/SlotStrip.tsx")),
+     "the badge was 'is this buffer stretched', which is only a proxy and fails on the "
+     + "easiest case: a slot whose own tempo already agrees needs a ratio of exactly 1, so "
+     + "it stayed grey however many times you pressed the button");
+
+  ok("each synth keeps its own step division",
+     /this\.steppers\.set\(key, \{ fn, pulsesPerStep:/.test(read("lib/midiOut.ts"))
+       && !/setStepsPerBeat/.test(read("lib/midiOut.ts") + panel),
+     "one synth on eighths under another on sixteenths is a rig; a single global divisor "
+     + "meant the second panel to register silently restrode the first");
+
+  ok("the SH-01A claims no delay, because it has none",
+     !/delay: \{/.test(block("SH_01A")) && !/SH_01A[\s\S]{0,400}delay: \{/.test(dev),
+     "the unit has no effects at all. Borrowing the TB-03's CC 18 would be worse than "
+     + "nothing: on the SH-01A chart 18 is VCO BEND DEPTH, so every tempo change would "
+     + "detune the synth");
+
+  ok("one port-name test, used everywhere",
+     /export function matchesPort\(/.test(dev)
+       && !/portHint\b/.test(dev + panel + transport + multiPage)
+       && /matchesPort\(device, p\.name\)/.test(panel)
+       && /matchesPort\(d, n\)/.test(transport)
+       && /matchesPort\(d, n\)/.test(multiPage),
+     "the connected dot, the auto-open and the panel's own port guess must agree, or a "
+     + "button lights up for a panel that then selects nothing. It is a LIST of hints "
+     + "because the first-gen Boutiques enumerate as `Boutique`, not as the model");
+
+  ok("only one panel opens per detection pass",
+     /if \(!opened\) \{ setSynthPanel\(d\.id\); opened = true; \}/.test(multiPage)
+       && /autoOpenedRef\.current\.add\(d\.id\);/.test(multiPage),
+     "there is one panel slot. With the whole rig plugged in, three setSynthPanel calls in "
+     + "a row just showed whichever device was last in the array; every one found is still "
+     + "marked seen, so the others do not pop open later as ports re-enumerate");
+
+  ok("forty dials are laid out as the unit's own front panel",
+     /group\?: string;/.test(dev)
+       && /const groups: \[string, MidiParam\[\]\]\[\] = \[\];/.test(panel)
+       && /\{params\.map\(renderParam\)\}/.test(panel),
+     "ten loose knobs is a TB-03; forty is a haystack. An ungrouped device still renders "
+     + "as one unnamed row, which is what the TB-03 was before");
+
+  ok("every synth ships sounds, not just settings",
+     /export interface SynthPreset \{/.test(dev)
+       && /name: "Deep Sub"/.test(dev) && /name: "Warm Pad"/.test(dev)
+       && /function applyPreset\(/.test(panel)
+       // No SH-01A preset may write CC 76 — the region between that device and its params.
+       && !/76: \d/.test(dev.slice(dev.indexOf("export const SH_01A"), dev.indexOf('{ group: "LFO", label: "Rate", cc: 3'))),
+     "the factory initials are a test tone: a VCA envelope with Sustain 0 and a short "
+     + "Decay makes every note a blip, which is what the SH-01A sounded like out of the "
+     + "box. A preset never writes the master tune (CC 76 here) — that belongs to the "
+     + "key-following correction, and resetting it would detune the synth against the "
+     + "track on every sound change");
+
+  ok("a preset moves only the dials its sound needs",
+     /setValues\(\(prev\) => \(\{ \.\.\.prev, \.\.\.preset\.values \}\)\)/.test(panel)
+       && /for \(const \[cc, v\] of Object\.entries\(preset\.values\)\) send\(Number\(cc\), v\)/.test(panel),
+     "sparse by design, and SENT as well as stored — the synth has no idea what is on "
+     + "screen until something moves, which is the same reason Push all exists");
+
+  ok("the outboard rides the state backup like everything else",
+     /midiPanels\?: Record<string, Partial<PanelState>>;/.test(read("lib/multiExport.ts"))
+       && /midiPanels: readAllPanels\(\),/.test(read("lib/multiExport.ts"))
+       && /midiPatterns: readAllPatterns\(\),/.test(read("lib/multiExport.ts"))
+       && /if \(data\.midiPanels\) writeAllPanels\(data\.midiPanels\);/.test(read("lib/multiExport.ts")),
+     "none of these synths answer SysEx, so the app IS the patch — a backup that left the "
+     + "panels out would lose a sound that cannot be read back off the hardware. Guarded "
+     + "on presence for the same reason `versions` is: an older file carries neither, and "
+     + "restoring an empty one would wipe what is there");
+
+  ok("a named session carries the synth patches too",
+     /midiPanels\?: Record<string, Partial<MidiPanelState>>;/.test(read("lib/multiSettings.ts"))
+       && /saveNamedSession\(name, buildSessionSlots\(\), masterSettings, currentMidiState\(\)\)/.test(multiPage)
+       && /if \(session\.midiPanels \|\| session\.midiPatterns\) \{/.test(multiPage),
+     "a session is the rack as it sounded, and with no SysEx on any of these units the "
+     + "patch exists nowhere else. Guarded on presence: a session saved before the "
+     + "hardware existed has neither, and wiping live patches on it is unrecoverable");
+
+  ok("...and the panels remount so the restored patch reaches the screen",
+     /const \[midiEpoch, setMidiEpoch\] = useState\(0\);/.test(multiPage)
+       && /setMidiEpoch\(\(n\) => n \+ 1\);/.test(multiPage)
+       && /key=\{`\$\{d\.id\}:\$\{midiEpoch\}`\}/.test(multiPage),
+     "a panel reads its stored state once, into a ref, because nothing else changes it "
+     + "behind the panel's back. A session load does exactly that, so without the remount "
+     + "the restored patch sits in storage while the screen and the synth keep the old one");
+
+  ok("the panel store is not rewritten on every knob frame",
+     /const t = window\.setTimeout\(\(\) => savePanel\(device\.id, panelStateRef\.current\), 300\);/.test(panel)
+       && /savePanel\(device\.id, panelStateRef\.current\);\n\s*\}, \[device\.id, mountedAtEpoch\]\);/.test(panel),
+     "`values` is a new object every knob frame, so this read, parsed, stringified and "
+     + "wrote the whole store sixty times a second for the length of a drag. The unmount "
+     + "flush is what makes debouncing safe — a patch lost by closing the page 200ms "
+     + "after the last turn is not an acceptable trade");
+
+  ok("silencing happens when the line stops, not when it is edited",
+     /midiOut\.setSequencerRunning\(device\.id, false\);\n\s*midiOut\.allNotesOff\(portId\);/.test(panel)
+       && !/for \(const t of pending\) window\.clearTimeout\(t\);\n\s*midiOut\.allNotesOff/.test(panel),
+     "allNotesOff sat in the stepper's cleanup, which re-runs on every edit — so clicking "
+     + "a cell cut the note that was sounding and writing a line while listening to it "
+     + "stuttered on every change");
+
+  ok("editing the line does not restart it",
+     /\}, \[seqOn, enabled, portId, device\.id\]\);/.test(panel)
+       && !/setSequencerRunning\(device\.id, false\);\n\s*for \(const t of pending\)/.test(panel),
+     "holding the clock lived in the same effect as the stepper, whose deps include "
+     + "`pattern` — so every Mood, cell or Speed click released the clock and took it "
+     + "straight back, and taking it back zeroes the pulse counter. The line jumped to "
+     + "step 1 on every edit. Hidden during Play All, where the transport holds the clock "
+     + "too and the release does nothing");
+
+  ok("a step division that does not fit the bar says so",
+     /const wholeBeats = Number\.isInteger\(STEP_COUNT \/ pattern\.stepsPerBeat\);/
+       .test(read("components/multi/MidiStepGrid.tsx"))
+       && /walks against the track/.test(read("components/multi/MidiStepGrid.tsx")),
+     "sixteen squares is 4 beats at 4 per beat and 1.33 at 12, so the triplet divisions "
+     + "never line up with the bar and the line slides against the track forever. Worth "
+     + "having on purpose; indistinguishable from a broken sequencer if unsaid");
+
+  ok("Mood says when it has nothing to change",
+     /const moodMatters = pattern\.steps\.some\(\(s\) => s\.on && s\.degree !== 1\);/
+       .test(read("components/multi/MidiStepGrid.tsx"))
+       && /this line is all root notes/.test(read("components/multi/MidiStepGrid.tsx")),
+     "the root is 0 semitones in all six scales, so a line built only on degree 1 — Four, "
+     + "Octaves, most of Drive — is identical in every mood. Correct, and indistinguishable "
+     + "from a dead control: it was reported as one");
+
+  ok("leaving the page stops the outboard too",
+     /multiEngine\.dispose\(\);\n[\s\S]{0,400}?midiOut\.stop\(\);/.test(multiPage),
+     "dispose() silenced the speakers and left the MIDI clock streaming at the last tempo "
+     + "for as long as the tab stayed open — the rig kept playing after you had navigated "
+     + "away from the page");
+
+  ok("an import reaches the synth panels too",
+     (multiPage.match(/setMidiEpoch\(\(n\) => n \+ 1\)/g) || []).length === 3,
+     "three paths replace the panel store from outside — session load, the Import button "
+     + "and the first-run restore from the server — and each needs the panels remounted "
+     + "or the restored patch sits in storage behind a screen still showing the old one");
+
+  ok("...and the outgoing panel does not write its old patch back over it",
+     /export function panelStoreEpoch\(\)/.test(dev)
+       && /panelStoreGeneration\+\+;/.test(dev)
+       && /if \(panelStoreEpoch\(\) !== mountedAtEpoch\) return;/.test(panel),
+     "a panel flushes its patch on unmount, and a restore unmounts it — so the flush ran "
+     + "after the restore and undid it. Loading a session looked like it restored "
+     + "everything except the synths");
+
+  ok("the loaded sound and the loaded line both light up",
+     /const activeSound = device\.presets\?\.find\(\(p\) =>/.test(panel)
+       && !/setActiveSound/.test(panel)
+       && /activeSound === p\.name/.test(panel)
+       && /const activeStarter = STARTERS\.find\(/.test(read("components/multi/MidiStepGrid.tsx")),
+     "Mood and Speed beside them already light, so a Sound and a Line that never did read "
+     + "as buttons that had not worked. BOTH are matched by content rather than remembered "
+     + "by name — a name in state is lost on reload, on a session load and on an import, so "
+     + "the panel came back holding the patch with nothing lit, which reads as a preset "
+     + "that did not save");
+
+  ok("a switch reports the CC, not a position name it cannot know",
+     /toggle: true, format: onOff/.test(block("SH_01A"))
+       && /toggle: true, format: onOff/.test(block("JP_08"))
+       && !/format: \(v\) =>/.test(block("SH_01A") + block("JP_08")),
+     "Roland publishes the CC number and never which of the two positions is high. A "
+     + "switch reading `-24dB` would be a guess wearing a fact's clothes");
 }
 
 section("13. expensive analysis is memoised");

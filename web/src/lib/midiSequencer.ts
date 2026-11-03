@@ -19,11 +19,23 @@ const MINOR = [0, 2, 3, 5, 7, 8, 10];
  */
 const PHRYGIAN = [0, 1, 3, 5, 7, 8, 10];
 
-export type ScaleName = "minor" | "phrygian" | "major";
+/** Minor with a raised sixth — minor's weight without its sadness. */
+const DORIAN = [0, 2, 3, 5, 7, 9, 10];
+/** Minor with a major seventh. The gap between b6 and 7 is the whole character. */
+const HARMONIC = [0, 2, 3, 5, 7, 8, 11];
+/** Major with a flat seventh — major that never quite resolves. */
+const MIXOLYDIAN = [0, 2, 4, 5, 7, 9, 10];
 
+export type ScaleName = "minor" | "phrygian" | "major" | "dorian" | "harmonic" | "mixolydian";
+
+// Order is the order they appear on screen, so it runs darkest to brightest rather than
+// in the order they happened to be added.
 export const SCALES: Record<ScaleName, number[]> = {
-  minor: MINOR,
   phrygian: PHRYGIAN,
+  harmonic: HARMONIC,
+  minor: MINOR,
+  dorian: DORIAN,
+  mixolydian: MIXOLYDIAN,
   major: MAJOR,
 };
 
@@ -178,6 +190,52 @@ export const STARTERS: NamedPattern[] = [
     [1, 1, A, _], null, null, null,
     [4, 0, _, _], null, [4, 0, _, _], null,
   ]),
+  // Nothing on the beat. The hole where the kick goes is what makes it sit in a track
+  // rather than fight it.
+  build("Offbeat", "minor", [
+    null, [1, 0, A, _], null, null,
+    null, [5, 0, _, _], null, null,
+    null, [1, 0, A, _], null, null,
+    null, [7, 0, _, _], null, null,
+  ]),
+  // The oldest bass trick there is: the same note, an octave apart, on every eighth.
+  build("Octaves", "minor", [
+    [1, 0, A, _], null, [1, 1, _, _], null,
+    [1, 0, _, _], null, [1, 1, _, _], null,
+    [1, 0, A, _], null, [1, 1, _, _], null,
+    [1, 0, _, _], null, [1, 1, _, _], null,
+  ]),
+  // Up the scale and back. Melodic rather than percussive — the one to pick when the
+  // track has room for the bass to say something.
+  build("Walk", "minor", [
+    [1, 0, A, _], null, [3, 0, _, _], null,
+    [5, 0, _, _], null, [7, 0, _, S], null,
+    [1, 1, A, _], null, [7, 0, _, _], null,
+    [5, 0, _, _], null, [3, 0, _, S], null,
+  ]),
+  // Three notes and a lot of air. Leaves the whole second half of the bar empty, which
+  // is where everything else in the rack gets heard.
+  build("Sparse", "minor", [
+    [1, 0, A, _], null, null, null,
+    null, null, [5, 0, _, _], null,
+    [1, 0, _, S], null, null, null,
+    null, null, null, null,
+  ]),
+  // Every sixteenth, accented on the beat. Relentless on purpose — turn Decay down and
+  // it is a texture rather than a line.
+  build("Drive", "minor", [
+    [1, 0, A, _], [1, 0, _, _], [1, 0, _, _], [1, 0, _, _],
+    [1, 0, A, _], [1, 0, _, _], [1, 0, _, _], [1, 0, _, _],
+    [1, 0, A, _], [1, 0, _, _], [1, 0, _, _], [1, 0, _, _],
+    [1, 0, A, _], [1, 0, _, _], [3, 0, _, _], [5, 0, _, S],
+  ]),
+  // A riff with slides in it — the thing people are imitating when they say "303".
+  build("Hook", "phrygian", [
+    [1, 0, A, _], null, [1, 1, _, S], [7, 0, _, _],
+    null, [1, 0, _, _], null, [2, 0, _, S],
+    [1, 0, A, _], null, [5, 0, _, _], null,
+    [4, 0, _, S], [3, 0, _, _], null, [1, 0, _, _],
+  ]),
   // Slides everywhere. This is the one that squelches.
   build("Squelch", "phrygian", [
     [1, 0, A, _], [1, 0, _, S], [3, 0, _, S], [1, 0, _, _],
@@ -198,6 +256,19 @@ export function loadPattern(deviceId: string): Pattern {
     // Merge over a fresh pattern so a field added later cannot break an old save.
     return { ...emptyPattern(), ...got };
   } catch { return emptyPattern(); }
+}
+
+/** Every device's line, for the state backup. */
+export function readAllPatterns(): Record<string, Pattern> {
+  try {
+    const raw = localStorage.getItem(KEY);
+    const all = raw ? JSON.parse(raw) : {};
+    return all && typeof all === "object" ? (all as Record<string, Pattern>) : {};
+  } catch { return {}; }
+}
+
+export function writeAllPatterns(all: Record<string, Pattern>): void {
+  try { localStorage.setItem(KEY, JSON.stringify(all)); } catch { /* quota */ }
 }
 
 export function savePattern(deviceId: string, p: Pattern): void {

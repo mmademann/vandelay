@@ -63,9 +63,18 @@ const tempoStretchRatio = (targetBpm, anchorBpm, relation) => {
 const effectiveBpm = (rawBpm, slot, masterSpeed, stretch) =>
   (rawBpm * rate(slot, masterSpeed)) / (stretch || 1);
 
-/** MultiPage.quantizeAllToAnchorGrid — per-slot grid so bars match in HEARD time. */
-const slotGridBpm = (anchorRawBpm, anchorRate, slotRate) =>
-  anchorRawBpm * ((anchorRate || 1) / (slotRate || 1));
+/**
+ * MultiPage.anchorBarGridBpm — the anchor's bar, measured in one slot's file seconds.
+ *
+ * `anchorStretch` is load-bearing and was missing here for as long as it was missing in
+ * the app: anchorRawBpm is measured on the anchor's SOURCE audio, but the engine plays a
+ * buffer stretched away from it, so the bar the rack hears is longer by that ratio. With
+ * the anchor at 97% the transport read 82 bpm while Phase, Move, Snap and quantize were
+ * all handed an 80 bpm bar. Every scenario below used an unstretched anchor, which is
+ * exactly why the omission survived.
+ */
+const slotGridBpm = (anchorRawBpm, anchorRate, slotRate, anchorStretch = 1) =>
+  (anchorRawBpm * ((anchorRate || 1) / (slotRate || 1))) / (anchorStretch || 1);
 
 /** loopSnap.quantizeToGrid — round a span to whole bars of the given grid. */
 const quantizeBars = (span, gridBpm) => {
@@ -131,7 +140,7 @@ function matchTempos(rack) {
 
   // 2. quantize every slot, anchor included, on a per-slot grid
   for (const s of [anchor, ...rack.slaves]) {
-    const g = slotGridBpm(anchor.rawBpm, aRate, rate(s, masterSpeed));
+    const g = slotGridBpm(anchor.rawBpm, aRate, rate(s, masterSpeed), anchor.stretch);
     // Phase is a playhead offset now, so quantize simply rounds the region — there is no
     // offset baked into the bounds to strip out first.
     s.loopEnd = s.loopStart + quantizeBars(s.loopEnd - s.loopStart, g);
@@ -1000,13 +1009,37 @@ section("20d. two stretches in a row: bounds, playhead and phase together");
   ok("move keeps the phase fraction", Math.abs((moved.loopStart + offset - moved.loopStart) / barAfter - 0.25) < 1e-9);
 }
 
+section("20h. the grid follows the ANCHOR's stretch, not just its rate");
+{
+  // The case every other scenario here misses, and the one that shipped broken: the
+  // anchor itself carrying a stretch. A listener notices it as the whole rack sitting a
+  // few percent off the tempo the transport is displaying and the MIDI clock is sending.
+  const anchorRaw = 119, aRate = 0.67, eRate = 1.0;
+  for (const aStretch of [1, 0.97, 1.44, 0.5]) {
+    const g = slotGridBpm(anchorRaw, aRate, eRate, aStretch);
+    const bar = (60 / g) * 4;                                   // in the slot's file seconds
+    // What the anchor's bar actually lasts at the speakers.
+    const anchorHeardBar = (((60 / anchorRaw) * 4) * aStretch) / aRate;
+    ok(`anchor stretch ${aStretch}: the slot's bar is one anchor bar in heard time`,
+       Math.abs(bar / eRate - anchorHeardBar) < 1e-9, `${bar / eRate} vs ${anchorHeardBar}`);
+    // ...and agrees with the number the transport shows and the MIDI clock sends, which
+    // is the disagreement a listener actually notices.
+    const anchorEffective = effectiveBpm(
+      anchorRaw, { speed: aRate, pitch: 0, linkPitch: true, bypassMasterSpeed: true }, 1, aStretch,
+    );
+    ok(`anchor stretch ${aStretch}: the grid agrees with the transport's bpm`,
+       Math.abs(240 / anchorHeardBar - anchorEffective) < 1e-9,
+       `${240 / anchorHeardBar} vs ${anchorEffective}`);
+  }
+}
+
 section("20e. Snap on a slot that is stretched, phased and moved");
 {
   // SlotStrip.doSnap -> loopSnap.quantizeToGrid, on the per-slot grid (rawGridBpm). The
   // question this answers: does rounding the region still behave once the other three
   // controls have been used? Each one touches a different quantity, which is the design.
   const anchorRaw = 120, aRate = 0.70, eRate = 0.75;
-  const gridBpm = anchorRaw * (aRate / eRate);         // anchorBarGridBpm
+  const gridBpm = slotGridBpm(anchorRaw, aRate, eRate); // anchorBarGridBpm, anchor unstretched
   const bar = (60 / gridBpm) * 4;                       // in the slot's file seconds
   const anchorHeardBar = ((60 / anchorRaw) * 4) / aRate;
 

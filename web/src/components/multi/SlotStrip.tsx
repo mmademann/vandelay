@@ -340,6 +340,8 @@ interface Props {
   /** True when this slot's stretch no longer agrees with the anchor's current tempo —
    *  usually because the anchor itself changed after this slot was matched. */
   tempoStale: boolean;
+  /** Playing at the anchor's tempo right now — true even at a stretch of exactly 1. */
+  tempoOnGrid: boolean;
   /** The user's explicit choice, or undefined when Match Tempos is deciding. */
   tempoRelation: number | undefined;
   /** What is actually applied right now — the resolved value, auto or explicit. */
@@ -352,7 +354,7 @@ interface Props {
   onApplyPreset: (preset: MultiPreset) => void;
 }
 
-export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedBpm, anchorBpm, gridBpm, rawGridBpm, tempoStale, tempoRelation, effectiveRelation, autoRelation, onTempoRelationChange, isReference, hasReference, isMatched, matchedBasePitch, pitchInterval, slotIndex, chopSettings, onPitchIntervalChange, onRemove, onChange, onSetReference, onTakeReference, onMatch, isTempoAnchor, hasTempoAnchor, onSetTempoAnchor, onTakeTempoAnchor, onTempoMatch, onStretchChange, stretch, stretching, onSavePreset, onDeletePreset, onApplyPreset }: Props) {
+export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedBpm, anchorBpm, gridBpm, rawGridBpm, tempoStale, tempoOnGrid, tempoRelation, effectiveRelation, autoRelation, onTempoRelationChange, isReference, hasReference, isMatched, matchedBasePitch, pitchInterval, slotIndex, chopSettings, onPitchIntervalChange, onRemove, onChange, onSetReference, onTakeReference, onMatch, isTempoAnchor, hasTempoAnchor, onSetTempoAnchor, onTakeTempoAnchor, onTempoMatch, onStretchChange, stretch, stretching, onSavePreset, onDeletePreset, onApplyPreset }: Props) {
   const [presetName, setPresetName] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
   const [chopping, setChopping] = useState(false);
@@ -525,8 +527,15 @@ export function SlotStrip({ slot, title, buffer, presets, masterSpeed, detectedB
     setActivePreset(preset.name);
   }
 
-  // Stretched away from its source length means this slot is holding a tempo match.
-  const isTempoMatched = !isTempoAnchor && Math.abs(stretch - 1) > 0.005;
+  /**
+   * Is this slot playing at the anchor's tempo?
+   *
+   * `tempoOnGrid` is the real answer and comes from the page, which knows both tempos. The
+   * stretch test behind it is only a fallback for the moment before the anchor's BPM is
+   * known — on its own it got the easiest case wrong, because a slot that already agrees
+   * with the anchor matches at a ratio of exactly 1 and so looked permanently unmatched.
+   */
+  const isTempoMatched = !isTempoAnchor && (tempoOnGrid || Math.abs(stretch - 1) > 0.005);
 
   /**
    * Knob position while dragging. The applied stretch only changes on release — rebuilding
