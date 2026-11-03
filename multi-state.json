@@ -1,19 +1,64 @@
 {
-  "exportedAt": 1793320804158,
+  "exportedAt": 1793717359729,
   "version": 1,
   "namedSessions": [
     {
-      "name": "TWAIN",
-      "savedAt": 1793320804157,
+      "name": "TWAIN MINI",
+      "savedAt": 1793717358863,
       "slots": [
         {
-          "id": "ea50427e-403b-410c-9d19-aa6d5a8a0ff1",
+          "id": "145de4eb-ca15-4e86-8c4a-5efe8c41a3ad",
           "trackId": "YFr_yFTFQV4",
           "stemName": null,
-          "speed": 1,
+          "speed": 0.67,
           "pitch": 0,
           "linkPitch": true,
           "bypassMasterSpeed": false,
+          "gain": 0,
+          "muted": true,
+          "soloed": false,
+          "effects": {
+            "speed": 1,
+            "pitch": 0,
+            "linkPitch": true,
+            "reverbType": "algorithmic",
+            "reverbDecay": 3.7,
+            "reverbWet": 0.36,
+            "delayTime": 0,
+            "delayFeedback": 0,
+            "delayWet": 0,
+            "bassBoost": 0,
+            "gain": 1,
+            "grit": 0,
+            "spaceEchoWow": 0,
+            "bigKnobWet": 0,
+            "eqLow": 0,
+            "eqMid": 0,
+            "eqHigh": 0,
+            "sweepFreq": 20000,
+            "sweepRes": 0.5,
+            "phaserWet": 0,
+            "chorusWet": 0
+          },
+          "loopStart": 126.33210416666667,
+          "loopEnd": 202.42991666666666,
+          "isReference": true,
+          "isTempoAnchor": true,
+          "stretch": 1,
+          "isMatched": false,
+          "matchedBasePitch": 0,
+          "pitchInterval": 12,
+          "detectedKey": "Eb major",
+          "detectedBpm": 123
+        },
+        {
+          "id": "ff7acb51-1449-40a8-92ac-8c49ddbfc9df",
+          "trackId": "2m4lqri9amo",
+          "stemName": "drums",
+          "speed": 0.67,
+          "pitch": 0,
+          "linkPitch": true,
+          "bypassMasterSpeed": true,
           "gain": 0,
           "muted": false,
           "soloed": false,
@@ -40,15 +85,612 @@
             "phaserWet": 0,
             "chorusWet": 0
           },
-          "loopStart": 0,
-          "loopEnd": 212.56560416666667,
+          "loopStart": 335.8983333333333,
+          "loopEnd": 357.3618333333333,
           "isReference": false,
           "isTempoAnchor": false,
+          "stretch": 0.9674796747967479,
+          "isMatched": false,
+          "matchedBasePitch": 0,
+          "pitchInterval": 12,
+          "detectedKey": "C# minor",
+          "detectedBpm": 119
+        }
+      ],
+      "masterSettings": {
+        "gain": 0,
+        "loopLengthOverride": null,
+        "masterSpeed": 1,
+        "throwSettings": {
+          "delayTime": 0.060672248513529904,
+          "delayFeedback": 0.74,
+          "delayWet": 0.69,
+          "reverbDecay": 0.1,
+          "reverbWet": 0,
+          "filterFreq": 2940,
+          "filterSweep": 0.3
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true,
+          "tapRepeats": 1,
+          "lengthBeats": 4
+        }
+      },
+      "midiPanels": {
+        "tb-03": {
+          "channel": 0,
+          "values": {
+            "12": 102,
+            "16": 91,
+            "17": 87,
+            "18": 64,
+            "19": 102,
+            "71": 7,
+            "74": 55,
+            "75": 106,
+            "102": 0,
+            "104": 73
+          },
+          "delayBeats": null,
+          "delayMaxMs": 1150
+        },
+        "sh-01a": {
+          "portId": "1322630537",
+          "channel": 0,
+          "values": {
+            "3": 30,
+            "5": 40,
+            "12": 0,
+            "13": 54,
+            "14": 64,
+            "15": 56,
+            "16": 0,
+            "17": 96,
+            "18": 64,
+            "19": 0,
+            "20": 127,
+            "21": 90,
+            "22": 0,
+            "23": 0,
+            "24": 100,
+            "25": 96,
+            "26": 40,
+            "27": 59,
+            "28": 127,
+            "29": 0,
+            "30": 0,
+            "31": 63,
+            "65": 0,
+            "71": 108,
+            "72": 18,
+            "73": 0,
+            "74": 46,
+            "75": 42,
+            "76": 73,
+            "77": 64,
+            "78": 0,
+            "79": 38,
+            "80": 0,
+            "81": 0,
+            "82": 0,
+            "83": 0,
+            "85": 64,
+            "86": 89,
+            "87": 64
+          },
+          "delayBeats": null,
+          "delayMaxMs": 1000
+        },
+        "jp-08": {
+          "channel": 0,
+          "values": {
+            "3": 64,
+            "5": 0,
+            "9": 0,
+            "12": 0,
+            "13": 0,
+            "14": 0,
+            "15": 0,
+            "16": 0,
+            "17": 0,
+            "18": 0,
+            "19": 64,
+            "20": 64,
+            "21": 0,
+            "22": 64,
+            "23": 64,
+            "24": 64,
+            "25": 64,
+            "26": 0,
+            "27": 0,
+            "28": 48,
+            "29": 0,
+            "30": 0,
+            "31": 0,
+            "35": 100,
+            "46": 0,
+            "47": 0,
+            "52": 56,
+            "53": 0,
+            "54": 24,
+            "55": 0,
+            "56": 90,
+            "57": 0,
+            "65": 0,
+            "71": 20,
+            "72": 30,
+            "73": 0,
+            "74": 90,
+            "75": 56,
+            "80": 0,
+            "81": 0,
+            "82": 48,
+            "83": 32,
+            "86": 0,
+            "87": 64,
+            "91": 32
+          },
+          "delayBeats": null,
+          "delayMaxMs": 1000
+        }
+      },
+      "midiPatterns": {
+        "tb-03": {
+          "steps": [
+            {
+              "on": true,
+              "degree": 1,
+              "oct": 0,
+              "accent": true,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": true,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": true,
+              "degree": 1,
+              "oct": 0,
+              "accent": true,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": true,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            }
+          ],
+          "stepsPerBeat": 4,
+          "scale": "minor",
+          "octave": 1,
+          "root": null
+        },
+        "sh-01a": {
+          "steps": [
+            {
+              "on": true,
+              "degree": 1,
+              "oct": 0,
+              "accent": true,
+              "slide": false
+            },
+            {
+              "on": true,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": true
+            },
+            {
+              "on": true,
+              "degree": 3,
+              "oct": 0,
+              "accent": false,
+              "slide": true
+            },
+            {
+              "on": true,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": true,
+              "degree": 5,
+              "oct": 0,
+              "accent": false,
+              "slide": true
+            },
+            {
+              "on": true,
+              "degree": 4,
+              "oct": 0,
+              "accent": false,
+              "slide": true
+            },
+            {
+              "on": true,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": true,
+              "degree": 1,
+              "oct": 1,
+              "accent": true,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": true,
+              "degree": 7,
+              "oct": 0,
+              "accent": false,
+              "slide": true
+            },
+            {
+              "on": true,
+              "degree": 5,
+              "oct": 0,
+              "accent": false,
+              "slide": true
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": true,
+              "degree": 3,
+              "oct": 0,
+              "accent": false,
+              "slide": true
+            },
+            {
+              "on": true,
+              "degree": 2,
+              "oct": 0,
+              "accent": false,
+              "slide": true
+            },
+            {
+              "on": true,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            }
+          ],
+          "stepsPerBeat": 12,
+          "scale": "phrygian",
+          "octave": 2,
+          "root": null
+        },
+        "jp-08": {
+          "steps": [
+            {
+              "on": true,
+              "degree": 1,
+              "oct": 0,
+              "accent": true,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": true,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": true,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": true,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            },
+            {
+              "on": false,
+              "degree": 1,
+              "oct": 0,
+              "accent": false,
+              "slide": false
+            }
+          ],
+          "stepsPerBeat": 4,
+          "scale": "minor",
+          "octave": 2,
+          "root": null
+        }
+      }
+    },
+    {
+      "name": "TWAIN",
+      "savedAt": 1793322090189,
+      "slots": [
+        {
+          "id": "ea50427e-403b-410c-9d19-aa6d5a8a0ff1",
+          "trackId": "YFr_yFTFQV4",
+          "stemName": null,
+          "speed": 0.6,
+          "pitch": 0,
+          "linkPitch": true,
+          "bypassMasterSpeed": false,
+          "gain": 0,
+          "muted": false,
+          "soloed": false,
+          "effects": {
+            "speed": 1,
+            "pitch": 0,
+            "linkPitch": true,
+            "reverbType": "algorithmic",
+            "reverbDecay": 3.4,
+            "reverbWet": 0.33,
+            "delayTime": 0.3048780487804878,
+            "delayFeedback": 0.58,
+            "delayWet": 0.59,
+            "bassBoost": 0,
+            "gain": 1,
+            "grit": 0,
+            "spaceEchoWow": 0,
+            "bigKnobWet": 0,
+            "eqLow": 0,
+            "eqMid": 0,
+            "eqHigh": 0,
+            "sweepFreq": 20000.000000000004,
+            "sweepRes": 0.5,
+            "phaserWet": 0,
+            "chorusWet": 0
+          },
+          "loopStart": 127.22039583333333,
+          "loopEnd": 201.36664583333334,
+          "isReference": true,
+          "isTempoAnchor": true,
           "stretch": 1,
           "isMatched": false,
           "matchedBasePitch": 0,
           "pitchInterval": 12,
           "detectedKey": "Eb major",
+          "detectedBpm": 123
+        },
+        {
+          "id": "ac534358-e6ab-4950-9169-2e900225668d",
+          "trackId": "YFr_yFTFQV4",
+          "stemName": "drums",
+          "speed": 1,
+          "pitch": 0,
+          "linkPitch": true,
+          "bypassMasterSpeed": true,
+          "gain": 6,
+          "muted": true,
+          "soloed": false,
+          "effects": {
+            "speed": 1,
+            "pitch": 0,
+            "linkPitch": true,
+            "reverbType": "algorithmic",
+            "reverbDecay": 4.6,
+            "reverbWet": 0.22,
+            "delayTime": 0,
+            "delayFeedback": 0,
+            "delayWet": 0,
+            "bassBoost": 0,
+            "gain": 1,
+            "grit": 1,
+            "spaceEchoWow": 0,
+            "bigKnobWet": 0,
+            "eqLow": 0,
+            "eqMid": 0,
+            "eqHigh": 0,
+            "sweepFreq": 20000,
+            "sweepRes": 0.5,
+            "phaserWet": 0.29,
+            "chorusWet": 0.33
+          },
+          "loopStart": 18.56125,
+          "loopEnd": 168.1520625,
+          "isReference": false,
+          "isTempoAnchor": false,
+          "stretch": 0.8333333333333334,
+          "isMatched": false,
+          "matchedBasePitch": 0,
+          "pitchInterval": 12,
+          "detectedKey": "Eb minor",
           "detectedBpm": 123
         }
       ],
@@ -57,13 +699,18 @@
         "loopLengthOverride": null,
         "masterSpeed": 1,
         "throwSettings": {
-          "delayTime": 0.0764525993883792,
+          "delayTime": 0.1016260162601626,
           "delayFeedback": 0.74,
           "delayWet": 0.69,
           "reverbDecay": 0.1,
           "reverbWet": 0,
           "filterFreq": 2940,
           "filterSweep": 0.3
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -129,6 +776,11 @@
           "reverbWet": 0,
           "filterFreq": 2940,
           "filterSweep": 0.3
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -330,6 +982,11 @@
           "reverbWet": 0,
           "filterFreq": 2940,
           "filterSweep": 0.3
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -531,6 +1188,11 @@
           "reverbWet": 0,
           "filterFreq": 2940,
           "filterSweep": 0.3
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -642,6 +1304,11 @@
           "reverbWet": 0,
           "filterFreq": 2940,
           "filterSweep": 0.3
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -843,6 +1510,11 @@
           "reverbWet": 0,
           "filterFreq": 2940,
           "filterSweep": 0.3
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -1046,6 +1718,11 @@
           "reverbWet": 0,
           "filterFreq": 2940,
           "filterSweep": 0.3
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -1156,6 +1833,11 @@
           "reverbWet": 0,
           "filterFreq": 2940,
           "filterSweep": 0.3
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -1359,6 +2041,11 @@
           "reverbWet": 0,
           "filterFreq": 2940,
           "filterSweep": 0.3
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -1469,6 +2156,11 @@
           "reverbWet": 0,
           "filterFreq": 2940,
           "filterSweep": 0.3
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -1657,6 +2349,11 @@
           "reverbWet": 0.26,
           "filterFreq": 3970,
           "filterSweep": 0
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -1854,6 +2551,11 @@
           "reverbWet": 0.26,
           "filterFreq": 3970,
           "filterSweep": 0
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -2095,6 +2797,11 @@
           "reverbWet": 0.26,
           "filterFreq": 3970,
           "filterSweep": 0
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -2336,6 +3043,11 @@
           "reverbWet": 0.26,
           "filterFreq": 3970,
           "filterSweep": 0
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -2400,6 +3112,11 @@
           "reverbWet": 0.26,
           "filterFreq": 3970,
           "filterSweep": 0
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -2462,6 +3179,11 @@
           "reverbWet": 0.26,
           "filterFreq": 3970,
           "filterSweep": 0
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -2652,6 +3374,11 @@
           "reverbWet": 0.26,
           "filterFreq": 3970,
           "filterSweep": 0
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -2842,6 +3569,11 @@
           "reverbWet": 0.26,
           "filterFreq": 3970,
           "filterSweep": 0
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -3075,6 +3807,11 @@
           "reverbWet": 0.26,
           "filterFreq": 3970,
           "filterSweep": 0
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -3307,6 +4044,11 @@
           "reverbWet": 0.26,
           "filterFreq": 3970,
           "filterSweep": 0
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -3412,6 +4154,11 @@
           "reverbWet": 0.26,
           "filterFreq": 3970,
           "filterSweep": 0
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -3560,6 +4307,11 @@
           "reverbWet": 0.26,
           "filterFreq": 3970,
           "filterSweep": 0
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -3752,6 +4504,11 @@
           "reverbWet": 0.26,
           "filterFreq": 3970,
           "filterSweep": 0
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -3944,6 +4701,11 @@
           "reverbWet": 0.26,
           "filterFreq": 3970,
           "filterSweep": 0
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -4136,6 +4898,11 @@
           "reverbWet": 0.26,
           "filterFreq": 3970,
           "filterSweep": 0
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -4333,6 +5100,11 @@
           "reverbWet": 0.26,
           "filterFreq": 3970,
           "filterSweep": 0
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -4521,6 +5293,11 @@
           "reverbWet": 0.26,
           "filterFreq": 3970,
           "filterSweep": 0
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -4709,6 +5486,11 @@
           "reverbWet": 0.26,
           "filterFreq": 3970,
           "filterSweep": 0
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -4897,6 +5679,11 @@
           "reverbWet": 0.26,
           "filterFreq": 3970,
           "filterSweep": 0
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -5069,6 +5856,11 @@
           "reverbWet": 0.26,
           "filterFreq": 3970,
           "filterSweep": 0
+        },
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
         }
       }
     },
@@ -5237,7 +6029,12 @@
           "filterFreq": 3970,
           "filterSweep": 0
         },
-        "masterSpeed": 1
+        "masterSpeed": 1,
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
+        }
       }
     },
     {
@@ -5405,7 +6202,12 @@
           "filterFreq": 3970,
           "filterSweep": 0
         },
-        "masterSpeed": 1
+        "masterSpeed": 1,
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
+        }
       }
     },
     {
@@ -5577,7 +6379,12 @@
           "filterFreq": 3970,
           "filterSweep": 0
         },
-        "masterSpeed": 1
+        "masterSpeed": 1,
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
+        }
       }
     },
     {
@@ -5818,7 +6625,12 @@
           "filterFreq": 2200,
           "filterSweep": 0.31
         },
-        "masterSpeed": 1
+        "masterSpeed": 1,
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
+        }
       }
     },
     {
@@ -6059,7 +6871,12 @@
           "filterFreq": 2200,
           "filterSweep": 0.31
         },
-        "masterSpeed": 1
+        "masterSpeed": 1,
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
+        }
       }
     },
     {
@@ -6300,7 +7117,12 @@
           "filterFreq": 2200,
           "filterSweep": 0.31
         },
-        "masterSpeed": 1
+        "masterSpeed": 1,
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
+        }
       }
     },
     {
@@ -6357,7 +7179,12 @@
           "filterFreq": 2200,
           "filterSweep": 0.31
         },
-        "masterSpeed": 1
+        "masterSpeed": 1,
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
+        }
       }
     },
     {
@@ -6562,7 +7389,12 @@
           "filterFreq": 2200,
           "filterSweep": 0.31
         },
-        "masterSpeed": 1
+        "masterSpeed": 1,
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
+        }
       }
     },
     {
@@ -6724,7 +7556,12 @@
           "filterFreq": 2200,
           "filterSweep": 0.31
         },
-        "masterSpeed": 1
+        "masterSpeed": 1,
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
+        }
       }
     },
     {
@@ -6834,7 +7671,12 @@
           "filterFreq": 2200,
           "filterSweep": 0.31
         },
-        "masterSpeed": 1
+        "masterSpeed": 1,
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
+        }
       }
     },
     {
@@ -7002,7 +7844,12 @@
           "filterFreq": 2200,
           "filterSweep": 0.31
         },
-        "masterSpeed": 1
+        "masterSpeed": 1,
+        "chopSettings": {
+          "sliceBeats": 1,
+          "mode": "stutter",
+          "holdSong": true
+        }
       }
     }
   ],
@@ -34354,7 +35201,411 @@
       "stretch": 1
     },
     "ea50427e-403b-410c-9d19-aa6d5a8a0ff1": {
+      "speed": 0.6,
+      "pitch": 0,
+      "linkPitch": true,
+      "gain": 0,
+      "muted": false,
+      "soloed": false,
+      "effects": {
+        "speed": 1,
+        "pitch": 0,
+        "linkPitch": true,
+        "reverbType": "algorithmic",
+        "reverbDecay": 3.4,
+        "reverbWet": 0.33,
+        "delayTime": 0.3048780487804878,
+        "delayFeedback": 0.58,
+        "delayWet": 0.59,
+        "bassBoost": 0,
+        "gain": 1,
+        "grit": 0,
+        "spaceEchoWow": 0,
+        "bigKnobWet": 0,
+        "eqLow": 0,
+        "eqMid": 0,
+        "eqHigh": 0,
+        "sweepFreq": 20000.000000000004,
+        "sweepRes": 0.5,
+        "phaserWet": 0,
+        "chorusWet": 0
+      },
+      "loopStartFrac": 0.5984994436521509,
+      "loopEndFrac": 0.947315284722393,
+      "bypassMasterSpeed": false,
+      "pitchInterval": 12
+    },
+    "ac534358-e6ab-4950-9169-2e900225668d": {
       "speed": 1,
+      "pitch": 0,
+      "linkPitch": true,
+      "gain": 6,
+      "muted": true,
+      "soloed": false,
+      "effects": {
+        "speed": 1,
+        "pitch": 0,
+        "linkPitch": true,
+        "reverbType": "algorithmic",
+        "reverbDecay": 0,
+        "reverbWet": 0,
+        "delayTime": 0,
+        "delayFeedback": 0,
+        "delayWet": 0,
+        "bassBoost": 2,
+        "gain": 1,
+        "grit": 1,
+        "spaceEchoWow": 0,
+        "bigKnobWet": 0,
+        "eqLow": 0,
+        "eqMid": 0,
+        "eqHigh": 0,
+        "sweepFreq": 20000,
+        "sweepRes": 0.5,
+        "phaserWet": 0,
+        "chorusWet": 0
+      },
+      "loopStartFrac": 0.10478412722096633,
+      "loopEndFrac": 0.9492715797410128,
+      "isMatched": false,
+      "matchedBasePitch": 0,
+      "pitchInterval": 12,
+      "bypassMasterSpeed": true,
+      "stretch": 0.8333333333333334
+    },
+    "4ec200ac-4394-424f-9188-eff5b89b0b87": {
+      "speed": 0.75,
+      "pitch": 0,
+      "linkPitch": true,
+      "gain": 6,
+      "muted": false,
+      "soloed": false,
+      "effects": {
+        "speed": 1,
+        "pitch": 0,
+        "linkPitch": true,
+        "reverbType": "algorithmic",
+        "reverbDecay": 4,
+        "reverbWet": 0.4,
+        "delayTime": 0.07092198581560283,
+        "delayFeedback": 0.6,
+        "delayWet": 0.6,
+        "bassBoost": 0,
+        "gain": 1,
+        "grit": 0.5,
+        "spaceEchoWow": 0,
+        "bigKnobWet": 0,
+        "eqLow": 0,
+        "eqMid": 0,
+        "eqHigh": 0,
+        "sweepFreq": 20000,
+        "sweepRes": 0.5,
+        "phaserWet": 0,
+        "chorusWet": 0
+      },
+      "loopStartFrac": 0,
+      "loopEndFrac": 1,
+      "isMatched": false,
+      "matchedBasePitch": 0,
+      "pitchInterval": 12,
+      "bypassMasterSpeed": false,
+      "stretch": 1
+    },
+    "97e30a05-888c-47e4-a919-b8c6a58c88e2": {
+      "speed": 0.6,
+      "pitch": 0,
+      "linkPitch": true,
+      "gain": 0,
+      "muted": false,
+      "soloed": false,
+      "effects": {
+        "speed": 1,
+        "pitch": 0,
+        "linkPitch": true,
+        "reverbType": "algorithmic",
+        "reverbDecay": 3.4,
+        "reverbWet": 0.33,
+        "delayTime": 0.3048780487804878,
+        "delayFeedback": 0.58,
+        "delayWet": 0.59,
+        "bassBoost": 0,
+        "gain": 1,
+        "grit": 0,
+        "spaceEchoWow": 0,
+        "bigKnobWet": 0,
+        "eqLow": 0,
+        "eqMid": 0,
+        "eqHigh": 0,
+        "sweepFreq": 20000.000000000004,
+        "sweepRes": 0.5,
+        "phaserWet": 0,
+        "chorusWet": 0
+      },
+      "loopStartFrac": 0.5984994436521509,
+      "loopEndFrac": 0.947315284722393,
+      "isMatched": false,
+      "matchedBasePitch": 0,
+      "bypassMasterSpeed": false,
+      "pitchInterval": 12
+    },
+    "95d10d67-0b39-44bb-bfc9-51368e1d32ab": {
+      "speed": 1,
+      "pitch": 0,
+      "linkPitch": true,
+      "gain": 6,
+      "muted": true,
+      "soloed": false,
+      "effects": {
+        "speed": 1,
+        "pitch": 0,
+        "linkPitch": true,
+        "reverbType": "algorithmic",
+        "reverbDecay": 4.6,
+        "reverbWet": 0.22,
+        "delayTime": 0,
+        "delayFeedback": 0,
+        "delayWet": 0,
+        "bassBoost": 0,
+        "gain": 1,
+        "grit": 1,
+        "spaceEchoWow": 0,
+        "bigKnobWet": 0,
+        "eqLow": 0,
+        "eqMid": 0,
+        "eqHigh": 0,
+        "sweepFreq": 20000,
+        "sweepRes": 0.5,
+        "phaserWet": 0.29,
+        "chorusWet": 0.33
+      },
+      "loopStartFrac": 0.10478412105909657,
+      "loopEndFrac": 0.949271523918743,
+      "isMatched": false,
+      "matchedBasePitch": 0,
+      "bypassMasterSpeed": true,
+      "pitchInterval": 12,
+      "stretch": 0.8333333333333334
+    },
+    "a11a8b01-df1a-4763-9f6c-2109b7deec5d": {
+      "speed": 0.7,
+      "pitch": 0,
+      "linkPitch": true,
+      "gain": 0,
+      "muted": false,
+      "soloed": false,
+      "effects": {
+        "speed": 1,
+        "pitch": 0,
+        "linkPitch": true,
+        "reverbType": "algorithmic",
+        "reverbDecay": 4,
+        "reverbWet": 0.4,
+        "delayTime": 0,
+        "delayFeedback": 0,
+        "delayWet": 0,
+        "bassBoost": 0,
+        "gain": 1,
+        "grit": 0,
+        "spaceEchoWow": 0,
+        "bigKnobWet": 0,
+        "eqLow": 0,
+        "eqMid": 0,
+        "eqHigh": 0,
+        "sweepFreq": 20000,
+        "sweepRes": 0.5,
+        "phaserWet": 0,
+        "chorusWet": 0
+      },
+      "loopStartFrac": 0.5579573703754628,
+      "loopEndFrac": 1,
+      "bypassMasterSpeed": false,
+      "pitchInterval": 12
+    },
+    "758b97c2-0cda-4c79-a9f5-e5e444f6a01a": {
+      "speed": 0.67,
+      "pitch": 0,
+      "linkPitch": true,
+      "gain": 0,
+      "muted": false,
+      "soloed": false,
+      "effects": {
+        "speed": 1,
+        "pitch": 0,
+        "linkPitch": true,
+        "reverbType": "algorithmic",
+        "reverbDecay": 4,
+        "reverbWet": 0.4,
+        "delayTime": 0,
+        "delayFeedback": 0,
+        "delayWet": 0,
+        "bassBoost": 0,
+        "gain": 1,
+        "grit": 0.45,
+        "spaceEchoWow": 0,
+        "bigKnobWet": 0,
+        "eqLow": 0,
+        "eqMid": 0,
+        "eqHigh": 0,
+        "sweepFreq": 20000,
+        "sweepRes": 0.5,
+        "phaserWet": 0,
+        "chorusWet": 0
+      },
+      "loopStartFrac": 0.5966285506562728,
+      "loopEndFrac": 0.9454448817713041,
+      "bypassMasterSpeed": false,
+      "pitchInterval": 12
+    },
+    "bc17c845-cc16-4d9c-a89a-1bbc6a3985d8": {
+      "speed": 0.67,
+      "pitch": 0,
+      "linkPitch": true,
+      "gain": 0,
+      "muted": true,
+      "soloed": false,
+      "effects": {
+        "speed": 1,
+        "pitch": 0,
+        "linkPitch": true,
+        "reverbType": "algorithmic",
+        "reverbDecay": 0.1,
+        "reverbWet": 0,
+        "delayTime": 0.7280669821623589,
+        "delayFeedback": 0.35,
+        "delayWet": 0.5,
+        "bassBoost": 0,
+        "gain": 1,
+        "grit": 0,
+        "spaceEchoWow": 0,
+        "bigKnobWet": 0,
+        "eqLow": 0,
+        "eqMid": 0,
+        "eqHigh": 0,
+        "sweepFreq": 20000,
+        "sweepRes": 0.5,
+        "phaserWet": 0,
+        "chorusWet": 0
+      },
+      "loopStartFrac": 0.7176650703603827,
+      "loopEndFrac": 0.868792484147811,
+      "bypassMasterSpeed": true,
+      "pitchInterval": 12,
+      "stretch": 0.9674796747967479,
+      "tempoRelation": 1
+    },
+    "8ce0b290-3fdf-425f-bb43-9888db12c1c3": {
+      "speed": 0.67,
+      "pitch": 0,
+      "linkPitch": true,
+      "gain": 0,
+      "muted": false,
+      "soloed": false,
+      "effects": {
+        "speed": 1,
+        "pitch": 0,
+        "linkPitch": true,
+        "reverbType": "algorithmic",
+        "reverbDecay": 4,
+        "reverbWet": 0.4,
+        "delayTime": 0,
+        "delayFeedback": 0,
+        "delayWet": 0,
+        "bassBoost": 0,
+        "gain": 1,
+        "grit": 0.45,
+        "spaceEchoWow": 0,
+        "bigKnobWet": 0,
+        "eqLow": 0,
+        "eqMid": 0,
+        "eqHigh": 0,
+        "sweepFreq": 20000,
+        "sweepRes": 0.5,
+        "phaserWet": 0,
+        "chorusWet": 0
+      },
+      "loopStartFrac": 0.5966285506562728,
+      "loopEndFrac": 0.9454448817713041,
+      "isMatched": false,
+      "matchedBasePitch": 0,
+      "bypassMasterSpeed": false,
+      "pitchInterval": 12
+    },
+    "2d21234f-aabd-4c6a-a544-7b44a55435f8": {
+      "speed": 0.67,
+      "pitch": 0,
+      "linkPitch": true,
+      "gain": 0,
+      "muted": true,
+      "soloed": false,
+      "effects": {
+        "speed": 1,
+        "pitch": 0,
+        "linkPitch": true,
+        "reverbType": "algorithmic",
+        "reverbDecay": 0.1,
+        "reverbWet": 0,
+        "delayTime": 0.7280669821623589,
+        "delayFeedback": 0.35,
+        "delayWet": 0.5,
+        "bassBoost": 0,
+        "gain": 1,
+        "grit": 0,
+        "spaceEchoWow": 0,
+        "bigKnobWet": 0,
+        "eqLow": 0,
+        "eqMid": 0,
+        "eqHigh": 0,
+        "sweepFreq": 20000,
+        "sweepRes": 0.5,
+        "phaserWet": 0,
+        "chorusWet": 0
+      },
+      "loopStartFrac": 0.7176650703603827,
+      "loopEndFrac": 0.868792484147811,
+      "isMatched": false,
+      "matchedBasePitch": 0,
+      "bypassMasterSpeed": true,
+      "pitchInterval": 12,
+      "stretch": 0.9674796747967479,
+      "tempoRelation": 1
+    },
+    "145de4eb-ca15-4e86-8c4a-5efe8c41a3ad": {
+      "speed": 0.67,
+      "pitch": 0,
+      "linkPitch": true,
+      "gain": 0,
+      "muted": true,
+      "soloed": false,
+      "effects": {
+        "speed": 1,
+        "pitch": 0,
+        "linkPitch": true,
+        "reverbType": "algorithmic",
+        "reverbDecay": 3.7,
+        "reverbWet": 0.36,
+        "delayTime": 0,
+        "delayFeedback": 0,
+        "delayWet": 0,
+        "bassBoost": 0,
+        "gain": 1,
+        "grit": 0,
+        "spaceEchoWow": 0,
+        "bigKnobWet": 0,
+        "eqLow": 0,
+        "eqMid": 0,
+        "eqHigh": 0,
+        "sweepFreq": 20000,
+        "sweepRes": 0.5,
+        "phaserWet": 0,
+        "chorusWet": 0
+      },
+      "loopStartFrac": 0.5943205377085055,
+      "loopEndFrac": 0.9523173679027915,
+      "bypassMasterSpeed": false,
+      "pitchInterval": 12
+    },
+    "ff7acb51-1449-40a8-92ac-8c49ddbfc9df": {
+      "speed": 0.67,
       "pitch": 0,
       "linkPitch": true,
       "gain": 0,
@@ -34383,10 +35634,11 @@
         "phaserWet": 0,
         "chorusWet": 0
       },
-      "loopStartFrac": 0,
-      "loopEndFrac": 1,
-      "bypassMasterSpeed": false,
-      "pitchInterval": 12
+      "loopStartFrac": 0.7432980353529332,
+      "loopEndFrac": 0.7907938869205138,
+      "bypassMasterSpeed": true,
+      "pitchInterval": 12,
+      "stretch": 0.9674796747967479
     }
   },
   "presets": [
@@ -34747,17 +35999,24 @@
     "loopLengthOverride": null,
     "masterSpeed": 1,
     "throwSettings": {
-      "delayTime": 0.0764525993883792,
+      "delayTime": 0.060672248513529904,
       "delayFeedback": 0.74,
       "delayWet": 0.69,
       "reverbDecay": 0.1,
       "reverbWet": 0,
       "filterFreq": 2940,
       "filterSweep": 0.3
+    },
+    "chopSettings": {
+      "sliceBeats": 1,
+      "mode": "stutter",
+      "holdSong": true,
+      "tapRepeats": 1,
+      "lengthBeats": 4
     }
   },
   "anchor": {
-    "trackId": "QGgoF8ql3yw",
+    "trackId": "YFr_yFTFQV4",
     "stemName": null
   },
   "versions": {
@@ -34927,5 +36186,485 @@
         }
       }
     ]
+  },
+  "midiPanels": {
+    "tb-03": {
+      "channel": 0,
+      "values": {
+        "12": 102,
+        "16": 91,
+        "17": 87,
+        "18": 64,
+        "19": 102,
+        "71": 7,
+        "74": 55,
+        "75": 106,
+        "102": 0,
+        "104": 73
+      },
+      "delayBeats": null,
+      "delayMaxMs": 1150
+    },
+    "sh-01a": {
+      "portId": "1322630537",
+      "channel": 0,
+      "values": {
+        "3": 30,
+        "5": 40,
+        "12": 0,
+        "13": 54,
+        "14": 64,
+        "15": 56,
+        "16": 0,
+        "17": 96,
+        "18": 64,
+        "19": 0,
+        "20": 127,
+        "21": 90,
+        "22": 0,
+        "23": 0,
+        "24": 100,
+        "25": 96,
+        "26": 40,
+        "27": 59,
+        "28": 127,
+        "29": 0,
+        "30": 0,
+        "31": 63,
+        "65": 0,
+        "71": 108,
+        "72": 18,
+        "73": 0,
+        "74": 46,
+        "75": 42,
+        "76": 73,
+        "77": 64,
+        "78": 0,
+        "79": 38,
+        "80": 0,
+        "81": 0,
+        "82": 0,
+        "83": 0,
+        "85": 64,
+        "86": 89,
+        "87": 64
+      },
+      "delayBeats": null,
+      "delayMaxMs": 1000
+    },
+    "jp-08": {
+      "channel": 0,
+      "values": {
+        "3": 64,
+        "5": 0,
+        "9": 0,
+        "12": 0,
+        "13": 0,
+        "14": 0,
+        "15": 0,
+        "16": 0,
+        "17": 0,
+        "18": 0,
+        "19": 64,
+        "20": 64,
+        "21": 0,
+        "22": 64,
+        "23": 64,
+        "24": 64,
+        "25": 64,
+        "26": 0,
+        "27": 0,
+        "28": 48,
+        "29": 0,
+        "30": 0,
+        "31": 0,
+        "35": 100,
+        "46": 0,
+        "47": 0,
+        "52": 56,
+        "53": 0,
+        "54": 24,
+        "55": 0,
+        "56": 90,
+        "57": 0,
+        "65": 0,
+        "71": 20,
+        "72": 30,
+        "73": 0,
+        "74": 90,
+        "75": 56,
+        "80": 0,
+        "81": 0,
+        "82": 48,
+        "83": 32,
+        "86": 0,
+        "87": 64,
+        "91": 32
+      },
+      "delayBeats": null,
+      "delayMaxMs": 1000
+    }
+  },
+  "midiPatterns": {
+    "tb-03": {
+      "steps": [
+        {
+          "on": true,
+          "degree": 1,
+          "oct": 0,
+          "accent": true,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": true,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": true,
+          "degree": 1,
+          "oct": 0,
+          "accent": true,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": true,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        }
+      ],
+      "stepsPerBeat": 4,
+      "scale": "minor",
+      "octave": 1,
+      "root": null
+    },
+    "sh-01a": {
+      "steps": [
+        {
+          "on": true,
+          "degree": 1,
+          "oct": 0,
+          "accent": true,
+          "slide": false
+        },
+        {
+          "on": true,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": true
+        },
+        {
+          "on": true,
+          "degree": 3,
+          "oct": 0,
+          "accent": false,
+          "slide": true
+        },
+        {
+          "on": true,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": true,
+          "degree": 5,
+          "oct": 0,
+          "accent": false,
+          "slide": true
+        },
+        {
+          "on": true,
+          "degree": 4,
+          "oct": 0,
+          "accent": false,
+          "slide": true
+        },
+        {
+          "on": true,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": true,
+          "degree": 1,
+          "oct": 1,
+          "accent": true,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": true,
+          "degree": 7,
+          "oct": 0,
+          "accent": false,
+          "slide": true
+        },
+        {
+          "on": true,
+          "degree": 5,
+          "oct": 0,
+          "accent": false,
+          "slide": true
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": true,
+          "degree": 3,
+          "oct": 0,
+          "accent": false,
+          "slide": true
+        },
+        {
+          "on": true,
+          "degree": 2,
+          "oct": 0,
+          "accent": false,
+          "slide": true
+        },
+        {
+          "on": true,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        }
+      ],
+      "stepsPerBeat": 12,
+      "scale": "phrygian",
+      "octave": 2,
+      "root": null
+    },
+    "jp-08": {
+      "steps": [
+        {
+          "on": true,
+          "degree": 1,
+          "oct": 0,
+          "accent": true,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": true,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": true,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": true,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        },
+        {
+          "on": false,
+          "degree": 1,
+          "oct": 0,
+          "accent": false,
+          "slide": false
+        }
+      ],
+      "stepsPerBeat": 4,
+      "scale": "minor",
+      "octave": 2,
+      "root": null
+    }
   }
 }
