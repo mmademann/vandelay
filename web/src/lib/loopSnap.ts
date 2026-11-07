@@ -275,6 +275,7 @@ export function estimateBpm(
   const maxLag = Math.ceil((60 / range.min) * envRate);
   if (maxLag >= frames) return undefined;
 
+  const scores = new Float32Array(maxLag - minLag + 1);
   let bestLag = -1;
   let bestScore = -Infinity;
   for (let lag = minLag; lag <= maxLag; lag++) {
@@ -282,6 +283,7 @@ export function estimateBpm(
     for (let f = 0; f + lag < frames; f++) sum += flux[f] * flux[f + lag];
     // Normalise by overlap so long lags aren't penalised for having fewer terms.
     const score = sum / (frames - lag);
+    scores[lag - minLag] = score;
     if (score > bestScore) {
       bestScore = score;
       bestLag = lag;
@@ -289,13 +291,32 @@ export function estimateBpm(
   }
   if (bestLag < 0 || bestScore <= 0) return undefined;
 
-  let bpm = (60 * envRate) / bestLag;
+  // The true pulse almost never lands on an integer lag. One lag step is ~0.6 BPM here,
+  // which is the same error the detector's own rounding used to add and about a second of
+  // slip across a two-minute loop. Fit a parabola through the peak and its two neighbours
+  // and take its vertex; a maximum needs a negative second difference, and a vertex further
+  // than half a lag away means the peak is not where the search said, so leave it alone.
+  let peakLag = bestLag;
+  const i = bestLag - minLag;
+  if (i > 0 && i < scores.length - 1) {
+    const l = scores[i - 1];
+    const c = scores[i];
+    const r = scores[i + 1];
+    const curvature = l - 2 * c + r;
+    if (curvature < 0) {
+      const delta = (0.5 * (l - r)) / curvature;
+      if (Math.abs(delta) <= 0.5) peakLag = bestLag + delta;
+    }
+  }
+
+  let bpm = (60 * envRate) / peakLag;
   // Autocorrelation locks onto multiples as readily as the true pulse; fold into a
   // musically typical band so half/double-time picks don't skew the bar length.
   while (bpm < 70) bpm *= 2;
   while (bpm > 180) bpm /= 2;
 
-  return Math.round(bpm);
+  // Not rounded, for the reason above: this value sets bar lengths.
+  return bpm;
 }
 
 /**
@@ -331,6 +352,13 @@ export function quantizeToGrid(
   // Round to the nearest whole bar, with a one-bar floor: a sub-bar region has no shorter
   // grid unit to land on here, since the whole point is agreeing with the other slots.
   let bars = Math.max(1, Math.round(span / barSec));
+  // Past eight bars, round to a four-bar phrase. Whole bars alone keep every slot on the
+  // beat but let the loops be any length, so a 53-bar track under a 45-bar drum part stays
+  // in time forever and still only comes back round at the top every 53x45 bars — the
+  // phrase turns over in a different place on every pass. Four-bar lengths nest inside one
+  // another, so they turn over together. Below eight bars a four-bar step is too coarse to
+  // call rounding; Snap is the control for those.
+  if (bars >= 8) bars = Math.max(8, Math.round(bars / 4) * 4);
   while (bars > 1 && start + bars * barSec > dur) bars -= 1;
   if (start + bars * barSec > dur) return null;
 

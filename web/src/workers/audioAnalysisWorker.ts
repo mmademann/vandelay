@@ -124,16 +124,18 @@ function estimateTempo(
   try {
     let firstError = '';
     try {
-      const v = Math.round(essentia.RhythmExtractor2013(vector).bpm);
+      // Not rounded. A whole-number BPM is up to 0.5 out, which is 0.6% at these tempos
+      // and close to a second of slip across a two-minute loop — the stretch ratio is
+      // derived from this number, so the error goes straight into the audio. Every
+      // display rounds for itself.
+      const v = essentia.RhythmExtractor2013(vector).bpm;
       if (usable(v)) return { bpm: v };
       firstError = `RhythmExtractor2013 returned ${v}`;
     } catch (err) {
       firstError = `RhythmExtractor2013 threw: ${String(err)}`;
     }
     try {
-      const v = Math.round(
-        essentia.PercivalBpmEstimator(vector, 1024, 2048, 128, 128, 210, 50, sampleRate).bpm,
-      );
+      const v = essentia.PercivalBpmEstimator(vector, 1024, 2048, 128, 128, 210, 50, sampleRate).bpm;
       if (usable(v)) return { bpm: v };
       return { bpm: undefined, bpmError: `${firstError}; Percival returned ${v}` };
     } catch (err) {

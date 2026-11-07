@@ -1956,6 +1956,21 @@ export function MultiPage() {
    * Both save paths (named save and the resave button) go through this — when they each
    * built the list inline, adding a field to one silently stripped it from the other.
    */
+  /**
+   * Back the whole store up to the server, and say so when it fails.
+   *
+   * Every save path goes through here. Most of them used to fire a bare floating promise,
+   * so a rejected write left the "saved" tick on screen with nothing written to disk — the
+   * session was real but lived only in this browser, which is the one thing the backup
+   * exists to prevent.
+   */
+  function backupToServer() {
+    saveExportToServer(buildExport(masterSettingsRef.current)).catch((err) => {
+      console.error("[multi] backup to server failed:", err);
+      setGridNote("backup to the server failed \u2014 this session is saved in this browser only");
+    });
+  }
+
   /** The outboard as it stands, for a session save. */
   function currentMidiState() {
     return { panels: readAllPanels(), patterns: readAllPatterns() };
@@ -1988,7 +2003,7 @@ export function MultiPage() {
     setVersions(loadVersions(name));
     setSavedFlash(name);
     setTimeout(() => setSavedFlash((n) => (n === name ? null : n)), 2000);
-    saveExportToServer(buildExport(masterSettingsRef.current));
+    backupToServer();
   }
 
   function handleLoadSession(session: MultiSession) {
@@ -2054,7 +2069,7 @@ export function MultiPage() {
     setNamedSessions(deleteNamedSession(name));
     // The header names the loaded session; deleting it has to drop the label too.
     setActiveSessionName((cur) => (cur === name ? null : cur));
-    saveExportToServer(buildExport(masterSettingsRef.current));
+    backupToServer();
   }
 
   function handleSavePreset(name: string, preset: Omit<MultiPreset, "name">) {
@@ -2353,7 +2368,7 @@ export function MultiPage() {
       tempoAnchorKey: keyOf(tempoAnchorIdRef.current),
       ...(applied ? { from: { ...applied.label } } : {}),
     }));
-    saveExportToServer(buildExport(masterSettingsRef.current)).catch(() => {});
+    backupToServer();
   }
 
   /**
@@ -2390,7 +2405,7 @@ export function MultiPage() {
 
   function handleDeleteVersion(id: string) {
     setVersions(deleteVersion(activeSessionName, id));
-    saveExportToServer(buildExport(masterSettingsRef.current)).catch(() => {});
+    backupToServer();
   }
 
   function handleToggleKeepLoops() {
@@ -2619,6 +2634,10 @@ export function MultiPage() {
                         // Resaving makes this the session the rack belongs to; without this the
                         // header button kept naming whichever session was loaded before.
                         setActiveSessionName(s.name);
+                        // ...and it is a save like any other, so it backs up like any other. This
+                        // was the only save path that wrote localStorage and stopped there, so a
+                        // resaved session was missing from multi-state.json with no sign of it.
+                        backupToServer();
                         setSavedFlash(s.name);
                         setTimeout(() => setSavedFlash((n) => (n === s.name ? null : n)), 2000);
                       }
